@@ -254,7 +254,7 @@ async function agregarPresentacionSimple(client: PoolClient, productId: string, 
 }
 
 /** Agrega una presentación (peso) a un producto; en una marca crea también su saco. */
-export async function agregarPresentacion(client: PoolClient, productId: string, pesoLb: number): Promise<{ sacoCreado: string | null }> {
+export async function agregarPresentacion(client: PoolClient, productId: string, pesoLb: number, calidad?: Calidad | null): Promise<{ sacoCreado: string | null }> {
   const [peso] = normalizarPesos([pesoLb]);
   const p = (await client.query("SELECT id, name, product_type, is_active FROM products WHERE id = $1", [productId])).rows[0];
   if (!p) throw new ApiError(404, "Producto no encontrado");
@@ -266,7 +266,7 @@ export async function agregarPresentacion(client: PoolClient, productId: string,
       [productId]
     )).rows[0];
     const alta = await altaMarcaOGenerico(client, {
-      categoria: "MARCA", marca: p.name, calidad: base?.calidad ?? null, pesos: [peso],
+      categoria: "MARCA", marca: p.name, calidad: calidad ?? base?.calidad ?? null, pesos: [peso],
       stock_minimo: Number(base?.stock_minimo ?? 0), precio_compra_default: Number(base?.precio_compra_default ?? 0),
       precio_venta_cliente: Number(base?.precio_venta_cliente ?? 0)
     });
@@ -402,6 +402,27 @@ export async function reactivarMarcaDeSaco(client: { query: PoolClient["query"] 
         AND is_active = false`,
     [sackId]
   );
+}
+
+/**
+ * ARROZ BASE de una marca (0.11 o Corriente): de ese arroz a granel sale el stock al
+ * venderla. Se guarda en sus sacos (todos los pesos y sus «(Usado)»); una marca sin
+ * sacos no tiene dónde guardarlo: primero se agrega una presentación (crea su saco).
+ */
+export async function fijarCalidadMarca(client: PoolClient, productId: string, calidad: Calidad): Promise<number> {
+  const p = (await client.query("SELECT id, name, product_type FROM products WHERE id = $1", [productId])).rows[0];
+  if (!p) throw new ApiError(404, "Producto no encontrado");
+  if (p.product_type !== "PACKAGED_GOOD") throw new ApiError(400, "El arroz base solo aplica a una marca / empacado.");
+  const r = await client.query(
+    `UPDATE sack_inventory SET calidad = $2, updated_at = now()
+      WHERE (product_id = $1 AND accionista_id IS NULL)
+         OR (categoria = 'USADO' AND accionista_id IS NULL AND lower(marca) = lower($3))`,
+    [productId, calidad, p.name]
+  );
+  if (!r.rowCount) {
+    throw new ApiError(409, `«${p.name}» no tiene sacos: agrega una presentación (crea su saco) eligiendo el arroz base.`);
+  }
+  return r.rowCount;
 }
 
 export type CambiosProducto = { is_active?: boolean; price_per_pound?: number; venta_detalle?: boolean };

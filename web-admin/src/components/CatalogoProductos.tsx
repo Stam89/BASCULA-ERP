@@ -389,6 +389,8 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
   onCambio: () => Promise<void>;
 }) {
   const [nombre, setNombre] = useState(fila.name);
+  // Arroz base de la marca (0.11 / Corriente): se guarda en sus sacos.
+  const [calidadSel, setCalidadSel] = useState<"" | "0.11" | "CORRIENTE">(fila.calidad === "0.11" || fila.calidad === "CORRIENTE" ? fila.calidad : "");
   const [tarifa, setTarifa] = useState(String(fila.price_per_pound || ""));
   const [detalle, setDetalle] = useState(fila.venta_detalle);
   const [peso, setPeso] = useState("");
@@ -448,6 +450,30 @@ Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`
             {nombreSucio && <small className="muted" style={{ flexBasis: "100%" }}>Pedidos, inventario e historial siguen enlazados{esMarca ? "; sus sacos pasan a llamarse igual" : ""}. El código ({fila.code}) no cambia.</small>}
           </form>
         )}
+        {puedeEditar && esMarca && (
+          <form className="catProd__nombre" onSubmit={(e) => {
+            e.preventDefault();
+            if (!calidadSel || calidadSel === fila.calidad || ocupado || fila.sacos === 0) return;
+            void ejecutar(() => apiPatch(`/products/${fila.id}`, { calidad: calidadSel }),
+              `Arroz base de «${fila.name}»: ${calidadSel === "CORRIENTE" ? "Corriente" : "0.11"}`);
+          }}>
+            <label><span>Arroz base que la respalda</span>
+              <select value={calidadSel} onChange={(e) => setCalidadSel(e.target.value as "" | "0.11" | "CORRIENTE")}>
+                <option value="">Seleccione</option>
+                <option value="0.11">0.11</option>
+                <option value="CORRIENTE">Corriente</option>
+              </select>
+            </label>
+            {fila.sacos > 0 && (
+              <button className="primary" disabled={!calidadSel || calidadSel === fila.calidad || ocupado}>Guardar arroz base</button>
+            )}
+            <small className="muted" style={{ flexBasis: "100%" }}>
+              {fila.sacos > 0
+                ? "Al vender la marca, el stock sale de este arroz a granel. Se aplica a todos sus sacos."
+                : "Esta marca no tiene sacos: elige aquí el arroz base y agrega abajo una presentación; se guarda con su saco."}
+            </small>
+          </form>
+        )}
         <p className="muted" style={{ marginTop: -4 }}>
           {ETIQUETA_TIPO[fila.product_type] ?? fila.product_type} · unidad {fila.unit}
           {fila.con_movimientos ? ` · stock ${fila.stock_total.enReal()}` : ""}
@@ -486,8 +512,9 @@ Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`
             <div className="catProd__pesos" style={{ marginTop: 6 }}>
               <input type="number" min="1" max="1000" step="0.5" value={peso} placeholder="Nuevo peso (lb)" style={{ width: 130, padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db" }}
                 onChange={(e) => setPeso(e.target.value)} />
-              <button type="button" className="btnSecondary" disabled={!(Number(peso) > 0) || ocupado}
-                onClick={() => void ejecutar(async () => { await apiPost(`/products/${fila.id}/presentaciones`, { peso_lb: Number(peso) }); setPeso(""); },
+              <button type="button" className="btnSecondary" disabled={!(Number(peso) > 0) || ocupado || (esMarca && fila.sacos === 0 && !calidadSel)}
+                title={esMarca && fila.sacos === 0 && !calidadSel ? "Elige primero el arroz base" : undefined}
+                onClick={() => void ejecutar(async () => { await apiPost(`/products/${fila.id}/presentaciones`, { peso_lb: Number(peso), calidad: esMarca && calidadSel ? calidadSel : null }); setPeso(""); },
                   esMarca ? "Presentación y saco agregados" : "Presentación agregada")}>
                 {esMarca ? "Agregar presentación + saco" : "Agregar presentación"}
               </button>

@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin } from "../../auth/require-auth.js";
 import {
-  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, eliminarProductoSinHistorial, listarCatalogo, renombrarProducto
+  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, eliminarProductoSinHistorial, fijarCalidadMarca, listarCatalogo, renombrarProducto
 } from "../../services/catalogo-productos.js";
 
 export const productsRouter = Router();
@@ -152,14 +152,16 @@ productsRouter.patch("/:id/tarifa-libra", requireAdmin, asyncRoute(async (req, r
 productsRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     name: z.string().trim().min(2).max(140).optional(),
+    calidad: z.enum(["0.11", "CORRIENTE"]).optional(),
     is_active: z.boolean().optional(),
     price_per_pound: z.number().nonnegative().max(9999).optional(),
     venta_detalle: z.boolean().optional()
   }).parse(req.body);
   if (Object.values(body).every((v) => v === undefined)) throw new ApiError(400, "Nada que actualizar.");
-  const { name, ...resto } = body;
+  const { name, calidad, ...resto } = body;
   await inTransaction(async (client) => {
     if (name !== undefined) await renombrarProducto(client, String(req.params.id), name);
+    if (calidad !== undefined) await fijarCalidadMarca(client, String(req.params.id), calidad);
     if (Object.values(resto).some((v) => v !== undefined)) await actualizarProductoCatalogo(client, String(req.params.id), resto);
   });
   const [producto] = await listarCatalogo(pool, String(req.params.id));
@@ -182,8 +184,8 @@ productsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
 
 // Agrega una presentación (peso en libras); en una marca crea también su saco.
 productsRouter.post("/:id/presentaciones", requireAdmin, asyncRoute(async (req, res) => {
-  const body = z.object({ peso_lb: z.number().positive().max(1000) }).parse(req.body);
-  const out = await inTransaction((client) => agregarPresentacion(client, String(req.params.id), body.peso_lb));
+  const body = z.object({ peso_lb: z.number().positive().max(1000), calidad: z.enum(["0.11", "CORRIENTE"]).nullable().optional() }).parse(req.body);
+  const out = await inTransaction((client) => agregarPresentacion(client, String(req.params.id), body.peso_lb, body.calidad ?? null));
   const [producto] = await listarCatalogo(pool, String(req.params.id));
   res.status(201).json({ ...out, producto });
 }));

@@ -117,6 +117,23 @@ try {
     check(ajeno.status === 403, "G4. la Matriz no puede renombrar el saco propio del socio (403)", ajeno.status);
   }
 
+  // ── I. Arroz base de una marca desde ✎ Editar ──
+  const mi = exigir(await api("POST", "/products/catalogo", { tipo: "PACKAGED_GOOD", nombre: "Sim Base", calidad: "0.11", pesos: [100, 25] }, matriz), "I1. marca «Sim Base» en 0.11");
+  exigir(await api("PATCH", `/products/${mi.producto.id}`, { calidad: "CORRIENTE" }, matriz), "I2. ✎ Editar → arroz base Corriente");
+  const cal = await q("SELECT DISTINCT calidad FROM sack_inventory WHERE product_id = $1", [mi.producto.id]);
+  check(cal.length === 1 && cal[0].calidad === "CORRIENTE", "I3. todos sus sacos quedan en Corriente", cal);
+  const catI = exigir(await api("GET", "/products/catalogo", undefined, matriz), "I4. catálogo");
+  check(catI.find((f) => f.id === mi.producto.id)?.calidad === "CORRIENTE", "I5. … y el catálogo muestra arroz base Corriente");
+  const sinSacos = (await q("SELECT id FROM products WHERE product_type = 'PACKAGED_GOOD' AND is_active AND NOT EXISTS (SELECT 1 FROM sack_inventory s WHERE s.product_id = products.id) LIMIT 1"))[0];
+  const vacia = sinSacos ?? (await q("INSERT INTO products (code, name, product_type, unit, is_active) VALUES ('ARROZ-SIM-VACIA', 'Sim Vacia', 'PACKAGED_GOOD', 'QQ', true) RETURNING id"))[0];
+  const r409 = await api("PATCH", `/products/${vacia.id}`, { calidad: "0.11" }, matriz);
+  check(r409.status === 409, "I6. una marca sin sacos no guarda el arroz base (pide agregar una presentación)", mostrar(r409));
+  exigir(await api("POST", `/products/${vacia.id}/presentaciones`, { peso_lb: 100, calidad: "0.11" }, matriz), "I7. se agrega la presentación de 100 LB eligiendo 0.11");
+  const sv = await q("SELECT calidad FROM sack_inventory WHERE product_id = $1", [vacia.id]);
+  check(sv.length === 1 && sv[0].calidad === "0.11", "I8. … su saco nace con arroz base 0.11", sv);
+  const fin = await api("PATCH", `/products/${(await q("SELECT id FROM products WHERE code='ARROZ-PILADO-011'"))[0].id}`, { calidad: "0.11" }, matriz);
+  check(fin.status === 400, "I9. el arroz a granel (no es marca) no lleva arroz base (400)", fin.status);
+
   // ── H. Limpieza pedida por el dueño (en la copia): Extra, Lira Verde y 0.11 Selectado sin historial se BORRAN ──
   for (const code of ["ARROZ-EXTRA", "ARROZ-LIRA-VERDE", "ARROZ-PILADO-011-SEL"]) {
     const p = (await q("SELECT id, name FROM products WHERE code = $1", [code]))[0];
