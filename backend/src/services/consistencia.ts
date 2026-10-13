@@ -60,6 +60,27 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
     SELECT cm.id, cm.amount::float AS movimiento, sum(d.monto)::float AS desglose
       FROM cash_movement_cuentas d JOIN cash_movements cm ON cm.id = d.cash_movement_id
      GROUP BY cm.id, cm.amount HAVING abs(cm.amount - sum(d.monto)) > 0.005` },
+  { modulo: "Caja / Resultado mensual", nombre: "Cada categoría de Caja enlazada a un rubro activo existe en el catálogo", sql: `
+    SELECT r.id, r.nombre AS rubro, x.codigo
+      FROM costo_rubros r CROSS JOIN LATERAL unnest(r.categorias) AS x(codigo)
+      LEFT JOIN cash_categories c ON c.codigo = x.codigo
+     WHERE r.activo AND c.id IS NULL` },
+  { modulo: "Caja / Resultado mensual", nombre: "Una categoría de Caja no pertenece a dos rubros activos", sql: `
+    SELECT x.codigo, count(*)::int AS rubros, string_agg(r.nombre, ' · ' ORDER BY r.nombre) AS nombres
+      FROM costo_rubros r CROSS JOIN LATERAL unnest(r.categorias) AS x(codigo)
+     WHERE r.activo
+     GROUP BY x.codigo HAVING count(*) > 1` },
+  { modulo: "Caja / Resultado mensual", nombre: "Los egresos operativos activos de Matriz tienen rubro en Resultado mensual", sql: `
+    SELECT c.codigo, c.nombre
+      FROM cash_categories c
+     WHERE c.activo AND c.tipo = 'EGRESO' AND c.aplicable_a IN ('MATRIZ', 'AMBOS')
+       AND c.codigo NOT IN (
+         'PAGO_AGRICULTOR','LIQUIDACION_AGRICULTOR','ANTICIPO_AGRICULTOR','FOMENTO_ENTREGA','FOMENTOS',
+         'PAGO_FOMENTO','COMPRA_ACTIVO_FIJO','PAGO_ENTRE_SOCIOS','PAGO_PRESTAMO','PAGO_POR_SOCIO',
+         'PAGO_SERVICIO_PILADO','PAGO_SERVICIO_MAQUILA','PAGO_SELECCION','REVERSA_COMPRA','DEVOLUCION_VENTA',
+         'PAGO_SALDO_INICIAL','TRASPASO_INTERNO','PAGO_MANO_OBRA'
+       )
+       AND NOT EXISTS (SELECT 1 FROM costo_rubros r WHERE r.activo AND c.codigo = ANY (r.categorias))` },
   { modulo: "Transporte", nombre: "Espejo de Transporte: la Por Pagar del socio = saldo pendiente del servicio en Campo", sql: `
     SELECT p.id, p.balance::float b, v.saldo_pendiente::float s FROM accounts_payable p JOIN campo_servicios_saldo v ON v.id = p.reference_id
      WHERE p.reference_type = 'campo_servicio' AND p.status <> 'CANCELLED' AND abs(p.balance - GREATEST(0, v.saldo_pendiente)) > 0.01` },

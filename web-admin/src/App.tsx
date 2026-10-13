@@ -1877,7 +1877,11 @@ function NavIcon({ tab }: { tab: string }) {
 // aquí como constante estática SECCIONES_POR_AREA.
 
 // Categoría de caja (catálogo dinámico desde BD: cash_categories).
-type CashCat = { id: string; codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO"; aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS"; activo: boolean };
+type CashCat = {
+  id: string; codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO";
+  aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS"; activo: boolean;
+  rubro_id?: string | null; rubro_nombre?: string | null; rubro_activo?: boolean | null;
+};
 type CashRegisterType = "EFECTIVO" | "BANCO" | "MIXTO";
 
 function cashCategoryAllowsSubcategory(categoryCode: string, categories: CashCat[]): boolean {
@@ -1896,6 +1900,14 @@ function cashCategoryAllowsSubcategory(categoryCode: string, categories: CashCat
 const CATEGORIAS_RUBRO_COSTO = new Set([
   "GAS", "DIESEL", "CUADRILLA_BAJADA", "REPUESTOS", "GUARDIANIA", "COCINERA",
   "GASTOS_ADMINISTRATIVOS", "ALIMENTACION", "VEHICULO_GERENCIA", "GASOLINA_MONTACARGA", "CUADRILLA_GUAYAQUIL"
+]);
+// Movimientos contables que no representan un costo operativo del mes. No
+// necesitan un rubro en Resultado mensual aunque sean egresos de la Matriz.
+const CATEGORIAS_NO_RESULTADO = new Set([
+  "PAGO_AGRICULTOR", "LIQUIDACION_AGRICULTOR", "ANTICIPO_AGRICULTOR", "FOMENTO_ENTREGA", "FOMENTOS",
+  "PAGO_FOMENTO", "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS", "PAGO_PRESTAMO", "PAGO_POR_SOCIO",
+  "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA", "DEVOLUCION_VENTA",
+  "PAGO_SALDO_INICIAL", "TRASPASO_INTERNO", "PAGO_MANO_OBRA"
 ]);
 // Compra de repuestos y Materiales consumibles: sin Subcategoría (su detalle es
 // la lista de repuestos / la máquina y la descripción).
@@ -2683,7 +2695,7 @@ export function App() {
   const [liquidarFondo, setLiquidarFondo] = useState<{ mov: CashMovement; gasto_real: string; description: string; repuestos: RepFondo[]; repAbierto: boolean } | null>(null);
   const [liquidarBusy, setLiquidarBusy] = useState(false);
   const [cashCategories, setCashCategories] = useState<CashCat[]>([]);
-  const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
+  const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS", incluir_resultado: true });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   // Cierre de caja con arqueo y traspaso efectivo↔banco (caja mixta).
   const [cierreCaja, setCierreCaja] = useState<{ efectivo: string; banco: string; notas: string; busy?: boolean } | null>(null);
@@ -5568,8 +5580,12 @@ export function App() {
     if (cashCategories.some((c) => c.codigo === codigo)) { addToast(`Ya existe una categoría con el código ${codigo}`, "error"); return; }
     if (cashCategories.some((c) => c.nombre.trim().toUpperCase() === nombre.toUpperCase())) { addToast(`Ya existe la categoría «${nombre}»`, "error"); return; }
     try {
-      await apiPost("/cash/categories", { codigo, nombre, tipo: catForm.tipo, aplicable_a: catForm.aplicable_a });
-      setCatForm({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS" });
+      const puedeCrearRubro = catForm.tipo === "EGRESO" && catForm.aplicable_a !== "SOCIO";
+      await apiPost("/cash/categories", {
+        codigo, nombre, tipo: catForm.tipo, aplicable_a: catForm.aplicable_a,
+        crear_rubro: puedeCrearRubro && catForm.incluir_resultado
+      });
+      setCatForm({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS", incluir_resultado: true });
       await reloadCashCategories();
       addToast("Categoría creada ✓", "success");
     } catch (e) { addToast(`Error: ${e instanceof Error ? e.message : "Error"}`, "error"); }
@@ -25512,7 +25528,7 @@ Motivo (obligatorio):`, "");
                   <summary>{cfgSum("🏷️", "Categorías de caja", "Rubros de ingresos y egresos que aparecen en Caja")}</summary>
                 <div>
                   <h3 style={{ marginTop: 8 }}>Nueva categoría</h3>
-                  <p className="muted">Se usa en el form de Movimiento, filtrada por tipo de accionista. No afecta movimientos ya registrados.</p>
+                  <p className="muted">Se usa en Caja y se filtra por tipo de accionista. Los egresos operativos de Matriz también deben quedar enlazados a un rubro de Resultado mensual.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Nombre visible</span>
                       <input type="text" value={catForm.nombre} onChange={(e) => setCatForm({ ...catForm, nombre: e.target.value })} placeholder="Ej: Venta Mayor" /></label>
@@ -25530,18 +25546,37 @@ Motivo (obligatorio):`, "");
                         <option value="SOCIO">Socio</option>
                       </select></label>
                   </div>
+                  {catForm.tipo === "EGRESO" && catForm.aplicable_a !== "SOCIO" && (
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0" }}>
+                      <input type="checkbox" checked={catForm.incluir_resultado}
+                        onChange={(e) => setCatForm({ ...catForm, incluir_resultado: e.target.checked })} />
+                      <span><strong>Incluir en Resultado mensual</strong><small className="muted" style={{ display: "block" }}>Creará automáticamente un rubro con el mismo nombre para clasificar estos gastos.</small></span>
+                    </label>
+                  )}
                   <button type="button" className="primary" onClick={submitCashCategory} disabled={!isAdmin}>Crear categoría</button>
                   {!isAdmin && <p className="muted">Solo un administrador puede editar categorías.</p>}
                 </div>
                 <div style={{ marginTop: 12 }}>
-                  <h3 style={{ marginBottom: 0 }}>Categorías configuradas</h3>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                    <h3 style={{ marginBottom: 0 }}>Categorías configuradas</h3>
+                    <button type="button" className="btnSecondary" onClick={() => { setCostosView("resultado"); irATab("Costos Operativos"); }}>
+                      Ver mapeo de Resultado mensual
+                    </button>
+                  </div>
                   {cashCategories.length === 0 && <CatEmptyState />}
                   <div className="equipList">
-                    {cashCategories.map((c) => (
-                      <div key={c.id} className="equipItem" style={{ opacity: c.activo ? 1 : 0.5 }}>
+                    {cashCategories.map((c) => {
+                      const requiereRubro = c.activo && c.tipo === "EGRESO" && c.aplicable_a !== "SOCIO" && !CATEGORIAS_NO_RESULTADO.has(c.codigo);
+                      const estadoResultado = c.rubro_nombre
+                        ? `${c.rubro_activo ? "Resultado mensual" : "Rubro inactivo"}: ${c.rubro_nombre}`
+                        : requiereRubro ? "Sin rubro: sus egresos aparecerán en Sin clasificar" : "No requiere rubro operativo";
+                      return <div key={c.id} className="equipItem" style={{ opacity: c.activo ? 1 : 0.5 }}>
                         <div>
                           <strong>{c.nombre}</strong>
                           <small>{c.tipo} · {c.aplicable_a} · <code>{c.codigo}</code>{c.activo ? "" : " · inactiva"}</small>
+                          <small style={{ color: c.rubro_nombre && c.rubro_activo ? "#15803d" : requiereRubro ? "#b45309" : undefined }}>
+                            {c.rubro_nombre && c.rubro_activo ? "✓ " : requiereRubro ? "⚠ " : ""}{estadoResultado}
+                          </small>
                         </div>
                         <div style={{ display: "flex", gap: 6 }}>
                           <button type="button" className="btnSecondary" disabled={!isAdmin} onClick={() => editCashCategory(c)}>✎ Editar</button>
@@ -25550,8 +25585,8 @@ Motivo (obligatorio):`, "");
                             style={{ color: "#b91c1c", border: "1px solid #fecaca", background: "transparent", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}
                             onClick={() => deleteCashCategory(c)}>🗑️ Eliminar</button>
                         </div>
-                      </div>
-                    ))}
+                      </div>;
+                    })}
                   </div>
                 </div>
                 </details>
@@ -25571,6 +25606,11 @@ Motivo (obligatorio):`, "");
                         <strong>Renombrar</strong> corrige el nombre y lo actualiza también en todo el historial de
                         mantenimientos. <strong>Desactivar</strong> es un borrado suave: la categoría deja de aparecer
                         en el formulario de Caja → Mantenimiento, pero no se borra y los reportes antiguos se conservan.
+                      </p>
+                      <p style={{ margin: "8px 0 0", padding: "8px 10px", borderRadius: 8, background: "#f0fdf4", color: "#166534", fontSize: 12.5 }}>
+                        <strong>Ruta contable:</strong> área, sección y tipo detallan la hoja de vida de la máquina. El dinero sale por Caja con
+                        <code style={{ margin: "0 4px" }}>MANTENIMIENTO_EQUIPO</code> y se contabiliza en
+                        <strong style={{ marginLeft: 4 }}>{cashCategories.find((c) => c.codigo === "MANTENIMIENTO_EQUIPO")?.rubro_nombre || "un rubro de Resultado mensual pendiente de asignar"}</strong>.
                       </p>
                     </div>
                     <button type="button" className="btnSecondary" onClick={() => loadMaintCategoriesAll().catch(() => undefined)}>↻ Actualizar</button>

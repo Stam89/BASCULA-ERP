@@ -76,15 +76,29 @@ const CATEGORIAS_CON_FLUJO_PROPIO: Record<string, string> = {
   PAGO_SERVICIO_PILADO: "El pago del servicio de pilado se registra en Por Pagar (abona la cuenta de la Matriz)."
 };
 
-/** Un movimiento MANUAL de caja solo usa categorías del catálogo, activas y del tipo correcto (o VENTA: venta al detalle). */
-async function validarCategoriaManual(client: PoolClient, category: string, movement: "INCOME" | "EXPENSE"): Promise<void> {
+/** Un movimiento MANUAL de caja solo usa categorías del catálogo, activas, del tipo y accionista correctos. */
+async function validarCategoriaManual(
+  client: PoolClient,
+  category: string,
+  movement: "INCOME" | "EXPENSE",
+  accionistaId: string | null | undefined
+): Promise<void> {
   if (category === "VENTA" && movement === "INCOME") return; // venta al detalle de Caja (por libra/QQ)
   if (CATEGORIAS_CON_FLUJO_PROPIO[category]) throw new ApiError(400, CATEGORIAS_CON_FLUJO_PROPIO[category]);
-  const c = (await client.query("SELECT tipo, activo FROM cash_categories WHERE codigo = $1", [category])).rows[0];
+  const c = (await client.query(
+    `SELECT c.tipo, c.activo, c.aplicable_a, a.tipo AS accionista_tipo
+       FROM cash_categories c
+       JOIN accionistas a ON a.id = $2
+      WHERE c.codigo = $1`,
+    [category, accionistaId ?? null]
+  )).rows[0];
   if (!c) throw new ApiError(400, `La categoría «${category}» no existe en el catálogo de Caja.`);
   if (!c.activo) throw new ApiError(400, `La categoría «${category}» está desactivada.`);
   if ((c.tipo === "INGRESO") !== (movement === "INCOME")) {
     throw new ApiError(400, `La categoría «${category}» es de ${c.tipo === "INGRESO" ? "ingreso" : "egreso"}.`);
+  }
+  if (c.aplicable_a !== "AMBOS" && c.aplicable_a !== c.accionista_tipo) {
+    throw new ApiError(400, `La categoría «${category}» no corresponde a la caja del accionista activo.`);
   }
 }
 
@@ -107,11 +121,22 @@ cashRouter.get("/categories", asyncRoute(async (req, res) => {
   }).parse(req.query);
   const conds: string[] = [];
   const params: any[] = [];
-  if (q.aplicable_a) { params.push(q.aplicable_a); conds.push(`(aplicable_a = $${params.length} OR aplicable_a = 'AMBOS')`); }
-  if (q.solo_activas) conds.push("activo = true");
+  if (q.aplicable_a) { params.push(q.aplicable_a); conds.push(`(c.aplicable_a = $${params.length} OR c.aplicable_a = 'AMBOS')`); }
+  if (q.solo_activas) conds.push("c.activo = true");
   const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
   const r = await pool.query(
-    `SELECT id, codigo, nombre, tipo, aplicable_a, activo FROM cash_categories ${where} ORDER BY aplicable_a, tipo, nombre`,
+    `SELECT c.id, c.codigo, c.nombre, c.tipo, c.aplicable_a, c.activo,
+            r.id AS rubro_id, r.nombre AS rubro_nombre, r.activo AS rubro_activo
+       FROM cash_categories c
+       LEFT JOIN LATERAL (
+         SELECT cr.id, cr.nombre, cr.activo
+           FROM costo_rubros cr
+          WHERE c.codigo = ANY (cr.categorias)
+          ORDER BY cr.activo DESC, cr.orden, cr.nombre
+          LIMIT 1
+       ) r ON true
+       ${where}
+      ORDER BY c.aplicable_a, c.tipo, c.nombre`,
     params
   );
   res.json(r.rows);
@@ -122,15 +147,37 @@ cashRouter.post("/categories", requireAdmin, asyncRoute(async (req, res) => {
     codigo: z.string().min(2).max(40).regex(/^[A-Z0-9_]+$/, "Solo mayusculas, numeros y guion bajo"),
     nombre: z.string().min(2).max(80),
     tipo: z.enum(["INGRESO", "EGRESO"]),
-    aplicable_a: z.enum(["MATRIZ", "SOCIO", "AMBOS"]).default("AMBOS")
+    aplicable_a: z.enum(["MATRIZ", "SOCIO", "AMBOS"]).default("AMBOS"),
+    crear_rubro: z.boolean().default(false)
   }).parse(req.body);
-  const dup = await pool.query("SELECT 1 FROM cash_categories WHERE codigo = $1", [body.codigo]);
-  if (dup.rowCount) throw new ApiError(409, "Ya existe una categoria con ese codigo");
-  const r = await pool.query(
-    `INSERT INTO cash_categories (codigo, nombre, tipo, aplicable_a) VALUES ($1, $2, $3, $4) RETURNING *`,
-    [body.codigo, body.nombre, body.tipo, body.aplicable_a]
-  );
-  res.status(201).json(r.rows[0]);
+  if (body.crear_rubro && (body.tipo !== "EGRESO" || body.aplicable_a === "SOCIO")) {
+    throw new ApiError(400, "Solo los egresos de Matriz o Ambos pueden incluirse en Resultado mensual.");
+  }
+  const creado = await inTransaction(async (client) => {
+    const dup = await client.query("SELECT 1 FROM cash_categories WHERE codigo = $1", [body.codigo]);
+    if (dup.rowCount) throw new ApiError(409, "Ya existe una categoria con ese codigo");
+    const cat = await client.query(
+      `INSERT INTO cash_categories (codigo, nombre, tipo, aplicable_a) VALUES ($1, $2, $3, $4) RETURNING *`,
+      [body.codigo, body.nombre, body.tipo, body.aplicable_a]
+    );
+    let rubro: { id: string; nombre: string; activo: boolean } | null = null;
+    if (body.crear_rubro) {
+      const orden = Number((await client.query("SELECT COALESCE(MAX(orden), 0) + 1 AS o FROM costo_rubros")).rows[0].o);
+      const rr = await client.query(
+        `INSERT INTO costo_rubros (nombre, costo_estimado_qq, categorias, orden)
+         VALUES ($1, 0, ARRAY[$2]::text[], $3)
+         ON CONFLICT (upper(nombre)) DO UPDATE SET
+           activo = true,
+           categorias = CASE WHEN $2 = ANY (costo_rubros.categorias) THEN costo_rubros.categorias
+                              ELSE array_append(costo_rubros.categorias, $2) END
+         RETURNING id, nombre, activo`,
+        [body.nombre, body.codigo, orden]
+      );
+      rubro = rr.rows[0];
+    }
+    return { ...cat.rows[0], rubro_id: rubro?.id ?? null, rubro_nombre: rubro?.nombre ?? null, rubro_activo: rubro?.activo ?? null };
+  });
+  res.status(201).json(creado);
 }));
 
 cashRouter.patch("/categories/:id", requireAdmin, asyncRoute(async (req, res) => {
@@ -140,6 +187,16 @@ cashRouter.patch("/categories/:id", requireAdmin, asyncRoute(async (req, res) =>
     aplicable_a: z.enum(["MATRIZ", "SOCIO", "AMBOS"]).optional(),
     activo: z.boolean().optional()
   }).parse(req.body);
+  const actual = await pool.query("SELECT codigo, tipo, aplicable_a FROM cash_categories WHERE id = $1", [req.params.id]);
+  if (!actual.rows[0]) throw new ApiError(404, "Categoria no encontrada");
+  const tipoFinal = body.tipo ?? actual.rows[0].tipo;
+  const aplicaFinal = body.aplicable_a ?? actual.rows[0].aplicable_a;
+  if (tipoFinal !== "EGRESO" || aplicaFinal === "SOCIO") {
+    const enlazada = await pool.query("SELECT nombre FROM costo_rubros WHERE $1 = ANY (categorias) LIMIT 1", [actual.rows[0].codigo]);
+    if (enlazada.rows[0]) {
+      throw new ApiError(409, `La categoría está enlazada al rubro «${enlazada.rows[0].nombre}». Desvincúlala primero en Costos Operativos → Resultado mensual → Mapeo.`);
+    }
+  }
   const fields: string[] = [];
   const values: any[] = [];
   let i = 1;
@@ -162,6 +219,10 @@ cashRouter.delete("/categories/:id", requireAdmin, asyncRoute(async (req, res) =
   const enUso = await pool.query("SELECT 1 FROM cash_movements WHERE category = $1 LIMIT 1", [cat.rows[0].codigo]);
   if (enUso.rowCount) {
     throw new ApiError(409, "No se puede eliminar porque ya tiene historiales asociados. Por favor, utilice la opción 'Desactivar'.");
+  }
+  const enlazada = await pool.query("SELECT nombre FROM costo_rubros WHERE $1 = ANY (categorias) LIMIT 1", [cat.rows[0].codigo]);
+  if (enlazada.rows[0]) {
+    throw new ApiError(409, `No se puede eliminar porque está enlazada al rubro «${enlazada.rows[0].nombre}». Desvincúlala primero en Costos Operativos → Resultado mensual → Mapeo.`);
   }
   await pool.query("DELETE FROM cash_categories WHERE id = $1", [req.params.id]);
   res.json({ ok: true, id: req.params.id });
@@ -710,7 +771,7 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
-    await validarCategoriaManual(client, body.category, body.movement);
+    await validarCategoriaManual(client, body.category, body.movement, accionistaId);
     if (body.movement === "EXPENSE") await avisarSobregiro(client, body.cash_register_id, body.amount, req);
     return client.query(
       `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, created_by, medio)
@@ -825,7 +886,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
       );
       if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
       if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
-      await validarCategoriaManual(client, body.category, body.movement);
+      await validarCategoriaManual(client, body.category, body.movement, accionistaId);
       const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
       if (!proveedor) throw new ApiError(400, "Para registrar un egreso a crédito elige o escribe el proveedor.");
       const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category]);
@@ -859,7 +920,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
-    await validarCategoriaManual(client, body.category, body.movement);
+    await validarCategoriaManual(client, body.category, body.movement, accionistaId);
     if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;

@@ -1547,6 +1547,20 @@ Implementado el 2026-10-13:
 - Sin migraciones ni cambios de esquema o registros existentes.
 - Verificaciones: backend build, frontend build, 225/225 tests, preflight sin errores críticos, ESLint sin errores y revisión visual local en Caja > Fomentos.
 
+### Caja, categorías de mantenimiento y Resultado mensual
+
+Implementado el 2026-10-13:
+
+- Se auditó el circuito `Configuración → Categorías de mantenimiento/Caja → movimientos → Resultado mensual` sin alterar historiales ni saldos.
+- El backend valida que una categoría manual de Caja sea activa, del tipo correcto y aplicable al accionista activo (Matriz/Socio); ya no basta con que el frontend la oculte.
+- Una categoría de Caja enlazada a un rubro de Resultado mensual no puede eliminarse ni convertirse en Ingreso/Socio mientras mantenga ese enlace.
+- Al crear un egreso para Matriz/Ambos, Configuración ofrece `Incluir en Resultado mensual`; si está marcado crea o reactiva el rubro y lo enlaza en la misma transacción.
+- `GET /cash/categories` devuelve el rubro asociado. Configuración muestra `Resultado mensual: <rubro>`, `No requiere rubro operativo` o una advertencia `Sin rubro`.
+- La pantalla de Categorías de mantenimiento explica la ruta contable: área/sección/tipo detallan la hoja de vida; el monto pasa por `MANTENIMIENTO_EQUIPO` hacia su rubro mensual.
+- El Control de integridad incorpora tres reglas: enlaces a categorías inexistentes, una categoría en dos rubros activos y egresos operativos activos sin rubro.
+- Auditoría real: 56 reglas y 0 hallazgos en `Caja / Resultado mensual`. El mes actual clasifica Mantenimiento y Alimentación sin egresos sin clasificar.
+- Verificaciones: backend build, frontend build, 225/225 tests, preflight sin errores críticos y revisión visual en Configuración > Contabilidad > Categorías de caja.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:
