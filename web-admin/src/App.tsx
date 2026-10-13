@@ -2443,6 +2443,15 @@ export function App() {
 
   // ── Tickets sincronizados de la app de báscula ──────────────────────────────
   const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
+  // Báscula en pestañas: los tickets (donde se ingresa la materia prima) van solos; corregir el
+  // accionista y la sincronización en su propia pestaña, para que la página no se haga larga.
+  const [basculaVista, setBasculaVistaState] = useState<"tickets" | "corregir" | "sync">(() => {
+    try { const v = localStorage.getItem("bascula-erp:bascula-vista"); return v === "corregir" || v === "sync" ? v : "tickets"; } catch { return "tickets"; }
+  });
+  const setBasculaVista = (v: "tickets" | "corregir" | "sync") => {
+    setBasculaVistaState(v);
+    try { localStorage.setItem("bascula-erp:bascula-vista", v); } catch { /* sin almacenamiento */ }
+  };
   // Ingresos de materia prima sin lote (de todos los accionistas) + su búsqueda,
   // para corregir el accionista cuando se registró con el equivocado.
   const [materiaPrimaEntries, setMateriaPrimaEntries] = useState<MateriaPrimaCorreccion[]>([]);
@@ -4774,7 +4783,7 @@ export function App() {
   }, [authUser, activeTab, inicioSimple, activeAccionistaId, hoyTareas]);
   // Un botón del inicio simple lleva a su pantalla (la de báscula se abre en «Pendientes», sin búsquedas viejas).
   function irAInicio(tab: string) {
-    if (tab === "Bascula") { setTicketFilter("pending"); setTicketSearch(""); }
+    if (tab === "Bascula") { setTicketFilter("pending"); setTicketSearch(""); setBasculaVista("tickets"); }
     irATab(tab as typeof activeTab);
   }
   // Asistente de puesta en marcha: cada paso lleva a la tarjeta de Configuración donde se hace.
@@ -13530,8 +13539,29 @@ Motivo (obligatorio):`, "");
 
         {activeTab === "Bascula" && (
           <>
+          {(() => {
+            const hayCorregir = accionistas.length > 1 && materiaPrimaEntries.length > 0;
+            const enLinea = !basculaSyncErr && basculaSync != null;
+            return (
+              <div className="tablePanel" style={{ marginBottom: 12, padding: 8 }}>
+                <nav className="segmented basculaTabs" aria-label="Vistas de Báscula">
+                  <button type="button" className={basculaVista === "tickets" ? "active" : ""} onClick={() => setBasculaVista("tickets")}>
+                    📲 Tickets de báscula
+                  </button>
+                  {hayCorregir && (
+                    <button type="button" className={basculaVista === "corregir" ? "active" : ""} onClick={() => setBasculaVista("corregir")}>
+                      🔁 Corregir accionista
+                    </button>
+                  )}
+                  <button type="button" className={basculaVista === "sync" ? "active" : ""} onClick={() => setBasculaVista("sync")}>
+                    🔗 Sincronización <span aria-hidden="true" style={{ color: basculaSync == null && !basculaSyncErr ? "#9ca3af" : enLinea ? "#16a34a" : "#dc2626" }}>●</span>
+                  </button>
+                </nav>
+              </div>
+            );
+          })()}
           {/* Corrección puntual del accionista de un ingreso de materia prima */}
-          {accionistas.length > 1 && materiaPrimaEntries.length > 0 && (
+          {basculaVista === "corregir" && accionistas.length > 1 && materiaPrimaEntries.length > 0 && (
               <div className="tablePanel" style={{ marginBottom: 16 }}>
                 <h2>🔁 Corregir el accionista de un ingreso de materia prima</h2>
                 <p className="muted">
@@ -13578,6 +13608,7 @@ Motivo (obligatorio):`, "");
           {/* Mini-dashboard de sincronización directa por WiFi (tablet → ERP).
               Panel INDEPENDIENTE: no envuelve ni altera la tabla de tickets ni
               los botones de abajo. Convive con la importación desde Firebase. */}
+          {basculaVista === "sync" && (
           <div className="tablePanel" style={{ marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 16 }}>
               <div style={{ marginRight: "auto" }}>
@@ -13661,7 +13692,9 @@ Motivo (obligatorio):`, "");
               )}
             </div>}
           </div>
+          )}
 
+          {(basculaVista === "tickets" || (basculaVista === "corregir" && !(accionistas.length > 1 && materiaPrimaEntries.length > 0))) && (
           <div className="tablePanel">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
               <div>
@@ -13802,6 +13835,7 @@ Motivo (obligatorio):`, "");
               </div>
             )}
           </div>
+          )}
 
           {/* Modal: Ingreso Manual (emergencia) — mismo formulario y lógica de antes */}
           {ingresoModalOpen && (

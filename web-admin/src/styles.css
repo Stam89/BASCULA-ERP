@@ -5873,3 +5873,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 
 /* Cambio rapido de accionista arriba de cada modulo */
 .accionistaBarra { margin: 0 0 12px; }
+
+/* Bascula: pestanas Tickets / Corregir accionista / Sincronizacion */
+.basculaTabs { display: flex; flex-wrap: wrap; max-width: 100%; }
+.basculaTabs button { flex: 1 1 auto; white-space: nowrap; }

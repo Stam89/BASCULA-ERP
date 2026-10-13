@@ -49,6 +49,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### ⚖️ Báscula en pestañas (2026-10-13, pedido del dueño)
+
+- Báscula: «📲 Tickets de báscula» (por defecto; ahí se ingresa la materia prima) · «🔁 Corregir accionista» (solo si hay ingresos y más de un accionista) · «🔗 Sincronización» (con punto de estado). `basculaVista` recordada en localStorage; desde Inicio abre Tickets. Solo cambia qué se muestra; la lógica es la misma.
+
 ### 🚚📂 Flete por viaje y cambio rápido de accionista (2026-10-13, pedido del dueño)
 
 - Flete POR VIAJE (migración 20261094: `tarifa_flete_viaje` en `campo_clientes` y `campo_config`): cuando el carro no llevó los QQ que debía se cobra el viaje completo. `POST /campo/partes/:id/cobrar` acepta `valor_viaje` (solo fletes; guarda el precio equivalente por QQ y «por viaje» en notas) o `precio_unitario`. `tarifa-sugerida` devuelve `viaje`; PUT de tarifas acepta `viaje` (sin mandarlo no se toca). «Generar cobro»: Por QQ / Por viaje y aviso si por QQ sale menos que el viaje.
