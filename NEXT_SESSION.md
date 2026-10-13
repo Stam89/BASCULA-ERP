@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🚜 Transporte: tarifas a clientes y documentos de la flota (2026-10-13, pedido del dueño)
+
+- Migración 20261093: `campo_clientes.tarifa_cosecha_qq/tarifa_flete_qq`, `campo_config.tarifa_cosecha_qq/tarifa_flete_qq` (general) y `campo_documentos` (activo, tipo matricula|soat|revision|seguro|permiso|otro, número, vence). Rutas `/campo/tarifas-cliente` (GET, PUT general, PUT :clienteId), `/campo/partes/:id/tarifa-sugerida` (la del cliente por tipo de servicio, si no la general) y `/campo/documentos` CRUD (renovar = PATCH vence). Permiso: sub «config». «Generar cobro» llena el precio sugerido (editable).
+- Avisos: `documentosPorVencer` (campo-alertas.ts; ≤30 días, solo máquinas activas) en las alertas de Transporte y en Hoy de la Matriz (`documento-flota-vencido` urgente / `-proximo`, tab «Caja de Campo» sub «config»; `irADestino` abre Campo). Arroz base de una marca en ✎ Editar (`fijarCalidadMarca`). Simulacro `campo_tarifas_documentos.mjs` TODO OK.
+
 ### 💲🌾 Descuento por QQ por cliente y saldo inicial negativo (2026-10-13, pedido del dueño)
 
 - Venta Detalle por QQ: el descuento ya no es $0.01 fijo. Migración 20261092: `venta_detalle_config.descuento_qq_defecto` (arranca en $1.00; `GET/PUT /products/venta-detalle-config`) y `customers.descuento_qq` (NULL = el por defecto; `PATCH /customers/:id/descuento-qq`, admin). `ventaDetalle.ts`: `precioAplicadoDetalle(…, descuentoQq)`. La tarjeta de Caja aplica el del cliente elegido y el cajero lo puede cambiar para esa venta. Configuración → Tarifas por libra: por defecto + tabla de clientes con su descuento.

@@ -463,6 +463,15 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
 }) {
   const [precio, setPrecio] = useState("");
   const [busy, setBusy] = useState(false);
+  // Tarifa del cliente (o la general) de Configuración → 💲 Tarifas a clientes: llena el precio si está vacío.
+  const [sugerida, setSugerida] = useState<{ precio: number | null; origen: "cliente" | "general" | null } | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    apiGet<{ precio: number | null; origen: "cliente" | "general" | null }>(`/campo/partes/${parte.id}/tarifa-sugerida`)
+      .then((r) => { if (!vivo) return; setSugerida(r); if (r.precio) setPrecio((p) => (p === "" ? String(r.precio) : p)); })
+      .catch(() => undefined);
+    return () => { vivo = false; };
+  }, [parte.id]);
   const pu = Number(precio);
   const valido = precio !== "" && pu > 0;
   const valor = valido ? Math.round(parte.qq * pu * 100) / 100 : 0;
@@ -489,6 +498,12 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
         </div>
         <label><span>Precio por QQ $</span>
           <input type="number" step="0.0001" min="0" autoFocus value={precio} onChange={(e) => setPrecio(e.target.value)} placeholder="Ej: 1.50" />
+          {sugerida?.precio != null && (
+            <small className="muted" style={{ display: "block", marginTop: 4 }}>
+              {sugerida.origen === "cliente" ? "Tarifa de este cliente" : "Tarifa general"}: {money(sugerida.precio)}/QQ
+              {Number(precio) !== sugerida.precio && <> · <button type="button" className="btnGhost" style={{ padding: "0 4px" }} onClick={() => setPrecio(String(sugerida.precio))}>usarla</button></>}
+            </small>
+          )}
         </label>
         {valido && (
           <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>

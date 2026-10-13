@@ -35,6 +35,23 @@ describe("alertas de Transporte y Cosechadora", () => {
     expect(r[0].detalle).toContain("20/09/2026");
   });
 
+  it("documentos de la flota: vencido pide atención y el próximo dice cuántos días faltan", () => {
+    const r = construirAlertas({
+      ...vacio,
+      documentos: {
+        vencidos: [{ maquina: "HINO", documento: "SOAT", fecha: "2026-10-01", dias: -12 }],
+        proximos: [{ maquina: "COSECHADORA 1", documento: "Matrícula", fecha: "2026-10-20", dias: 7 }]
+      }
+    });
+    expect(r[0]).toMatchObject({ key: "documento-vencido", nivel: "atencion", seccion: "config" });
+    expect(r[0].titulo).toBe("SOAT vencido: HINO");
+    expect(r[0].detalle).toContain("01/10/2026");
+    expect(r[1]).toMatchObject({ key: "documento-proximo", nivel: "atencion" });
+    expect(r[1].titulo).toBe("Matrícula de COSECHADORA 1 vence en 7 día(s)");
+    const lejos = construirAlertas({ ...vacio, documentos: { vencidos: [], proximos: [{ maquina: "HINO", documento: "SOAT", fecha: "2026-11-05", dias: 23 }] } });
+    expect(lejos[0].nivel).toBe("info");
+  });
+
   it("la cartera avisa cuánto pasa de 30 días", () => {
     const r = construirAlertas({ ...vacio, cartera: { monto: 300, clientes: 2, montoMas30: 120 } });
     expect(r[0]).toMatchObject({ nivel: "atencion", seccion: "cxc" });

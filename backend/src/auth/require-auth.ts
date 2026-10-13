@@ -219,7 +219,7 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
   { module: CAMPO, prefix: "campo", sub: "partes", exigeVer: true, test: (_m, r) => /^\/partes(\/|$)/.test(r) },
   { module: CAMPO, prefix: "campo", sub: "nomina", exigeVer: true, test: (_m, r) => /^\/nomina-operadores(\/|$)/.test(r) },
   { module: CAMPO, prefix: "campo", sub: "config", alt: ["nomina"], exigeVer: true, test: (_m, r) => /^\/tarifas-operador(\/|$)/.test(r) },
-  { module: CAMPO, prefix: "campo", sub: "config", exigeVer: true, test: (_m, r) => /^\/(config|activos|cuentas|categorias-gasto|operadores|saldos-iniciales)(\/|$)/.test(r) }
+  { module: CAMPO, prefix: "campo", sub: "config", exigeVer: true, test: (_m, r) => /^\/(config|activos|cuentas|categorias-gasto|operadores|saldos-iniciales|tarifas-cliente|documentos)(\/|$)/.test(r) }
 ];
 
 /** ¿Alguna de las sub-pestañas de la regla deja escribir? (se ve —si la regla lo exige— y no es «Solo ver») */

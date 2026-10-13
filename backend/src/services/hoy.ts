@@ -7,6 +7,7 @@ import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
 import { contarBajadasSinNombre, contarNombresPorRevisar } from "../routes/modules/cuadrilla.js";
 import { resumenIntegridad } from "./consistencia.js";
+import { documentosPorVencer } from "./campo-alertas.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -42,6 +43,8 @@ export type DatosHoy = {
     vencidas: Array<{ banco: string; fecha: string; monto: number }>;
     proximas: Array<{ banco: string; fecha: string; monto: number; dias: number }>;
   };
+  /** Documentos de la flota de Transporte (solo la Matriz): vencidos y por vencer (opcional). */
+  documentosFlota?: { vencidos: Array<{ maquina: string; documento: string; fecha: string; dias: number }>; proximos: Array<{ maquina: string; documento: string; fecha: string; dias: number }> };
   /** Solo administrador: controles de integridad entre módulos que fallan (opcional: sin dato no se muestra nada). */
   integridad?: { problemas: number; nombres: string[] };
 };
@@ -169,6 +172,28 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
         : `${p.length} cuotas de préstamos se cobran esta semana`,
       detalle: `${p.slice(0, 3).map((x) => `${x.banco}: ${fechaCorta(x.fecha)} · ${dinero(x.monto)}`).join(" · ")}. Ten el dinero en el banco.`,
       tab: "Por Pagar", sub: "prestamos", accion: "Ver préstamos"
+    });
+  }
+
+  // ── Documentos de la flota (Transporte y Cosechadora) ────────────────────
+  if (d.documentosFlota && d.documentosFlota.vencidos.length > 0) {
+    const v = d.documentosFlota.vencidos;
+    t.push({
+      key: "documento-flota-vencido", nivel: "urgente", icono: "📄",
+      titulo: v.length === 1 ? `${v[0].documento} de ${v[0].maquina} está vencido` : `${v.length} documentos de vehículos vencidos`,
+      detalle: `${v.slice(0, 3).map((x) => `${x.maquina}: ${x.documento} venció el ${fechaCorta(x.fecha)}`).join(" · ")}${v.length > 3 ? ` · y ${v.length - 3} más` : ""}. Renuévalo y actualiza la fecha.`,
+      tab: "Caja de Campo", sub: "config", accion: "Ver documentos"
+    });
+  }
+  if (d.documentosFlota && d.documentosFlota.proximos.length > 0) {
+    const p = d.documentosFlota.proximos;
+    t.push({
+      key: "documento-flota-proximo", nivel: p.some((x) => x.dias <= 7) ? "atencion" : "info", icono: "📄",
+      titulo: p.length === 1
+        ? `${p[0].documento} de ${p[0].maquina} vence ${p[0].dias === 0 ? "hoy" : p[0].dias === 1 ? "mañana" : `en ${p[0].dias} días`}`
+        : `${p.length} documentos de vehículos vencen pronto`,
+      detalle: `${p.slice(0, 3).map((x) => `${x.maquina}: ${x.documento} ${fechaCorta(x.fecha)}`).join(" · ")}${p.length > 3 ? ` · y ${p.length - 3} más` : ""}.`,
+      tab: "Caja de Campo", sub: "config", accion: "Ver documentos"
     });
   }
 
@@ -306,6 +331,11 @@ export async function reunirDatos(
     };
   });
 
+  // Documentos de la flota: solo cuando el accionista activo es la Matriz (ahí vive Transporte).
+  const documentosFlota = await seguro("documentos-flota", { vencidos: [], proximos: [] } as NonNullable<DatosHoy["documentosFlota"]>, async () => {
+    return ctx.esMatriz ? await documentosPorVencer(db) : { vencidos: [], proximos: [] };
+  });
+
   const puesta = ctx.esAdmin
     ? await seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
     : { aplica: false, faltantes: [] as string[] };
@@ -317,7 +347,7 @@ export async function reunirDatos(
     })
     : undefined;
 
-  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, puesta, ...(integridad ? { integridad } : {}) };
+  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, ...(integridad ? { integridad } : {}) };
 }
 
 export async function tareasDeHoy(ctx: Parameters<typeof reunirDatos>[1]): Promise<TareaHoy[]> {

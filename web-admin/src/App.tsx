@@ -4747,6 +4747,7 @@ export function App() {
       irATab("Nomina");
       return;
     }
+    if (tab === "Caja de Campo") { abrirCampo(sub); return; }
     if (tab === "Por Pagar" && sub === "prestamos") { irATab("Por Pagar"); setTimeout(() => setPrestamosFoco(Date.now()), 150); return; }
     if (tab === "Configuracion" && sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
     if (tab === "Configuracion" && sub === "integridad") { irAConfig("Estado del sistema"); return; }

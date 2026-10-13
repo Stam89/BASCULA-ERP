@@ -22,7 +22,17 @@ export type DatosAlertasCampo = {
   partesPorCobrar: { n: number; qq: number; diasMasViejo: number };
   operadoresSinPagar: { operadores: number; partes: number; diasMasViejo: number };
   cartera: { monto: number; clientes: number; montoMas30: number };
+  /** Documentos de la flota (matrícula, SOAT, revisión…): vencidos y los que vencen en 30 días (opcional). */
+  documentos?: { vencidos: DocFlota[]; proximos: DocFlota[] };
 };
+export type DocFlota = { maquina: string; documento: string; fecha: string; dias: number };
+
+/** Nombre legible del tipo de documento de la flota. */
+export const NOMBRE_DOCUMENTO: Record<string, string> = {
+  matricula: "Matrícula", soat: "SOAT", revision: "Revisión técnica", seguro: "Seguro", permiso: "Permiso", otro: "Documento"
+};
+/** Días antes del vencimiento en que un documento empieza a avisar. */
+export const DIAS_AVISO_DOCUMENTO = 30;
 
 /** Un vale sin rendir más de estos días pasa a «atención». */
 export const DIAS_VALE_LARGO = 7;
@@ -37,6 +47,24 @@ const fechaCorta = (iso: string) => iso.slice(0, 10).split("-").reverse().join("
 export function construirAlertas(d: DatosAlertasCampo): AlertaCampo[] {
   const a: AlertaCampo[] = [];
 
+  if (d.documentos && d.documentos.vencidos.length > 0) {
+    const v = d.documentos.vencidos;
+    a.push({
+      key: "documento-vencido", nivel: "atencion", icono: "📄",
+      titulo: v.length === 1 ? `${v[0].documento} vencido: ${v[0].maquina}` : `${v.length} documentos de la flota vencidos`,
+      detalle: v.slice(0, 3).map((x) => `${x.maquina} · ${x.documento} (venció el ${fechaCorta(x.fecha)})`).join(" · ") + (v.length > 3 ? ` · y ${v.length - 3} más` : "") + ". Renuévalo y actualiza la fecha.",
+      seccion: "config"
+    });
+  }
+  if (d.documentos && d.documentos.proximos.length > 0) {
+    const p = d.documentos.proximos;
+    a.push({
+      key: "documento-proximo", nivel: p.some((x) => x.dias <= 7) ? "atencion" : "info", icono: "📄",
+      titulo: p.length === 1 ? `${p[0].documento} de ${p[0].maquina} vence en ${p[0].dias} día(s)` : `${p.length} documentos vencen en los próximos ${DIAS_AVISO_DOCUMENTO} días`,
+      detalle: p.slice(0, 3).map((x) => `${x.maquina} · ${x.documento} (${fechaCorta(x.fecha)})`).join(" · ") + ".",
+      seccion: "config"
+    });
+  }
   if (d.mantenimientos.vencidos.length > 0) {
     const v = d.mantenimientos.vencidos;
     a.push({
@@ -155,7 +183,22 @@ export async function reunirAlertas(db: Db = pool): Promise<DatosAlertasCampo> {
     return { monto: Number(r.monto), clientes: Number(r.clientes), montoMas30: Number(r.mas30) };
   });
 
-  return { vales, mantenimientos, partesPorCobrar, operadoresSinPagar, cartera };
+  const documentos = await seguro("documentos", { vencidos: [] as DocFlota[], proximos: [] as DocFlota[] }, () => documentosPorVencer(db));
+
+  return { vales, mantenimientos, partesPorCobrar, operadoresSinPagar, cartera, documentos };
+}
+
+/** Documentos de la flota activa vencidos o que vencen dentro de DIAS_AVISO_DOCUMENTO días. */
+export async function documentosPorVencer(db: Db = pool): Promise<{ vencidos: DocFlota[]; proximos: DocFlota[] }> {
+  const rows = (await db.query(
+    `SELECT a.nombre AS maquina, d.tipo, d.descripcion, to_char(d.vence, 'YYYY-MM-DD') AS fecha, (d.vence - ${HOY})::int AS dias
+       FROM campo_documentos d JOIN campo_activos a ON a.id = d.activo_id
+      WHERE a.activo = true AND d.vence <= ${HOY} + ${DIAS_AVISO_DOCUMENTO}
+      ORDER BY d.vence LIMIT 30`
+  )).rows as Array<{ maquina: string; tipo: string; descripcion: string | null; fecha: string; dias: number }>;
+  const doc = (r: { tipo: string; descripcion: string | null }) => (r.tipo === "otro" && r.descripcion ? r.descripcion : NOMBRE_DOCUMENTO[r.tipo] ?? r.tipo);
+  const m = (r: typeof rows[number]): DocFlota => ({ maquina: r.maquina, documento: doc(r), fecha: r.fecha, dias: Number(r.dias) });
+  return { vencidos: rows.filter((r) => Number(r.dias) < 0).map(m), proximos: rows.filter((r) => Number(r.dias) >= 0).map(m) };
 }
 
 export async function alertasDeCampo(): Promise<AlertaCampo[]> {

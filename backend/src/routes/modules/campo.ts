@@ -3006,3 +3006,122 @@ campoRouter.get("/caja/sesiones", asyncRoute(async (_req, res) => {
   )).rows;
   res.json(rows);
 }));
+
+// ════════════════════════════════════════════════════════════════════════════
+// 💲 TARIFAS POR CLIENTE y 📄 DOCUMENTOS DE LA FLOTA (pedido del dueño 2026-10-13; migración 20261093)
+//  · Cada cliente puede tener su precio por QQ de cosecha y de flete; los que no, usan la tarifa
+//    general. «Generar cobro» de un parte trae ese precio ya escrito (se puede cambiar).
+//  · Documentos de cada vehículo/máquina con su vencimiento: avisan en Hoy y en las alertas.
+// ════════════════════════════════════════════════════════════════════════════
+const tarifaSchema = z.union([z.null(), z.number().positive().max(100000)]);
+const r4 = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n) * 10000) / 10000);
+
+campoRouter.get("/tarifas-cliente", asyncRoute(async (_req, res) => {
+  await ensureConfig();
+  const g = (await pool.query(
+    "SELECT tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete FROM campo_config WHERE id = 1"
+  )).rows[0] ?? {};
+  const clientes = (await pool.query(
+    `SELECT id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq
+       FROM campo_clientes WHERE tarifa_cosecha_qq IS NOT NULL OR tarifa_flete_qq IS NOT NULL ORDER BY nombre`
+  )).rows;
+  res.json({ general: { cosecha: g.cosecha ?? null, flete: g.flete ?? null }, clientes });
+}));
+
+campoRouter.put("/tarifas-cliente/general", asyncRoute(async (req, res) => {
+  await ensureConfig();
+  const body = z.object({ cosecha: tarifaSchema, flete: tarifaSchema }).parse(req.body);
+  const r = (await pool.query(
+    `UPDATE campo_config SET tarifa_cosecha_qq = $1, tarifa_flete_qq = $2, updated_at = now() WHERE id = 1
+     RETURNING tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete`,
+    [r4(body.cosecha), r4(body.flete)]
+  )).rows[0];
+  res.json(r);
+}));
+
+campoRouter.put("/tarifas-cliente/:clienteId", asyncRoute(async (req, res) => {
+  const body = z.object({ cosecha: tarifaSchema, flete: tarifaSchema }).parse(req.body);
+  const r = (await pool.query(
+    `UPDATE campo_clientes SET tarifa_cosecha_qq = $2, tarifa_flete_qq = $3 WHERE id = $1
+     RETURNING id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq`,
+    [req.params.clienteId, r4(body.cosecha), r4(body.flete)]
+  )).rows[0];
+  if (!r) throw new ApiError(404, "Cliente no encontrado");
+  res.json(r);
+}));
+
+/** Precio sugerido para cobrar un parte: el del cliente (por tipo de servicio) o el general. */
+campoRouter.get("/partes/:id/tarifa-sugerida", asyncRoute(async (req, res) => {
+  await ensureConfig();
+  const p = (await pool.query(
+    `SELECT p.cliente, p.cliente_id, a.tipo AS activo_tipo FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id WHERE p.id = $1`,
+    [req.params.id]
+  )).rows[0];
+  if (!p) throw new ApiError(404, "Parte no encontrado");
+  const tipo = tipoServicioPorActivo(p.activo_tipo);
+  const col = tipo === "cosecha" ? "tarifa_cosecha_qq" : "tarifa_flete_qq";
+  const cli = (await pool.query(
+    `SELECT ${col}::float AS t FROM campo_clientes
+      WHERE id = $1 OR ($1::uuid IS NULL AND lower(trim(nombre)) = lower(trim($2)))
+      ORDER BY (id = $1) DESC NULLS LAST LIMIT 1`,
+    [p.cliente_id ?? null, p.cliente ?? ""]
+  )).rows[0];
+  if (cli?.t) { res.json({ precio: cli.t, origen: "cliente", tipo }); return; }
+  const g = (await pool.query(`SELECT ${col}::float AS t FROM campo_config WHERE id = 1`)).rows[0];
+  res.json({ precio: g?.t ?? null, origen: g?.t ? "general" : null, tipo });
+}));
+
+// ── Documentos de la flota ───────────────────────────────────────────────────
+const TIPOS_DOCUMENTO = ["matricula", "soat", "revision", "seguro", "permiso", "otro"] as const;
+const docSchema = z.object({
+  activo_id: z.string().uuid(),
+  tipo: z.enum(TIPOS_DOCUMENTO),
+  descripcion: z.string().trim().max(120).optional().nullable(),
+  numero: z.string().trim().max(60).optional().nullable(),
+  vence: fechaSchema,
+  notas: z.string().trim().max(400).optional().nullable()
+});
+const SELECT_DOCS = `
+  SELECT d.id, d.activo_id, a.nombre AS activo_nombre, a.placa_codigo, a.activo AS activo_vigente, d.tipo, d.descripcion, d.numero,
+         to_char(d.vence, 'YYYY-MM-DD') AS vence, d.notas,
+         (d.vence - (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS dias
+    FROM campo_documentos d JOIN campo_activos a ON a.id = d.activo_id`;
+
+campoRouter.get("/documentos", asyncRoute(async (_req, res) => {
+  res.json((await pool.query(`${SELECT_DOCS} ORDER BY d.vence, a.nombre`)).rows);
+}));
+
+campoRouter.post("/documentos", asyncRoute(async (req, res) => {
+  const body = docSchema.parse(req.body);
+  const act = await pool.query("SELECT 1 FROM campo_activos WHERE id = $1", [body.activo_id]);
+  if (!act.rowCount) throw new ApiError(404, "Máquina o vehículo no encontrado");
+  if (body.tipo === "otro" && !body.descripcion) throw new ApiError(400, "Escribe qué documento es.");
+  const id = (await pool.query(
+    `INSERT INTO campo_documentos (activo_id, tipo, descripcion, numero, vence, notas, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+    [body.activo_id, body.tipo, body.descripcion || null, body.numero || null, body.vence, body.notas || null, userId(req)]
+  )).rows[0].id;
+  res.status(201).json((await pool.query(`${SELECT_DOCS} WHERE d.id = $1`, [id])).rows[0]);
+}));
+
+// Editar / RENOVAR (nueva fecha de vencimiento y número).
+campoRouter.patch("/documentos/:id", asyncRoute(async (req, res) => {
+  const body = docSchema.partial().parse(req.body);
+  const fields: string[] = [];
+  const values: unknown[] = [];
+  let i = 1;
+  for (const k of ["activo_id", "tipo", "descripcion", "numero", "vence", "notas"] as const) {
+    if (body[k] !== undefined) { fields.push(`${k} = $${i++}`); values.push(body[k] === "" ? null : body[k]); }
+  }
+  if (!fields.length) throw new ApiError(400, "Sin cambios");
+  values.push(req.params.id);
+  const r = await pool.query(`UPDATE campo_documentos SET ${fields.join(", ")}, updated_at = now() WHERE id = $${i} RETURNING id`, values);
+  if (!r.rowCount) throw new ApiError(404, "Documento no encontrado");
+  res.json((await pool.query(`${SELECT_DOCS} WHERE d.id = $1`, [req.params.id])).rows[0]);
+}));
+
+campoRouter.delete("/documentos/:id", asyncRoute(async (req, res) => {
+  const r = await pool.query("DELETE FROM campo_documentos WHERE id = $1", [req.params.id]);
+  if (!r.rowCount) throw new ApiError(404, "Documento no encontrado");
+  res.json({ ok: true });
+}));

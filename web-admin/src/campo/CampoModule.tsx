@@ -372,6 +372,8 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
         <TarifasOperadorCatalogo activos={activos} operadores={operadores}
           onChanged={(msg) => { setCfgVersion((v) => v + 1); notify(msg); }}
           onError={(m) => notify(m, "err")} />
+        <TarifasClientesCampo onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />
+        <DocumentosFlotaCampo activos={activos} onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />
         <CategoriasGastoCampo categorias={categorias} onChanged={cambio} onError={(m) => notify(m, "err")} />
         <SaldosArranqueCampo onChanged={async (msg) => { setCfgVersion((v) => v + 1); notify(msg); }} onError={(m) => notify(m, "err")} />
       </section>
@@ -3316,5 +3318,200 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         </div>
       </section>
     </main>
+  );
+}
+
+// ── 💲 Tarifas a clientes: precio por QQ de cosecha y de flete (general y por cliente) ──
+// «Generar cobro» de un parte trae este precio ya escrito (el del cliente o el general).
+type TarifaCliente = { id: string; nombre: string; tipo: string; tarifa_cosecha_qq: number | null; tarifa_flete_qq: number | null };
+function TarifasClientesCampo({ onChanged, onError }: { onChanged: (msg: string) => void; onError: (m: string) => void }) {
+  const [data, setData] = useState<{ general: { cosecha: number | null; flete: number | null }; clientes: TarifaCliente[] } | null>(null);
+  const [gen, setGen] = useState({ cosecha: "", flete: "" });
+  const [cliente, setCliente] = useState<Cliente | null>(null);
+  const [nueva, setNueva] = useState({ cosecha: "", flete: "" });
+  const [busy, setBusy] = useState(false);
+  const cargar = useCallback(async () => {
+    try {
+      const d = await apiGet<{ general: { cosecha: number | null; flete: number | null }; clientes: TarifaCliente[] }>("/campo/tarifas-cliente");
+      setData(d);
+      setGen({ cosecha: d.general.cosecha != null ? String(d.general.cosecha) : "", flete: d.general.flete != null ? String(d.general.flete) : "" });
+    } catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { void cargar(); }, [cargar]);
+  const num = (s: string) => (s.trim() === "" ? null : Number(s));
+  const valida = (n: number | null) => n == null || (Number.isFinite(n) && n > 0);
+
+  async function correr(fn: () => Promise<string>): Promise<boolean> {
+    try { setBusy(true); const msg = await fn(); await cargar(); onChanged(msg); return true; }
+    catch (e) { onError((e as Error).message); return false; } finally { setBusy(false); }
+  }
+  const guardarGeneral = () => correr(async () => {
+    const c = num(gen.cosecha), f = num(gen.flete);
+    if (!valida(c) || !valida(f)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
+    await apiPut("/campo/tarifas-cliente/general", { cosecha: c, flete: f });
+    return "Tarifa general guardada";
+  });
+  const guardarCliente = (id: string, nombre: string, c: number | null, f: number | null) => correr(async () => {
+    if (!valida(c) || !valida(f)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
+    await apiPut(`/campo/tarifas-cliente/${id}`, { cosecha: c, flete: f });
+    return c == null && f == null ? `${nombre}: usa la tarifa general` : `Tarifa de ${nombre} guardada`;
+  });
+  const agregar = async () => {
+    if (!cliente) { onError("Elige el cliente"); return; }
+    const c = num(nueva.cosecha), f = num(nueva.flete);
+    if (c == null && f == null) { onError("Escribe al menos una tarifa (cosecha o flete)"); return; }
+    if (await guardarCliente(cliente.id, cliente.nombre, c, f)) { setCliente(null); setNueva({ cosecha: "", flete: "" }); }
+  };
+  const inp: CSSProperties = { width: 100, textAlign: "right" };
+  return (
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>💲 Tarifas a clientes</h2>
+      <p className="muted" style={{ marginTop: -4 }}>
+        Precio por <b>QQ</b> que se le cobra al cliente. Al <b>Generar cobro</b> de un parte el precio sale solo: el del cliente
+        y, si no tiene, el general. Siempre se puede cambiar en ese momento.
+      </p>
+      <div className="campoSaldos__form">
+        <label><span>General · cosecha $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={gen.cosecha} placeholder="sin tarifa" onChange={(e) => setGen({ ...gen, cosecha: e.target.value })} /></label>
+        <label><span>General · flete $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={gen.flete} placeholder="sin tarifa" onChange={(e) => setGen({ ...gen, flete: e.target.value })} /></label>
+        <button type="button" className="primary" disabled={busy} onClick={() => void guardarGeneral()}>Guardar tarifa general</button>
+      </div>
+      <h3 style={{ margin: "14px 0 6px", fontSize: 14 }}>Tarifa propia de cada cliente</h3>
+      {data && data.clientes.length > 0 ? (
+        <div style={{ overflowX: "auto" }}>
+          <table className="cajaTable" style={{ width: "100%", minWidth: 420 }}>
+            <thead><tr><th>Cliente</th><th className="num">Cosecha $/QQ</th><th className="num">Flete $/QQ</th><th /></tr></thead>
+            <tbody>
+              {data.clientes.map((c) => (
+                <tr key={`${c.id}-${c.tarifa_cosecha_qq}-${c.tarifa_flete_qq}`}>
+                  <td>{c.nombre}{c.tipo === "piladora" && <small className="muted"> · socio</small>}</td>
+                  {(["tarifa_cosecha_qq", "tarifa_flete_qq"] as const).map((k) => (
+                    <td key={k} className="num">
+                      <input type="number" inputMode="decimal" min="0" step="0.0001" style={inp} defaultValue={c[k] ?? ""} placeholder="general"
+                        onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                        onBlur={(e) => {
+                          const v = num(e.target.value);
+                          if (v === c[k]) return;
+                          void guardarCliente(c.id, c.nombre, k === "tarifa_cosecha_qq" ? v : c.tarifa_cosecha_qq, k === "tarifa_flete_qq" ? v : c.tarifa_flete_qq);
+                        }} />
+                    </td>
+                  ))}
+                  <td style={{ textAlign: "right" }}>
+                    <button type="button" className="btnGhost" disabled={busy} onClick={() => void guardarCliente(c.id, c.nombre, null, null)}>Quitar</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <p className="muted" style={{ margin: "0 0 6px" }}>Ningún cliente tiene tarifa propia: todos usan la general.</p>}
+      <div className="campoSaldos__form" style={{ marginTop: 8 }}>
+        <ClientePicker value={cliente} onChange={setCliente} onError={onError} />
+        <label><span>Cosecha $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={nueva.cosecha} placeholder="(general)" onChange={(e) => setNueva({ ...nueva, cosecha: e.target.value })} /></label>
+        <label><span>Flete $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={nueva.flete} placeholder="(general)" onChange={(e) => setNueva({ ...nueva, flete: e.target.value })} /></label>
+        <button type="button" className="btnSecondary" disabled={busy} onClick={() => void agregar()}>➕ Agregar tarifa del cliente</button>
+      </div>
+    </div>
+  );
+}
+
+// ── 📄 Documentos de la flota: matrícula, SOAT, revisión técnica… con su vencimiento ──
+type DocumentoFlota = {
+  id: string; activo_id: string; activo_nombre: string; placa_codigo: string | null; activo_vigente: boolean;
+  tipo: "matricula" | "soat" | "revision" | "seguro" | "permiso" | "otro"; descripcion: string | null; numero: string | null;
+  vence: string; notas: string | null; dias: number;
+};
+const TIPOS_DOC: Array<{ id: DocumentoFlota["tipo"]; label: string }> = [
+  { id: "matricula", label: "Matrícula" }, { id: "soat", label: "SOAT" }, { id: "revision", label: "Revisión técnica" },
+  { id: "seguro", label: "Seguro" }, { id: "permiso", label: "Permiso" }, { id: "otro", label: "Otro" }
+];
+const nombreDoc = (d: Pick<DocumentoFlota, "tipo" | "descripcion">) => (d.tipo === "otro" && d.descripcion ? d.descripcion : TIPOS_DOC.find((t) => t.id === d.tipo)?.label ?? d.tipo);
+const fechaDoc = (iso: string) => iso.slice(0, 10).split("-").reverse().join("/");
+
+function DocumentosFlotaCampo({ activos, onChanged, onError }: { activos: Activo[]; onChanged: (msg: string) => void; onError: (m: string) => void }) {
+  const [docs, setDocs] = useState<DocumentoFlota[] | null>(null);
+  const [f, setF] = useState({ activo_id: "", tipo: "matricula" as DocumentoFlota["tipo"], descripcion: "", numero: "", vence: "" });
+  const [renovando, setRenovando] = useState<{ id: string; vence: string; numero: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const cargar = useCallback(async () => {
+    try { setDocs(await apiGet<DocumentoFlota[]>("/campo/documentos")); } catch (e) { onError((e as Error).message); }
+  }, [onError]);
+  useEffect(() => { void cargar(); }, [cargar]);
+  async function correr(fn: () => Promise<string>) {
+    try { setBusy(true); const msg = await fn(); await cargar(); onChanged(msg); }
+    catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  const agregar = () => correr(async () => {
+    if (!f.activo_id) throw new Error("Elige el vehículo o la máquina");
+    if (!f.vence) throw new Error("Pon la fecha en que vence");
+    if (f.tipo === "otro" && f.descripcion.trim().length < 2) throw new Error("Escribe qué documento es");
+    await apiPost("/campo/documentos", { activo_id: f.activo_id, tipo: f.tipo, vence: f.vence, numero: f.numero.trim() || null, descripcion: f.tipo === "otro" ? f.descripcion.trim() : null });
+    setF({ ...f, numero: "", descripcion: "", vence: "" });
+    return "Documento agregado";
+  });
+  const renovar = (d: DocumentoFlota) => correr(async () => {
+    if (!renovando?.vence) throw new Error("Pon la nueva fecha de vencimiento");
+    await apiOk(`/campo/documentos/${d.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ vence: renovando.vence, numero: renovando.numero.trim() || null }) });
+    const hasta = renovando.vence;
+    setRenovando(null);
+    return `${nombreDoc(d)} de ${d.activo_nombre} renovado hasta el ${fechaDoc(hasta)}`;
+  });
+  const quitar = (d: DocumentoFlota) => {
+    if (!window.confirm(`¿Quitar ${nombreDoc(d)} de ${d.activo_nombre}?`)) return;
+    void correr(async () => { await apiOk(`/campo/documentos/${d.id}`, { method: "DELETE" }); return "Documento quitado"; });
+  };
+  const estado = (d: DocumentoFlota) => d.dias < 0
+    ? { cls: "bad", txt: `Vencido hace ${-d.dias} día(s)` }
+    : d.dias <= 30 ? { cls: "warn", txt: d.dias === 0 ? "Vence hoy" : `Vence en ${d.dias} día(s)` } : { cls: "ok", txt: "Al día" };
+  const vencidos = (docs ?? []).filter((d) => d.dias < 0 && d.activo_vigente).length;
+  const pronto = (docs ?? []).filter((d) => d.dias >= 0 && d.dias <= 30 && d.activo_vigente).length;
+  return (
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+      <h2>📄 Documentos de la flota {vencidos > 0 && <span className="chip bad">{vencidos} vencido(s)</span>} {pronto > 0 && <span className="chip warn">{pronto} por vencer</span>}</h2>
+      <p className="muted" style={{ marginTop: -4 }}>Matrícula, SOAT, revisión técnica, seguro y permisos de cada vehículo. Desde 30 días antes de vencer avisan en <b>Hoy</b> y en las alertas de Transporte. Al renovarlo, pon la nueva fecha.</p>
+      <div className="campoSaldos__form">
+        <label><span>Vehículo / máquina</span>
+          <select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+            <option value="">Seleccione…</option>
+            {activos.filter((a) => a.activo).map((a) => <option key={a.id} value={a.id}>{a.nombre}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}
+          </select></label>
+        <label><span>Documento</span>
+          <select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as DocumentoFlota["tipo"] })}>
+            {TIPOS_DOC.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
+          </select></label>
+        {f.tipo === "otro" && <label><span>¿Cuál?</span><input type="text" maxLength={120} value={f.descripcion} onChange={(e) => setF({ ...f, descripcion: e.target.value })} placeholder="Ej: Permiso municipal" /></label>}
+        <label><span>Número <small>(opcional)</small></span><input type="text" maxLength={60} value={f.numero} onChange={(e) => setF({ ...f, numero: e.target.value })} /></label>
+        <label><span>Vence</span><input type="date" value={f.vence} onChange={(e) => setF({ ...f, vence: e.target.value })} /></label>
+        <button type="button" className="primary" disabled={busy} onClick={() => void agregar()}>➕ Agregar documento</button>
+      </div>
+      {docs && docs.length > 0 ? (
+        <div className="campoDocs">
+          {docs.map((d) => {
+            const e = estado(d);
+            return (
+              <div key={d.id} className={`campoDocs__item ${d.activo_vigente ? "" : "is-baja"}`}>
+                <div className="campoDocs__txt">
+                  <strong>{d.activo_nombre} · {nombreDoc(d)}</strong>
+                  <small>{d.numero ? `N.º ${d.numero} · ` : ""}vence {fechaDoc(d.vence)}{d.activo_vigente ? "" : " · máquina dada de baja"}</small>
+                </div>
+                <span className={`chip ${e.cls}`}>{e.txt}</span>
+                {renovando?.id === d.id ? (
+                  <div className="campoDocs__renovar">
+                    <input type="date" value={renovando.vence} onChange={(ev) => setRenovando({ ...renovando, vence: ev.target.value })} aria-label="Nueva fecha de vencimiento" />
+                    <input type="text" maxLength={60} value={renovando.numero} placeholder="N.º (opcional)" onChange={(ev) => setRenovando({ ...renovando, numero: ev.target.value })} />
+                    <button type="button" className="primary" disabled={busy} onClick={() => void renovar(d)}>Guardar</button>
+                    <button type="button" className="btnGhost" onClick={() => setRenovando(null)}>Cancelar</button>
+                  </div>
+                ) : (
+                  <div className="campoDocs__acc">
+                    <button type="button" className="btnSecondary" onClick={() => setRenovando({ id: d.id, vence: "", numero: d.numero ?? "" })}>🔄 Renovar</button>
+                    <button type="button" className="btnGhost" disabled={busy} onClick={() => quitar(d)}>Quitar</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : <p className="muted">{docs ? "Sin documentos registrados." : "Cargando…"}</p>}
+    </div>
   );
 }
