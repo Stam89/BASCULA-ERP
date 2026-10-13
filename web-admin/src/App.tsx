@@ -19,7 +19,7 @@ import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
-import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ, LIBRAS_POR_QQ } from "./ventaDetalle";
+import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
 import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
@@ -1451,6 +1451,8 @@ type Customer = {
   address: string | null;
   customer_type: "NATURAL" | "EMPRESA";
   created_at: string;
+  /** Venta Detalle por QQ: descuento $/QQ propio (null = el por defecto). */
+  descuento_qq?: number | null;
 };
 
 type GuiaRemision = {
@@ -3531,6 +3533,9 @@ export function App() {
 
   // ── Clientes y Ventas ──────────────────────────────────────────────────────
   const [customers, setCustomers] = useState<Customer[]>([]);
+  // Venta Detalle por QQ: descuento $/QQ por defecto (el de cada cliente va en customers.descuento_qq).
+  const [descuentoQqDefecto, setDescuentoQqDefecto] = useState<number>(DESCUENTO_QQ_DEFECTO);
+  const [nuevoDescCli, setNuevoDescCli] = useState({ id: "", monto: "" });
   const [sales, setSales] = useState<Sale[]>([]);
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
   const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "ventas">("ventas");
@@ -7374,6 +7379,9 @@ export function App() {
       apiGet<SalesOrder[]>("/orders/cola-global").catch(() => null)
     ]);
     setCustomers(custs);
+    apiGet<{ descuento_qq_defecto: number }>("/products/venta-detalle-config")
+      .then((c) => setDescuentoQqDefecto(Number(c.descuento_qq_defecto)))
+      .catch(() => undefined);
     setSales(sls);
     setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
     setSalesOrders(ords);
@@ -8030,6 +8038,33 @@ export function App() {
       addToast(`Tarifa guardada: ${money(price)}/lb`, "success");
     } catch (e) {
       addToast(`No se pudo guardar la tarifa: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+
+  // Venta Detalle por QQ: descuento por defecto y por cliente (dólares por quintal).
+  async function guardarDescuentoQqDefecto(valor: string, campo?: HTMLInputElement) {
+    const v = Number(valor);
+    if (!Number.isFinite(v) || v < 0) { addToast("Descuento inválido", "error"); return; }
+    if (v === descuentoQqDefecto) return;
+    try {
+      const r = await apiPut<{ descuento_qq_defecto: number }>("/products/venta-detalle-config", { descuento_qq_defecto: v });
+      setDescuentoQqDefecto(Number(r.descuento_qq_defecto));
+      addToast(`Descuento por QQ por defecto: ${money(r.descuento_qq_defecto)}`, "success");
+    } catch (e) {
+      if (campo) campo.value = String(descuentoQqDefecto);
+      addToast(`No se pudo guardar: ${e instanceof Error ? e.message : "error"}`, "error");
+    }
+  }
+  async function guardarDescuentoCliente(customerId: string, valor: number | null) {
+    if (valor != null && (!Number.isFinite(valor) || valor < 0)) { addToast("Descuento inválido", "error"); return false; }
+    try {
+      const r = await apiPatch<{ id: string; full_name: string; descuento_qq: number | null }>(`/customers/${customerId}/descuento-qq`, { descuento_qq: valor });
+      setCustomers((prev) => prev.map((c) => (c.id === customerId ? { ...c, descuento_qq: r.descuento_qq } : c)));
+      addToast(r.descuento_qq == null ? `${r.full_name}: usa el descuento por defecto` : `${r.full_name}: ${money(r.descuento_qq)} menos por QQ`, "success");
+      return true;
+    } catch (e) {
+      addToast(`No se pudo guardar: ${e instanceof Error ? e.message : "error"}`, "error");
+      return false;
     }
   }
 
@@ -19344,7 +19379,8 @@ Motivo (obligatorio):`, "");
                 {cajaSubTab === "venta_detalle" && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
-                    clientes={customers.map((c) => [c.id, c.full_name] as [string, string])}
+                    clientes={customers.map((c) => [c.id, c.full_name, c.descuento_qq ?? null] as [string, string, number | null])}
+                    descuentoQqDefecto={descuentoQqDefecto}
                     onRegistrar={registrarVentaDetalle}
                     onAviso={(m) => addToast(m, "error")}
                     enlaceTarifas={(texto) => cfgLink("🛒 Tarifas por libra", texto)} />
@@ -25108,7 +25144,7 @@ Motivo (obligatorio):`, "");
                     <p className="muted" style={{ marginTop: 8 }}>
                       Precio por libra de cada producto de mostrador. «Venta Detalle» (Caja) lo usa al elegir el producto:
                       <strong> por Libra</strong> cobra esta tarifa y <strong>por QQ</strong> cobra el quintal (tarifa × {LIBRAS_POR_QQ})
-                      con {money(DESCUENTO_QQ)} menos. Se guarda solo al salir del campo. Con 0 no hay tarifa: Caja usa el último
+                      con el <strong>descuento por QQ</strong> de abajo (el del cliente o el por defecto). Se guarda solo al salir del campo. Con 0 no hay tarifa: Caja usa el último
                       precio usado en ese equipo o no deja vender el producto.
                       {esSocioActivoCfg && " Estas tarifas son las mismas para todos los accionistas."}
                     </p>
@@ -25137,9 +25173,9 @@ Motivo (obligatorio):`, "");
                             </td>
                             {(() => {
                               const tarifa = Number(p.price_per_pound ?? 0);
-                              const qq = precioAplicadoDetalle(tarifa, "QQ");
+                              const qq = precioAplicadoDetalle(tarifa, "QQ", descuentoQqDefecto);
                               return (
-                                <td className="num" title={qq != null ? `Base ${formatoPrecio(round2(tarifa * LIBRAS_POR_QQ))} − ${money(DESCUENTO_QQ)}` : "Sin tarifa por libra"}>
+                                <td className="num" title={qq != null ? `Base ${formatoPrecio(round2(tarifa * LIBRAS_POR_QQ))} − ${money(descuentoQqDefecto)} (por defecto)` : "Sin tarifa por libra"}>
                                   {qq != null ? formatoPrecio(qq) : "—"}
                                 </td>
                               );
@@ -25149,6 +25185,55 @@ Motivo (obligatorio):`, "");
                         })}
                       </tbody>
                     </table>
+                    <div className="vdDescCfg">
+                      <h4>💲 Descuento por QQ (venta por quintal)</h4>
+                      <p className="muted">
+                        Cuánto <strong>menos</strong> se cobra cada quintal frente a la tarifa × {LIBRAS_POR_QQ}. Cada cliente puede tener el suyo
+                        (ej. $1 o $2); en Caja se aplica solo al elegir el cliente y el cajero lo puede cambiar para esa venta.
+                      </p>
+                      <label className="vdDescCfg__defecto">
+                        <span>Por defecto (Consumidor Final y clientes sin el suyo) $</span>
+                        <input type="number" min="0" step="0.01" key={`dqd-${descuentoQqDefecto}`} defaultValue={descuentoQqDefecto} disabled={!isAdmin}
+                          onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                          onBlur={(e) => { const v = e.target.value.trim(); if (v !== "") void guardarDescuentoQqDefecto(v, e.target); }} />
+                      </label>
+                      {customers.some((c) => c.descuento_qq != null) && (
+                        <table className="cajaTable" style={{ width: "100%" }}>
+                          <thead><tr><th>Cliente</th><th className="num">Descuento $/QQ</th><th /></tr></thead>
+                          <tbody>
+                            {customers.filter((c) => c.descuento_qq != null).map((c) => (
+                              <tr key={c.id}>
+                                <td>{c.full_name}</td>
+                                <td className="num">
+                                  <input type="number" min="0" step="0.01" key={`dq-${c.id}-${c.descuento_qq}`} defaultValue={Number(c.descuento_qq)} disabled={!isAdmin}
+                                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                                    onBlur={(e) => { const v = e.target.value.trim(); if (v !== "" && Number(v) !== Number(c.descuento_qq)) void guardarDescuentoCliente(c.id, Number(v)); }}
+                                    style={{ width: 90, padding: "4px 8px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }} />
+                                </td>
+                                <td style={{ textAlign: "right" }}>
+                                  {isAdmin && <button type="button" className="btnGhost" onClick={() => void guardarDescuentoCliente(c.id, null)}>Quitar</button>}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                      {isAdmin && (
+                        <form className="vdDescCfg__nuevo" onSubmit={async (e) => {
+                          e.preventDefault();
+                          if (!nuevoDescCli.id || nuevoDescCli.monto === "") { addToast("Elige el cliente y el descuento", "error"); return; }
+                          if (await guardarDescuentoCliente(nuevoDescCli.id, Number(nuevoDescCli.monto))) setNuevoDescCli({ id: "", monto: "" });
+                        }}>
+                          <select value={nuevoDescCli.id} onChange={(e) => setNuevoDescCli({ ...nuevoDescCli, id: e.target.value })} aria-label="Cliente">
+                            <option value="">Cliente…</option>
+                            {customers.filter((c) => c.descuento_qq == null).map((c) => <option key={c.id} value={c.id}>{c.full_name}</option>)}
+                          </select>
+                          <input type="number" min="0" step="0.01" placeholder="$ por QQ (ej. 2)" value={nuevoDescCli.monto}
+                            onChange={(e) => setNuevoDescCli({ ...nuevoDescCli, monto: e.target.value })} aria-label="Descuento por QQ" />
+                          <button className="btnSecondary">➕ Agregar</button>
+                        </form>
+                      )}
+                    </div>
                     {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </details>
                 </div>

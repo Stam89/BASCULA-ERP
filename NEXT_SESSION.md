@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 💲🌾 Descuento por QQ por cliente y saldo inicial negativo (2026-10-13, pedido del dueño)
+
+- Venta Detalle por QQ: el descuento ya no es $0.01 fijo. Migración 20261092: `venta_detalle_config.descuento_qq_defecto` (arranca en $1.00; `GET/PUT /products/venta-detalle-config`) y `customers.descuento_qq` (NULL = el por defecto; `PATCH /customers/:id/descuento-qq`, admin). `ventaDetalle.ts`: `precioAplicadoDetalle(…, descuentoQq)`. La tarjeta de Caja aplica el del cliente elegido y el cajero lo puede cambiar para esa venta. Configuración → Tarifas por libra: por defecto + tabla de clientes con su descuento.
+- Saldos iniciales → Inventario: producto/subproducto puede empezar en NEGATIVO (casilla «Queda en negativo», Detalle obligatorio; caso: arroz de un cliente de servicio de pilada usado para un pedido). La cáscara no (es lote físico). Anular un negativo siempre se puede. Simulacro `descuento_qq_inventario_negativo.mjs` TODO OK.
+
 ### 🧺📦 Catálogo de productos y sacos: renombrar, borrar sin huérfanos y pestañas (2026-10-13, pedido del dueño)
 
 - Renombrar: `PATCH /products/:id` acepta `name` (`renombrarProducto` en services/catalogo-productos.ts: nombre único sin importar mayúsculas; el CÓDIGO no cambia; en una marca renombra también `marca`/`tipo` de sus sacos y de sus «(Usado)»). `PATCH /sacks/:id/nombre`: saco de MARCA → renombra la marca entera; PROPIO del socio → todos sus pesos; genéricos / subproducto / usados → 400 (se buscan por nombre en cargo-empaque). Pedidos, presentaciones e inventario van por id.

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { requireAdmin } from "../../auth/require-auth.js";
 
 export const customersRouter = Router();
 
@@ -27,9 +28,21 @@ customersRouter.get("/search", asyncRoute(async (req, res) => {
 // GET todos los clientes
 customersRouter.get("/", asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT id, full_name, phone, identification, address, customer_type FROM customers ORDER BY full_name`
+    `SELECT id, full_name, phone, identification, address, customer_type, descuento_qq::float AS descuento_qq FROM customers ORDER BY full_name`
   );
   res.json(result.rows);
+}));
+
+// Venta Detalle por QQ: descuento en dólares por quintal PROPIO de este cliente
+// (null = usa el por defecto de Configuración → Tarifas por libra). Solo admin.
+customersRouter.patch("/:id/descuento-qq", requireAdmin, asyncRoute(async (req, res) => {
+  const { descuento_qq } = z.object({ descuento_qq: z.union([z.null(), z.number().min(0).max(1000)]) }).parse(req.body);
+  const r = await pool.query(
+    "UPDATE customers SET descuento_qq = $2 WHERE id = $1 RETURNING id, full_name, descuento_qq::float AS descuento_qq",
+    [req.params.id, descuento_qq == null ? null : Math.round(descuento_qq * 100) / 100]
+  );
+  if (!r.rows[0]) { res.status(404).json({ error: "Cliente no encontrado" }); return; }
+  res.json(r.rows[0]);
 }));
 
 // GET detalle de un cliente

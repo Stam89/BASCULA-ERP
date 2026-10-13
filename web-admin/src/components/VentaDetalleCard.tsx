@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { money } from "../format";
 import {
-  calcularVentaDetalle, formatoCantidad, formatoPrecio, DESCUENTO_QQ,
+  calcularVentaDetalle, formatoCantidad, formatoPrecio, DESCUENTO_QQ_DEFECTO,
   type ModoVentaDetalle, type VentaDetalleCalculo
 } from "../ventaDetalle";
 
@@ -30,10 +30,13 @@ function modoGuardado(): ModoVentaDetalle {
   try { return localStorage.getItem(MODO_KEY) === "QQ" ? "QQ" : "LIBRA"; } catch { return "LIBRA"; }
 }
 
-export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, enlaceTarifas }: {
+export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO }: {
+  /** Descuento en $ por quintal para Consumidor Final y clientes sin el suyo. */
+  descuentoQqDefecto?: number;
   /** Productos de mostrador con su tarifa por libra (0 = sin tarifa). */
   productos: ProductoDetalle[];
-  clientes: Array<[string, string]>;
+  /** [id, nombre, descuento $/QQ propio del cliente o null = el por defecto]. */
+  clientes: Array<[string, string, (number | null)?]>;
   /** Registra la venta; true si quedó registrada (entonces se limpia la tarjeta). */
   onRegistrar: (venta: VentaDetalleRegistro) => Promise<boolean>;
   onAviso: (mensaje: string) => void;
@@ -44,6 +47,8 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
   const [productId, setProductId] = useState("");
   const [cantidad, setCantidad] = useState("");
   const [clienteId, setClienteId] = useState("");
+  // Descuento por QQ de ESTA venta: vacío = el del cliente (o el por defecto); se puede cambiar.
+  const [descuentoTxt, setDescuentoTxt] = useState("");
   const [enviando, setEnviando] = useState(false);
   const enviandoRef = useRef(false); // candado contra el doble Enter
   const productoRef = useRef<HTMLSelectElement>(null);
@@ -56,12 +61,16 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
   const precioLibra = producto?.precioLibra ?? 0;
   const enQQ = modo === "QQ";
   const unidad = enQQ ? "QQ" : "lb";
+  const descCliente = clientes.find((c) => c[0] === clienteId)?.[2];
+  const descSugerido = descCliente != null && Number.isFinite(Number(descCliente)) ? Number(descCliente) : descuentoQqDefecto;
+  const descuentoQq = descuentoTxt.trim() !== "" && Number(descuentoTxt) >= 0 ? Number(descuentoTxt) : descSugerido;
+  const origenDesc = descuentoTxt.trim() !== "" ? "cambiado en esta venta" : descCliente != null ? "de este cliente" : "por defecto";
 
   // Total reactivo: se recalcula al cambiar el producto (trae la tarifa), la
   // cantidad o el modo. Total = Cantidad × PrecioAplicado.
   const calculo = useMemo(
-    () => calcularVentaDetalle({ cantidad: cantidad === "" ? 0 : Number(cantidad), precioLibra, modo }),
-    [cantidad, precioLibra, modo]
+    () => calcularVentaDetalle({ cantidad: cantidad === "" ? 0 : Number(cantidad), precioLibra, modo, descuentoQq }),
+    [cantidad, precioLibra, modo, descuentoQq]
   );
   const hayCantidad = cantidad !== "" && Number(cantidad) > 0;
 
@@ -103,6 +112,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
         setProductId("");
         setCantidad("");
         setClienteId("");
+        setDescuentoTxt("");
         productoRef.current?.focus();
       }
     } finally {
@@ -128,7 +138,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
       </div>
       <p className="vdCard__ayuda">
         Se resta del inventario y entra a la caja. {enQQ
-          ? <>Por QQ se cobra el quintal a <strong>{money(DESCUENTO_QQ)} menos</strong> del precio base.</>
+          ? <>Por QQ se cobra el quintal a <strong>{money(descuentoQq)} menos</strong> del precio base ({origenDesc}).</>
           : <>Por libra se cobra la tarifa base.</>}
       </p>
 
@@ -158,7 +168,7 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
       {producto && calculo && (
         <p className="vdCard__precio">
           Precio aplicado: <strong>{formatoPrecio(calculo.precioAplicado)}/{unidad}</strong>
-          {enQQ && <> (base {formatoPrecio(calculo.precioBase)} − {money(DESCUENTO_QQ)})</>} ·{" "}
+          {enQQ && <> (base {formatoPrecio(calculo.precioBase)} − {money(calculo.descuento)} {origenDesc})</>} ·{" "}
           {enlaceTarifas("Editar tarifa en Configuración") ?? "tarifa configurada en Administración."}
         </p>
       )}
@@ -171,11 +181,19 @@ export function VentaDetalleCard({ productos, clientes, onRegistrar, onAviso, en
 
       <label>
         <span>Cliente (opcional)</span>
-        <select name="customer_id" value={clienteId} onChange={(e) => setClienteId(e.target.value)}>
+        <select name="customer_id" value={clienteId} onChange={(e) => { setClienteId(e.target.value); setDescuentoTxt(""); }}>
           <option value="">Consumidor Final</option>
-          {clientes.map(([id, nombre]) => <option key={id} value={id}>{nombre}</option>)}
+          {clientes.map(([id, nombre, desc]) => <option key={id} value={id}>{nombre}{desc != null ? ` · −${money(Number(desc))}/QQ` : ""}</option>)}
         </select>
       </label>
+      {enQQ && (
+        <label>
+          <span>Descuento por QQ $ <small className="muted" style={{ fontWeight: 400 }}>({origenDesc})</small></span>
+          <input name="descuento_qq" type="number" inputMode="decimal" min="0" step="0.01" autoComplete="off"
+            value={descuentoTxt} placeholder={descSugerido.enReal()}
+            onChange={(e) => setDescuentoTxt(e.target.value)} />
+        </label>
+      )}
 
       {producto && calculo && hayCantidad && (
         <div className="vdResumen">

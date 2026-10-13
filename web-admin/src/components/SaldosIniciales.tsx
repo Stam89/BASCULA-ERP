@@ -155,8 +155,11 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
   const [costo, setCosto] = useState("");
   const [detalle, setDetalle] = useState("");
   const [busy, setBusy] = useState(false);
+  // Producto que se DEBE (ej. se tomó el arroz de un cliente de servicio de pilada para un pedido): saldo negativo.
+  const [negativo, setNegativo] = useState(false);
   const prod = cp.productos.find((p) => p.id === productId);
   const esCascara = prod?.product_type === "RAW_MATERIAL";
+  const enNegativo = negativo && !!prod && !esCascara;
   const qqN = r2(Number(qq) || 0);
   const costoN = costo === "" ? null : r2(Number(costo) || 0);
   const grupos = useMemo(() => {
@@ -168,13 +171,14 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
   async function guardar(e: FormEvent) {
     e.preventDefault();
     if (!prod || qqN <= 0 || busy) return;
+    if (enNegativo && detalle.trim().length < 3) { avisar("Escribe en Detalle por qué queda en negativo (ej: arroz tomado del pilado de Juan para el pedido 123)", "error"); return; }
     setBusy(true);
     try {
       const r = await apiPost<{ lote: string | null; bodega: string }>("/saldos-iniciales/inventario", {
-        corte, product_id: prod.id, cantidad: qqN, costo_unitario: costoN ?? undefined, detalle: detalle.trim() || undefined
+        corte, product_id: prod.id, cantidad: enNegativo ? -qqN : qqN, costo_unitario: costoN ?? undefined, detalle: detalle.trim() || undefined
       });
-      avisar(`${prod.name}: ${qqTxt(qqN)} en ${r.bodega}${r.lote ? ` · lote ${r.lote} listo para pilar` : ""}`, "success");
-      setQq(""); setCosto(""); setDetalle("");
+      avisar(`${prod.name}: ${enNegativo ? `−${qqTxt(qqN)} (en negativo)` : qqTxt(qqN)} en ${r.bodega}${r.lote ? ` · lote ${r.lote} listo para pilar` : ""}`, "success");
+      setQq(""); setCosto(""); setDetalle(""); setNegativo(false);
       onGuardado();
     } catch (err) {
       avisar((err as Error).message, "error");
@@ -204,11 +208,24 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
         </label>
         <div className="si-valor">
           <span>Valor</span>
-          <strong>{costoN != null && qqN > 0 ? money(r2(qqN * costoN)) : "—"}</strong>
+          <strong>{costoN != null && qqN > 0 ? money(r2((enNegativo ? -qqN : qqN) * costoN)) : "—"}</strong>
         </div>
       </div>
+      {prod && !esCascara && (
+        <label className="si-negativo">
+          <input type="checkbox" checked={negativo} onChange={(e) => setNegativo(e.target.checked)} />
+          <span><strong>Queda en negativo</strong> (se debe producto): por ejemplo, se tomó el arroz de un cliente de servicio de pilada que
+            aún está en la piladora para completar un pedido. Escribe en Detalle de quién y para qué.</span>
+        </label>
+      )}
+      {enNegativo && (
+        <p className="si-aviso">
+          ⚠️ {prod?.name} empezará en <strong>−{qqTxt(qqN || 0)}</strong>. Se completa sola cuando entre producto (pilada, compra o ajuste).
+          Recuerda que ese arroz se le debe al cliente del servicio de pilada.
+        </p>
+      )}
       <label>Detalle
-        <input type="text" maxLength={300} value={detalle} placeholder={esCascara ? "Ej: tendal norte, de Juan Pérez" : "Ej: conteo físico del 30"} onChange={(e) => setDetalle(e.target.value)} />
+        <input type="text" maxLength={300} value={detalle} placeholder={esCascara ? "Ej: tendal norte, de Juan Pérez" : enNegativo ? "Ej: arroz del pilado de Juan Pérez usado en el pedido 123" : "Ej: conteo físico del 30"} onChange={(e) => setDetalle(e.target.value)} />
       </label>
       {esCascara && (
         <p className="si-aviso si-aviso--cascara">
@@ -219,7 +236,7 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
       )}
       <div className="si-acciones">
         <small className="muted">Queda al {fechaTxt(corte)} en la bodega de su tipo.</small>
-        <button className="primary" disabled={!prod || qqN <= 0 || busy}>{busy ? "Guardando…" : "➕ Cargar inventario"}</button>
+        <button className="primary" disabled={!prod || qqN <= 0 || busy}>{busy ? "Guardando…" : enNegativo ? "➖ Cargar en negativo" : "➕ Cargar inventario"}</button>
       </div>
     </form>
   );

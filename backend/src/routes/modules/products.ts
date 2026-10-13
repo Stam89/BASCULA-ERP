@@ -56,6 +56,24 @@ productsRouter.post("/catalogo", requireAdmin, asyncRoute(async (req, res) => {
   res.status(201).json({ ...out, producto });
 }));
 
+// ── Venta Detalle por QQ: descuento en dólares por quintal (por defecto) ─────
+// El de cada cliente está en customers.descuento_qq. Va ANTES de "/:id".
+productsRouter.get("/venta-detalle-config", asyncRoute(async (_req, res) => {
+  const r = await pool.query("SELECT descuento_qq_defecto::float AS descuento_qq_defecto FROM venta_detalle_config WHERE id = 1");
+  res.json({ descuento_qq_defecto: r.rows[0]?.descuento_qq_defecto ?? 1 });
+}));
+
+productsRouter.put("/venta-detalle-config", requireAdmin, asyncRoute(async (req, res) => {
+  const { descuento_qq_defecto } = z.object({ descuento_qq_defecto: z.number().min(0).max(1000) }).parse(req.body);
+  const r = await pool.query(
+    `INSERT INTO venta_detalle_config (id, descuento_qq_defecto, updated_at) VALUES (1, $1, now())
+     ON CONFLICT (id) DO UPDATE SET descuento_qq_defecto = EXCLUDED.descuento_qq_defecto, updated_at = now()
+     RETURNING descuento_qq_defecto::float AS descuento_qq_defecto`,
+    [Math.round(descuento_qq_defecto * 100) / 100]
+  );
+  res.json(r.rows[0]);
+}));
+
 // GET detalle de un producto
 productsRouter.get("/:id", asyncRoute(async (req, res) => {
   const result = await pool.query(

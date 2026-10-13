@@ -5845,3 +5845,18 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .catProd__tabAyuda { margin: 2px 0 6px; font-size: 12.5px; }
 .catProd__nombre { display: flex; gap: 8px; flex-wrap: wrap; align-items: end; margin-bottom: 10px; }
 .catProd__nombre label { flex: 1 1 200px; }
+
+/* Tarifas por libra: descuento por QQ por defecto y por cliente */
+.vdDescCfg { margin-top: 14px; border-top: 1px solid var(--c-border); padding-top: 10px; display: grid; gap: 8px; }
+.vdDescCfg h4 { margin: 0; font-size: 14px; }
+.vdDescCfg p { margin: 0; font-size: 12.5px; }
+.vdDescCfg__defecto { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vdDescCfg__defecto span { font-weight: 600; font-size: 13px; }
+.vdDescCfg__defecto input { width: 110px; text-align: right; }
+.vdDescCfg__nuevo { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.vdDescCfg__nuevo select { flex: 1 1 180px; min-width: 0; }
+.vdDescCfg__nuevo input { width: 150px; }
+
+/* Saldos iniciales: inventario que empieza en negativo */
+.si-negativo { display: flex; gap: 8px; align-items: flex-start; font-size: 12.5px; font-weight: 400; margin: 4px 0; }
+.si-negativo input { margin-top: 2px; width: 18px; height: 18px; flex: none; }

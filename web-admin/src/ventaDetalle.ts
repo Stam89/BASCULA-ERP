@@ -1,14 +1,16 @@
 // ── Venta Detalle (Caja): cálculo puro del cobro por Libra o por QQ ──────────
 // La tarifa de cada producto se configura POR LIBRA (products.price_per_pound).
 // El precio base del quintal es esa tarifa × 100 lb y, cuando se vende por QQ, se
-// le resta exactamente DESCUENTO_QQ (un centavo) por quintal. El inventario se
-// sigue descontando en QQ y la caja recibe el total; aquí solo se calcula.
+// le resta un DESCUENTO EN DÓLARES por quintal que depende del cliente ($1, $2…):
+// el del cliente (customers.descuento_qq) o, si no tiene, el por defecto de
+// Configuración → Tarifas por libra. El inventario se sigue descontando en QQ y la
+// caja recibe el total; aquí solo se calcula.
 
 export type ModoVentaDetalle = "LIBRA" | "QQ";
 
 export const LIBRAS_POR_QQ = 100;
-/** Descuento automático, en dólares, sobre el precio base de cada quintal. */
-export const DESCUENTO_QQ = 0.01;
+/** Descuento por defecto, en dólares, sobre el precio base de cada quintal (si no se configuró otro). */
+export const DESCUENTO_QQ_DEFECTO = 1;
 
 export type VentaDetalleCalculo = {
   /** Cantidad digitada, en la unidad del modo (libras o QQ). */
@@ -21,9 +23,9 @@ export type VentaDetalleCalculo = {
   precioLibra: number;
   /** Precio base de la unidad del modo: $/lb, o $/lb × 100 para el QQ. */
   precioBase: number;
-  /** Precio que se cobra por unidad: el base, menos DESCUENTO_QQ en modo QQ. */
+  /** Precio que se cobra por unidad: el base, menos el descuento por QQ en modo QQ. */
   precioAplicado: number;
-  /** Descuento por unidad (0 por libra, DESCUENTO_QQ por quintal). */
+  /** Descuento por unidad (0 por libra; el del cliente por quintal). */
   descuento: number;
   /** Total = Cantidad × PrecioAplicado, a centavos. */
   total: number;
@@ -38,10 +40,11 @@ export function redondear(n: number, decimales: number): number {
 }
 
 /** Precio por unidad que se cobra según el modo, o null si no hay tarifa válida. */
-export function precioAplicadoDetalle(precioLibra: number, modo: ModoVentaDetalle): number | null {
+export function precioAplicadoDetalle(precioLibra: number, modo: ModoVentaDetalle, descuentoQq: number = DESCUENTO_QQ_DEFECTO): number | null {
   if (!Number.isFinite(precioLibra) || !(precioLibra > 0)) return null;
   if (modo === "LIBRA") return precioLibra;
-  const aplicado = redondear(redondear(precioLibra * LIBRAS_POR_QQ, 2) - DESCUENTO_QQ, 2);
+  const desc = Number.isFinite(descuentoQq) && descuentoQq > 0 ? redondear(descuentoQq, 2) : 0;
+  const aplicado = redondear(redondear(precioLibra * LIBRAS_POR_QQ, 2) - desc, 2);
   return aplicado > 0 ? aplicado : null;
 }
 
@@ -49,10 +52,10 @@ export function precioAplicadoDetalle(precioLibra: number, modo: ModoVentaDetall
  * Cobro de una venta al detalle. Devuelve null si falta la tarifa o la cantidad
  * no es un número válido (vacía cuenta como 0 → total 0).
  */
-export function calcularVentaDetalle({ cantidad, precioLibra, modo }: {
-  cantidad: number; precioLibra: number; modo: ModoVentaDetalle;
+export function calcularVentaDetalle({ cantidad, precioLibra, modo, descuentoQq = DESCUENTO_QQ_DEFECTO }: {
+  cantidad: number; precioLibra: number; modo: ModoVentaDetalle; descuentoQq?: number;
 }): VentaDetalleCalculo | null {
-  const precioAplicado = precioAplicadoDetalle(precioLibra, modo);
+  const precioAplicado = precioAplicadoDetalle(precioLibra, modo, descuentoQq);
   if (precioAplicado == null || !Number.isFinite(cantidad) || cantidad < 0) return null;
   const enQQ = modo === "QQ";
   const libras = redondear(enQQ ? cantidad * LIBRAS_POR_QQ : cantidad, 3);
@@ -65,7 +68,7 @@ export function calcularVentaDetalle({ cantidad, precioLibra, modo }: {
     precioLibra,
     precioBase,
     precioAplicado,
-    descuento: enQQ ? DESCUENTO_QQ : 0,
+    descuento: enQQ ? redondear(precioBase - precioAplicado, 2) : 0,
     total: redondear(cantidad * precioAplicado, 2)
   };
 }

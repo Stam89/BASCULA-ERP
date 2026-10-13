@@ -231,7 +231,9 @@ saldosInicialesRouter.post("/cxp", asyncRoute(async (req, res) => {
 const inventarioSchema = z.object({
   corte: fechaSchema,
   product_id: z.string().uuid(),
-  cantidad: z.number().positive().max(1_000_000),        // QQ
+  // QQ. NEGATIVO solo en producto/subproducto: arroz que se debe (p. ej. se tomó el arroz de un
+  // cliente de servicio de pilada que aún está en la piladora para completar un pedido).
+  cantidad: z.number().refine((n) => n !== 0 && Math.abs(n) <= 1_000_000, "La cantidad no puede ser 0."),
   costo_unitario: z.number().nonnegative().optional(),   // $ por QQ (referencial)
   warehouse_id: z.string().uuid().optional(),
   detalle: z.string().trim().max(300).optional()
@@ -261,6 +263,13 @@ saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
       throw new ApiError(400, `"${p.name}" no puede ir a "${w.name}": la cáscara va a materia prima y el producto a producto terminado.`);
     }
     const qq = round2(body.cantidad);
+    if (qq === 0) throw new ApiError(400, "La cantidad no puede ser 0.");
+    if (qq < 0 && esCascara) {
+      throw new ApiError(400, "La cáscara no puede quedar en negativo: es un lote físico en bodega. Solo el producto o los subproductos pueden empezar en negativo.");
+    }
+    if (qq < 0 && (body.detalle ?? "").trim().length < 3) {
+      throw new ApiError(400, "Para dejarlo en negativo escribe en Detalle por qué (ej: arroz tomado del servicio de pilada de Juan para el pedido 123).");
+    }
     const costo = body.costo_unitario != null ? round2(body.costo_unitario) : null;
     const total = costo != null ? round2(qq * costo) : null;
     const reg = await client.query(
@@ -401,7 +410,8 @@ saldosInicialesRouter.post("/:id/anular", asyncRoute(async (req, res) => {
           [mov.product_id, mov.warehouse_id, mov.ownership, accionistaId, mov.lot_id]
         )).rows[0].q);
         const qq = Number(mov.quantity);
-        if (stock < qq - 0.001) {
+        // Un saldo NEGATIVO se anula devolviendo la cantidad (siempre se puede).
+        if (qq > 0 && stock < qq - 0.001) {
           throw new ApiError(409, `Ya se usó parte de ese inventario (quedan ${stock.toFixed(2)} QQ de ${qq.toFixed(2)}): corrige la diferencia con un ajuste en Inventario.`);
         }
         // Contra-asiento en el kárdex (no se borra el ingreso).
