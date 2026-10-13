@@ -550,8 +550,14 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
 
           {rep.rubros.map((r) => {
             const enEdicion = editando?.id === r.id;
-            const libresCaja = categoriasCaja.filter((c) => !r.categorias.includes(c.codigo));
-            const libresNom = Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t));
+            // Una categoría / pago de nómina va en UN solo rubro: «+ Asignar» ofrece solo las libres.
+            // Para pasarla a este rubro, primero se quita (×) del rubro donde está.
+            const enOtroCaja = (codigo: string) => rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(codigo));
+            const enOtroNom = (t: string) => rep.rubros.find((x) => x.id !== r.id && x.nomina.includes(t));
+            const libresCaja = categoriasCaja.filter((c) => !r.categorias.includes(c.codigo) && !enOtroCaja(c.codigo));
+            const libresNom = Object.entries(NOMINA_LABEL).filter(([t]) => !r.nomina.includes(t) && !enOtroNom(t));
+            const ocupadasCaja = categoriasCaja.filter((c) => !r.categorias.includes(c.codigo) && enOtroCaja(c.codigo)).length;
+            const ocupadasNom = Object.keys(NOMINA_LABEL).filter((t) => !r.nomina.includes(t) && enOtroNom(t)).length;
             const propias = propiasCaja(r);
             const enCaja = propias.some((c) => c.activo !== false);
             return (
@@ -599,15 +605,13 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                       }}>+ Asignar</button>
                       {menu?.id === r.id && menu.tipo === "caja" && (
                         <div className="rm-pop" role="menu">
-                          {libresCaja.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay más categorías. Créala en Configuración → 🏷️ Categorías de caja (o con «＋ Nuevo rubro»).</small>}
-                          {libresCaja.map((c) => {
-                            const otro = rep.rubros.find((x) => x.id !== r.id && x.categorias.includes(c.codigo));
-                            return (
-                              <button key={c.codigo} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { categorias: [...r.categorias, c.codigo] }); }}>
-                                {c.nombre}{otro && <small> · hoy en {otro.nombre}</small>}{c.activo === false && <small> · oculta en Caja</small>}
-                              </button>
-                            );
-                          })}
+                          {libresCaja.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay categorías libres. Créala en Configuración → 🏷️ Categorías de caja (o con «＋ Nuevo rubro»).</small>}
+                          {libresCaja.map((c) => (
+                            <button key={c.codigo} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { categorias: [...r.categorias, c.codigo] }); }}>
+                              {c.nombre}{c.activo === false && <small> · oculta en Caja</small>}
+                            </button>
+                          ))}
+                          {ocupadasCaja > 0 && <small style={{ display: "block", padding: "6px 8px", color: "#64748b" }}>{ocupadasCaja} ya están en otro rubro: para pasarla aquí, quítala (×) de ese rubro primero.</small>}
                         </div>
                       )}
                     </div>
@@ -624,15 +628,13 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                       <button type="button" className="rm-link" onClick={() => setMenu(menu?.id === r.id && menu.tipo === "nomina" ? null : { id: r.id, tipo: "nomina" })}>+ Asignar</button>
                       {menu?.id === r.id && menu.tipo === "nomina" && (
                         <div className="rm-pop" role="menu">
-                          {libresNom.length === 0 && <small style={{ display: "block", padding: 8 }}>Ya tiene todos los tipos.</small>}
-                          {libresNom.map(([t, l]) => {
-                            const otro = rep.rubros.find((x) => x.id !== r.id && x.nomina.includes(t));
-                            return (
-                              <button key={t} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { nomina: [...r.nomina, t] }); }}>
-                                {l}{otro && <small> · hoy en {otro.nombre}</small>}
-                              </button>
-                            );
-                          })}
+                          {libresNom.length === 0 && <small style={{ display: "block", padding: 8 }}>No hay pagos de nómina libres.</small>}
+                          {libresNom.map(([t, l]) => (
+                            <button key={t} type="button" onClick={() => { cerrarMenu(); cambiarEnlaces(r, { nomina: [...r.nomina, t] }); }}>
+                              {l}
+                            </button>
+                          ))}
+                          {ocupadasNom > 0 && <small style={{ display: "block", padding: "6px 8px", color: "#64748b" }}>{ocupadasNom} ya están en otro rubro: quítalo (×) de ese rubro primero.</small>}
                         </div>
                       )}
                     </div>
@@ -683,7 +685,9 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
                     <select value={nuevoRubro.categoria} onChange={(e) => setNuevoRubro({ ...nuevoRubro, categoria: e.target.value })}>
                       <option value="">Crear una nueva con el mismo nombre</option>
                       <option value={SIN_CATEGORIA}>Ninguna · no aparece en Caja (sale de Nómina u otro módulo)</option>
-                      {categoriasCaja.map((c) => <option key={c.codigo} value={c.codigo}>Usar existente: {c.nombre}</option>)}
+                      {/* Solo las que no están en otro rubro (una categoría va en un solo rubro). */}
+                      {categoriasCaja.filter((c) => !(rep?.rubros ?? []).some((x) => x.categorias.includes(c.codigo)))
+                        .map((c) => <option key={c.codigo} value={c.codigo}>Usar existente: {c.nombre}</option>)}
                     </select>
                   </label>
                 </div>
