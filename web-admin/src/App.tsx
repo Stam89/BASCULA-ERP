@@ -8471,6 +8471,12 @@ export function App() {
       refreshCostos().catch(() => undefined);
     }
     if (activeTab === "Inventario") { refreshSacks().catch(() => undefined); refreshInvMovs().catch(() => undefined); }
+    // Caja → Venta Detalle: clientes (con su descuento por QQ) y el descuento por defecto; también Configuración → Tarifas por libra.
+    if (activeTab === "Caja" || activeTab === "Configuracion") {
+      apiGet<Customer[]>("/customers").then(setCustomers).catch(() => undefined);
+      apiGet<{ descuento_qq_defecto: number }>("/products/venta-detalle-config")
+        .then((c) => setDescuentoQqDefecto(Number(c.descuento_qq_defecto))).catch(() => undefined);
+    }
     // Gana: liquidación de rendimiento (lee el historial de producción del accionista)
     // + tarifas (fallback de la Tarifa de Pilada global si aún no hay lotes cargados).
     if (activeTab === "Gana") { loadProductionHistory().catch(() => undefined); loadLaborRates().catch(() => undefined); }
