@@ -3323,18 +3323,20 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
 
 // ── 💲 Tarifas a clientes: precio por QQ de cosecha y de flete (general y por cliente) ──
 // «Generar cobro» de un parte trae este precio ya escrito (el del cliente o el general).
-type TarifaCliente = { id: string; nombre: string; tipo: string; tarifa_cosecha_qq: number | null; tarifa_flete_qq: number | null };
+type TarifaCliente = { id: string; nombre: string; tipo: string; tarifa_cosecha_qq: number | null; tarifa_flete_qq: number | null; tarifa_flete_viaje: number | null };
+type TarifaGeneral = { cosecha: number | null; flete: number | null; viaje: number | null };
 function TarifasClientesCampo({ onChanged, onError }: { onChanged: (msg: string) => void; onError: (m: string) => void }) {
-  const [data, setData] = useState<{ general: { cosecha: number | null; flete: number | null }; clientes: TarifaCliente[] } | null>(null);
-  const [gen, setGen] = useState({ cosecha: "", flete: "" });
+  const [data, setData] = useState<{ general: TarifaGeneral; clientes: TarifaCliente[] } | null>(null);
+  const [gen, setGen] = useState({ cosecha: "", flete: "", viaje: "" });
   const [cliente, setCliente] = useState<Cliente | null>(null);
-  const [nueva, setNueva] = useState({ cosecha: "", flete: "" });
+  const [nueva, setNueva] = useState({ cosecha: "", flete: "", viaje: "" });
   const [busy, setBusy] = useState(false);
   const cargar = useCallback(async () => {
     try {
-      const d = await apiGet<{ general: { cosecha: number | null; flete: number | null }; clientes: TarifaCliente[] }>("/campo/tarifas-cliente");
+      const d = await apiGet<{ general: TarifaGeneral; clientes: TarifaCliente[] }>("/campo/tarifas-cliente");
       setData(d);
-      setGen({ cosecha: d.general.cosecha != null ? String(d.general.cosecha) : "", flete: d.general.flete != null ? String(d.general.flete) : "" });
+      const t = (n: number | null) => (n != null ? String(n) : "");
+      setGen({ cosecha: t(d.general.cosecha), flete: t(d.general.flete), viaje: t(d.general.viaje) });
     } catch (e) { onError((e as Error).message); }
   }, [onError]);
   useEffect(() => { void cargar(); }, [cargar]);
@@ -3346,21 +3348,21 @@ function TarifasClientesCampo({ onChanged, onError }: { onChanged: (msg: string)
     catch (e) { onError((e as Error).message); return false; } finally { setBusy(false); }
   }
   const guardarGeneral = () => correr(async () => {
-    const c = num(gen.cosecha), f = num(gen.flete);
-    if (!valida(c) || !valida(f)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
-    await apiPut("/campo/tarifas-cliente/general", { cosecha: c, flete: f });
+    const c = num(gen.cosecha), f = num(gen.flete), v = num(gen.viaje);
+    if (!valida(c) || !valida(f) || !valida(v)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
+    await apiPut("/campo/tarifas-cliente/general", { cosecha: c, flete: f, viaje: v });
     return "Tarifa general guardada";
   });
-  const guardarCliente = (id: string, nombre: string, c: number | null, f: number | null) => correr(async () => {
-    if (!valida(c) || !valida(f)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
-    await apiPut(`/campo/tarifas-cliente/${id}`, { cosecha: c, flete: f });
-    return c == null && f == null ? `${nombre}: usa la tarifa general` : `Tarifa de ${nombre} guardada`;
+  const guardarCliente = (id: string, nombre: string, c: number | null, f: number | null, v: number | null) => correr(async () => {
+    if (!valida(c) || !valida(f) || !valida(v)) throw new Error("Las tarifas deben ser mayores a 0 (o vacías)");
+    await apiPut(`/campo/tarifas-cliente/${id}`, { cosecha: c, flete: f, viaje: v });
+    return c == null && f == null && v == null ? `${nombre}: usa la tarifa general` : `Tarifa de ${nombre} guardada`;
   });
   const agregar = async () => {
     if (!cliente) { onError("Elige el cliente"); return; }
-    const c = num(nueva.cosecha), f = num(nueva.flete);
-    if (c == null && f == null) { onError("Escribe al menos una tarifa (cosecha o flete)"); return; }
-    if (await guardarCliente(cliente.id, cliente.nombre, c, f)) { setCliente(null); setNueva({ cosecha: "", flete: "" }); }
+    const c = num(nueva.cosecha), f = num(nueva.flete), v = num(nueva.viaje);
+    if (c == null && f == null && v == null) { onError("Escribe al menos una tarifa (cosecha, flete o viaje)"); return; }
+    if (await guardarCliente(cliente.id, cliente.nombre, c, f, v)) { setCliente(null); setNueva({ cosecha: "", flete: "", viaje: "" }); }
   };
   const inp: CSSProperties = { width: 100, textAlign: "right" };
   return (
@@ -3368,35 +3370,38 @@ function TarifasClientesCampo({ onChanged, onError }: { onChanged: (msg: string)
       <h2>💲 Tarifas a clientes</h2>
       <p className="muted" style={{ marginTop: -4 }}>
         Precio por <b>QQ</b> que se le cobra al cliente. Al <b>Generar cobro</b> de un parte el precio sale solo: el del cliente
-        y, si no tiene, el general. Siempre se puede cambiar en ese momento.
+        y, si no tiene, el general. Siempre se puede cambiar en ese momento. <b>Flete por viaje</b>: lo que se cobra por el
+        viaje completo cuando el carro no llevó los QQ que debía (en el cobro eliges «Por viaje»).
       </p>
       <div className="campoSaldos__form">
         <label><span>General · cosecha $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={gen.cosecha} placeholder="sin tarifa" onChange={(e) => setGen({ ...gen, cosecha: e.target.value })} /></label>
         <label><span>General · flete $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={gen.flete} placeholder="sin tarifa" onChange={(e) => setGen({ ...gen, flete: e.target.value })} /></label>
+        <label><span>General · flete $/viaje</span><input type="number" inputMode="decimal" min="0" step="0.01" value={gen.viaje} placeholder="sin tarifa" onChange={(e) => setGen({ ...gen, viaje: e.target.value })} /></label>
         <button type="button" className="primary" disabled={busy} onClick={() => void guardarGeneral()}>Guardar tarifa general</button>
       </div>
       <h3 style={{ margin: "14px 0 6px", fontSize: 14 }}>Tarifa propia de cada cliente</h3>
       {data && data.clientes.length > 0 ? (
         <div style={{ overflowX: "auto" }}>
-          <table className="cajaTable" style={{ width: "100%", minWidth: 420 }}>
-            <thead><tr><th>Cliente</th><th className="num">Cosecha $/QQ</th><th className="num">Flete $/QQ</th><th /></tr></thead>
+          <table className="cajaTable" style={{ width: "100%", minWidth: 520 }}>
+            <thead><tr><th>Cliente</th><th className="num">Cosecha $/QQ</th><th className="num">Flete $/QQ</th><th className="num">Flete $/viaje</th><th /></tr></thead>
             <tbody>
               {data.clientes.map((c) => (
-                <tr key={`${c.id}-${c.tarifa_cosecha_qq}-${c.tarifa_flete_qq}`}>
+                <tr key={`${c.id}-${c.tarifa_cosecha_qq}-${c.tarifa_flete_qq}-${c.tarifa_flete_viaje}`}>
                   <td>{c.nombre}{c.tipo === "piladora" && <small className="muted"> · socio</small>}</td>
-                  {(["tarifa_cosecha_qq", "tarifa_flete_qq"] as const).map((k) => (
+                  {(["tarifa_cosecha_qq", "tarifa_flete_qq", "tarifa_flete_viaje"] as const).map((k) => (
                     <td key={k} className="num">
                       <input type="number" inputMode="decimal" min="0" step="0.0001" style={inp} defaultValue={c[k] ?? ""} placeholder="general"
                         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
                         onBlur={(e) => {
                           const v = num(e.target.value);
                           if (v === c[k]) return;
-                          void guardarCliente(c.id, c.nombre, k === "tarifa_cosecha_qq" ? v : c.tarifa_cosecha_qq, k === "tarifa_flete_qq" ? v : c.tarifa_flete_qq);
+                          void guardarCliente(c.id, c.nombre, k === "tarifa_cosecha_qq" ? v : c.tarifa_cosecha_qq, k === "tarifa_flete_qq" ? v : c.tarifa_flete_qq,
+                            k === "tarifa_flete_viaje" ? v : c.tarifa_flete_viaje);
                         }} />
                     </td>
                   ))}
                   <td style={{ textAlign: "right" }}>
-                    <button type="button" className="btnGhost" disabled={busy} onClick={() => void guardarCliente(c.id, c.nombre, null, null)}>Quitar</button>
+                    <button type="button" className="btnGhost" disabled={busy} onClick={() => void guardarCliente(c.id, c.nombre, null, null, null)}>Quitar</button>
                   </td>
                 </tr>
               ))}
@@ -3408,6 +3413,7 @@ function TarifasClientesCampo({ onChanged, onError }: { onChanged: (msg: string)
         <ClientePicker value={cliente} onChange={setCliente} onError={onError} />
         <label><span>Cosecha $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={nueva.cosecha} placeholder="(general)" onChange={(e) => setNueva({ ...nueva, cosecha: e.target.value })} /></label>
         <label><span>Flete $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.0001" value={nueva.flete} placeholder="(general)" onChange={(e) => setNueva({ ...nueva, flete: e.target.value })} /></label>
+        <label><span>Flete $/viaje</span><input type="number" inputMode="decimal" min="0" step="0.01" value={nueva.viaje} placeholder="(general)" onChange={(e) => setNueva({ ...nueva, viaje: e.target.value })} /></label>
         <button type="button" className="btnSecondary" disabled={busy} onClick={() => void agregar()}>➕ Agregar tarifa del cliente</button>
       </div>
     </div>

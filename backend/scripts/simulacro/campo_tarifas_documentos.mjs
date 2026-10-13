@@ -10,11 +10,14 @@ const { api, q, matriz } = S;
 const mostrar = (r) => `${r.status} ${typeof r.data === "string" ? r.data.slice(0, 160) : JSON.stringify(r.data).slice(0, 260)}`;
 const exigir = (r, msg) => { check(r.ok, msg, r.ok ? undefined : mostrar(r)); if (!r.ok) throw new Error("detenido en: " + msg); return r.data; };
 const migracion = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../database/migrations/20261093_campo_tarifas_documentos.sql");
+const migracionViaje = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../database/migrations/20261094_campo_flete_por_viaje.sql");
 const fecha = (dias) => { const d = new Date(Date.now() - 5 * 3600e3); d.setUTCDate(d.getUTCDate() + dias); return d.toISOString().slice(0, 10); };
 
 try {
   await q(fs.readFileSync(migracion, "utf8"));
   await q(fs.readFileSync(migracion, "utf8")); // idempotente
+  await q(fs.readFileSync(migracionViaje, "utf8"));
+  await q(fs.readFileSync(migracionViaje, "utf8"));
 
   const cosechadora = exigir(await api("POST", "/campo/activos", { nombre: "SIM COSECHADORA", tipo: "cosechadora" }, matriz), "0a. cosechadora");
   const camion = exigir(await api("POST", "/campo/activos", { nombre: "SIM CAMION", tipo: "camion", placa_codigo: "SIM-001" }, matriz), "0b. camión");
@@ -47,6 +50,27 @@ try {
   exigir(await api("PUT", `/campo/tarifas-cliente/${cliA.id}`, { cosecha: null, flete: null }, matriz), "A15. Quitar la tarifa del cliente");
   const sA3 = exigir(await api("GET", `/campo/partes/${(await parte(cosechadora, cliA, 5)).id}/tarifa-sugerida`, undefined, matriz), "A16. de nuevo");
   check(sA3.precio === 1.5 && sA3.origen === "general", "A17. … vuelve a la general", sA3);
+
+  // ── V. Flete POR VIAJE (el carro no llevó los QQ que debía) ──
+  exigir(await api("PUT", "/campo/tarifas-cliente/general", { cosecha: 1.5, flete: 0.35, viaje: 40 }, matriz), "V1. tarifa general por viaje $40");
+  exigir(await api("PUT", `/campo/tarifas-cliente/${cliB.id}`, { cosecha: null, flete: null, viaje: 55 }, matriz), "V2. SIM CLIENTE GENERAL: viaje $55");
+  const gV = exigir(await api("GET", "/campo/tarifas-cliente", undefined, matriz), "V3. lista");
+  check(gV.general.viaje === 40 && gV.clientes.find((c) => c.id === cliB.id)?.tarifa_flete_viaje === 55, "V4. guardadas general y del cliente", gV);
+  const sinViaje = exigir(await api("PUT", "/campo/tarifas-cliente/general", { cosecha: 1.5, flete: 0.35 }, matriz), "V5. guardar sin mandar «viaje» (pantalla vieja)");
+  check(sinViaje.viaje === 40, "V6. … no borra la tarifa por viaje", sinViaje);
+  const pV = await parte(camion, cliB, 60);
+  const sV = exigir(await api("GET", `/campo/partes/${pV.id}/tarifa-sugerida`, undefined, matriz), "V7. sugerida para un flete");
+  check(sV.viaje?.valor === 55 && sV.viaje.origen === "cliente" && sV.precio === 0.35, "V8. sugiere $0.35/QQ y el viaje del cliente $55", sV);
+  const sCos = exigir(await api("GET", `/campo/partes/${(await parte(cosechadora, cliB, 3)).id}/tarifa-sugerida`, undefined, matriz), "V9. sugerida para una cosecha");
+  check(sCos.viaje === null, "V10. una cosecha no lleva viaje", sCos);
+  const ambos = await api("POST", `/campo/partes/${pV.id}/cobrar`, { precio_unitario: 1, valor_viaje: 55 }, matriz);
+  check(ambos.status === 400, "V11. no se manda precio por QQ y viaje a la vez", ambos.status);
+  const cosV = await api("POST", `/campo/partes/${pB.id}/cobrar`, { valor_viaje: 30 }, matriz);
+  check(cosV.status === 400, "V12. una cosecha no se cobra por viaje", mostrar(cosV));
+  const cV = exigir(await api("POST", `/campo/partes/${pV.id}/cobrar`, { valor_viaje: 55 }, matriz), "V13. 60 QQ cobrados POR VIAJE $55");
+  check(Number(cV.valor) === 55, "V14. el cobro es $55 (no 60 × $0.35 = $21)", cV.valor);
+  const sv = (await q("SELECT valor::float v, precio_unitario::float p, notas FROM campo_servicios WHERE id = $1", [cV.servicio.id]))[0];
+  check(sv.v === 55 && Math.abs(sv.p - 55 / 60) < 0.0001 && /por viaje/.test(sv.notas), "V15. el servicio guarda $55, el precio equivalente por QQ y «por viaje»", sv);
 
   // ── B. Documentos de la flota ──
   const dVencido = exigir(await api("POST", "/campo/documentos", { activo_id: camion.id, tipo: "soat", numero: "S-1", vence: fecha(-3) }, matriz), "B1. SOAT del camión vencido hace 3 días");

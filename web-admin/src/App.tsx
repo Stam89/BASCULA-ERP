@@ -13347,6 +13347,37 @@ Motivo (obligatorio):`, "");
         </header>
         <div className="content">
 
+        {/* 📂 Cambio rápido de accionista dentro del módulo (como «Vendiendo como» de Ventas): solo los
+            accionistas en los que el usuario tiene ESTE módulo. Ventas ya tiene el suyo; Transporte es de la Matriz. */}
+        {authUser && activeTab !== "Ventas" && activeTab !== "Caja de Campo" && (() => {
+          const soloMatrizTab = activeTab === "Cuadrilla" || activeTab === "Servicio Pilado";
+          const opciones = accionistas.filter((a) => {
+            if (soloMatrizTab && a.tipo !== "MATRIZ") return false;
+            if (isAdmin || activeTab === "Dashboard") return true;
+            if (activeTab === "Configuracion") return false;
+            return (a.allowed_modules ?? []).includes(activeTab);
+          });
+          if (opciones.length < 2) return null;
+          return (
+            <div className="ventaSesion accionistaBarra" role="radiogroup" aria-label="Accionista">
+              <span className="ventaSesion__label">📂 Trabajando en:</span>
+              {opciones.map((a) => (
+                <button key={a.id} type="button" role="radio" aria-checked={a.id === activeAccionistaId}
+                  className={`ventaSesion__chip ${a.id === activeAccionistaId ? "is-activo" : ""}`}
+                  title={a.id === activeAccionistaId ? `Estás en ${a.name}` : `Ver ${tabLabel(activeTab)} de ${a.name}`}
+                  onClick={() => {
+                    if (a.id === activeAccionistaId) return;
+                    if (activeTab === "Configuracion" && configPendientes.length > 0 &&
+                      !window.confirm(`Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\nSi cambias de accionista se descartarán. ¿Cambiar de todas formas?`)) return;
+                    irAOperacion(a.id);
+                  }}>
+                  {a.tipo === "MATRIZ" ? "🏭" : "🤝"} {a.name}
+                </button>
+              ))}
+            </div>
+          );
+        })()}
+
         {correoAviso && (
           <div className="correoAviso" role="status">
             <span>✉️ <strong>Agrega un correo de recuperación</strong> para poder cambiar tu clave tú mismo si la olvidas.</span>

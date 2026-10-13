@@ -49,6 +49,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🚚📂 Flete por viaje y cambio rápido de accionista (2026-10-13, pedido del dueño)
+
+- Flete POR VIAJE (migración 20261094: `tarifa_flete_viaje` en `campo_clientes` y `campo_config`): cuando el carro no llevó los QQ que debía se cobra el viaje completo. `POST /campo/partes/:id/cobrar` acepta `valor_viaje` (solo fletes; guarda el precio equivalente por QQ y «por viaje» en notas) o `precio_unitario`. `tarifa-sugerida` devuelve `viaje`; PUT de tarifas acepta `viaje` (sin mandarlo no se toca). «Generar cobro»: Por QQ / Por viaje y aviso si por QQ sale menos que el viaje.
+- Barra «📂 Trabajando en:» arriba de cada módulo (menos Ventas, que tiene «Vendiendo como», y Transporte): chips de los accionistas donde el usuario tiene ESE módulo (admin: todos; Cuadrilla/Servicio Pilado solo Matriz). Usa `irAOperacion` (recarga y vuelve al mismo módulo); en Configuración avisa si hay cambios sin guardar.
+
 ### 🚜 Transporte: tarifas a clientes y documentos de la flota (2026-10-13, pedido del dueño)
 
 - Migración 20261093: `campo_clientes.tarifa_cosecha_qq/tarifa_flete_qq`, `campo_config.tarifa_cosecha_qq/tarifa_flete_qq` (general) y `campo_documentos` (activo, tipo matricula|soat|revision|seguro|permiso|otro, número, vence). Rutas `/campo/tarifas-cliente` (GET, PUT general, PUT :clienteId), `/campo/partes/:id/tarifa-sugerida` (la del cliente por tipo de servicio, si no la general) y `/campo/documentos` CRUD (renovar = PATCH vence). Permiso: sub «config». «Generar cobro» llena el precio sugerido (editable).

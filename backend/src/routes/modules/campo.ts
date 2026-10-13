@@ -1192,7 +1192,12 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
 // real (abonos/saldo) sigue con la maquinaria de servicios. Todo en 1 transacción
 // con lock sobre el parte (evita doble cobro).
 campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
-  const body = z.object({ precio_unitario: z.number().positive() }).parse(req.body);
+  // Por QQ (precio_unitario × QQ) o, en un FLETE, por VIAJE: monto fijo del viaje completo
+  // (se cobra cuando el carro no llevó los QQ que debía).
+  const body = z.object({
+    precio_unitario: z.number().positive().optional(),
+    valor_viaje: z.number().positive().max(1_000_000).optional()
+  }).refine((b) => (b.precio_unitario != null) !== (b.valor_viaje != null), "Indica el precio por QQ o el valor del viaje.").parse(req.body);
   const result = await inTransaction(async (client) => {
     const parte = (await client.query(
       `SELECT p.*, a.tipo AS activo_tipo
@@ -1213,15 +1218,19 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
     if (!cliente) throw new ApiError(409, "El cliente enlazado al parte ya no existe.");
 
     const qq = Number(parte.qq);
-    const valor = Math.round(qq * body.precio_unitario * 100) / 100;
     const tipoServicio = tipoServicioPorActivo(parte.activo_tipo);
     const tipoDetalle = tipoServicio === "cosecha" ? "cosecha" : "flete";
+    const porViaje = body.valor_viaje != null;
+    if (porViaje && tipoServicio !== "flete") throw new ApiError(400, "Solo un flete se cobra por viaje.");
+    const valor = porViaje ? Math.round((body.valor_viaje as number) * 100) / 100 : Math.round(qq * (body.precio_unitario as number) * 100) / 100;
+    // Por viaje se guarda el precio equivalente por QQ (para reportes); el valor manda.
+    const precioUnit = porViaje ? (qq > 0 ? Math.round((valor / qq) * 10000) / 10000 : null) : body.precio_unitario;
     const servicio = (await client.query(
       `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
-      [parte.fecha, cliente.id, parte.activo_id, tipoServicio, qq, body.precio_unitario, valor,
-       `Cobro de parte de ${tipoDetalle} (${nombre})`, userId(req)]
+      [parte.fecha, cliente.id, parte.activo_id, tipoServicio, qq, precioUnit, valor,
+       `Cobro de parte de ${tipoDetalle}${porViaje ? " por viaje" : ""} (${nombre})`, userId(req)]
     )).rows[0];
 
     const parteUpd = (await client.query(
@@ -3015,37 +3024,44 @@ campoRouter.get("/caja/sesiones", asyncRoute(async (_req, res) => {
 //  · Documentos de cada vehículo/máquina con su vencimiento: avisan en Hoy y en las alertas.
 // ════════════════════════════════════════════════════════════════════════════
 const tarifaSchema = z.union([z.null(), z.number().positive().max(100000)]);
+const tarifasBody = z.object({ cosecha: tarifaSchema, flete: tarifaSchema, viaje: tarifaSchema.optional() });
+const r2t = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n) * 100) / 100);
 const r4 = (n: number | null | undefined) => (n == null ? null : Math.round(Number(n) * 10000) / 10000);
 
 campoRouter.get("/tarifas-cliente", asyncRoute(async (_req, res) => {
   await ensureConfig();
   const g = (await pool.query(
-    "SELECT tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete FROM campo_config WHERE id = 1"
+    "SELECT tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete, tarifa_flete_viaje::float AS viaje FROM campo_config WHERE id = 1"
   )).rows[0] ?? {};
   const clientes = (await pool.query(
-    `SELECT id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq
-       FROM campo_clientes WHERE tarifa_cosecha_qq IS NOT NULL OR tarifa_flete_qq IS NOT NULL ORDER BY nombre`
+    `SELECT id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq,
+            tarifa_flete_viaje::float AS tarifa_flete_viaje
+       FROM campo_clientes WHERE tarifa_cosecha_qq IS NOT NULL OR tarifa_flete_qq IS NOT NULL OR tarifa_flete_viaje IS NOT NULL ORDER BY nombre`
   )).rows;
-  res.json({ general: { cosecha: g.cosecha ?? null, flete: g.flete ?? null }, clientes });
+  res.json({ general: { cosecha: g.cosecha ?? null, flete: g.flete ?? null, viaje: g.viaje ?? null }, clientes });
 }));
 
 campoRouter.put("/tarifas-cliente/general", asyncRoute(async (req, res) => {
   await ensureConfig();
-  const body = z.object({ cosecha: tarifaSchema, flete: tarifaSchema }).parse(req.body);
+  const body = tarifasBody.parse(req.body);
+  // `viaje` sin enviar = no se toca (compatibilidad).
   const r = (await pool.query(
-    `UPDATE campo_config SET tarifa_cosecha_qq = $1, tarifa_flete_qq = $2, updated_at = now() WHERE id = 1
-     RETURNING tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete`,
-    [r4(body.cosecha), r4(body.flete)]
+    `UPDATE campo_config SET tarifa_cosecha_qq = $1, tarifa_flete_qq = $2,
+            tarifa_flete_viaje = CASE WHEN $4::boolean THEN $3 ELSE tarifa_flete_viaje END, updated_at = now() WHERE id = 1
+     RETURNING tarifa_cosecha_qq::float AS cosecha, tarifa_flete_qq::float AS flete, tarifa_flete_viaje::float AS viaje`,
+    [r4(body.cosecha), r4(body.flete), r2t(body.viaje), body.viaje !== undefined]
   )).rows[0];
   res.json(r);
 }));
 
 campoRouter.put("/tarifas-cliente/:clienteId", asyncRoute(async (req, res) => {
-  const body = z.object({ cosecha: tarifaSchema, flete: tarifaSchema }).parse(req.body);
+  const body = tarifasBody.parse(req.body);
   const r = (await pool.query(
-    `UPDATE campo_clientes SET tarifa_cosecha_qq = $2, tarifa_flete_qq = $3 WHERE id = $1
-     RETURNING id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq`,
-    [req.params.clienteId, r4(body.cosecha), r4(body.flete)]
+    `UPDATE campo_clientes SET tarifa_cosecha_qq = $2, tarifa_flete_qq = $3,
+            tarifa_flete_viaje = CASE WHEN $5::boolean THEN $4 ELSE tarifa_flete_viaje END WHERE id = $1
+     RETURNING id, nombre, tipo, tarifa_cosecha_qq::float AS tarifa_cosecha_qq, tarifa_flete_qq::float AS tarifa_flete_qq,
+               tarifa_flete_viaje::float AS tarifa_flete_viaje`,
+    [req.params.clienteId, r4(body.cosecha), r4(body.flete), r2t(body.viaje), body.viaje !== undefined]
   )).rows[0];
   if (!r) throw new ApiError(404, "Cliente no encontrado");
   res.json(r);
@@ -3062,14 +3078,18 @@ campoRouter.get("/partes/:id/tarifa-sugerida", asyncRoute(async (req, res) => {
   const tipo = tipoServicioPorActivo(p.activo_tipo);
   const col = tipo === "cosecha" ? "tarifa_cosecha_qq" : "tarifa_flete_qq";
   const cli = (await pool.query(
-    `SELECT ${col}::float AS t FROM campo_clientes
-      WHERE id = $1 OR ($1::uuid IS NULL AND lower(trim(nombre)) = lower(trim($2)))
+    `SELECT ${col}::float AS t, tarifa_flete_viaje::float AS v FROM campo_clientes
+      WHERE id = $1 OR ($1::uuid IS NULL AND lower(trim(nombre)) = lower(trim($2::text)))
       ORDER BY (id = $1) DESC NULLS LAST LIMIT 1`,
     [p.cliente_id ?? null, p.cliente ?? ""]
   )).rows[0];
-  if (cli?.t) { res.json({ precio: cli.t, origen: "cliente", tipo }); return; }
-  const g = (await pool.query(`SELECT ${col}::float AS t FROM campo_config WHERE id = 1`)).rows[0];
-  res.json({ precio: g?.t ?? null, origen: g?.t ? "general" : null, tipo });
+  const g = (await pool.query(`SELECT ${col}::float AS t, tarifa_flete_viaje::float AS v FROM campo_config WHERE id = 1`)).rows[0];
+  // Flete por viaje (monto fijo del viaje completo): el del cliente o el general; solo en fletes.
+  const viaje = tipo === "flete"
+    ? (cli?.v ? { valor: cli.v, origen: "cliente" as const } : g?.v ? { valor: g.v, origen: "general" as const } : null)
+    : null;
+  if (cli?.t) { res.json({ precio: cli.t, origen: "cliente", tipo, viaje }); return; }
+  res.json({ precio: g?.t ?? null, origen: g?.t ? "general" : null, tipo, viaje });
 }));
 
 // ── Documentos de la flota ───────────────────────────────────────────────────

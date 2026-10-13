@@ -464,24 +464,38 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
   const [precio, setPrecio] = useState("");
   const [busy, setBusy] = useState(false);
   // Tarifa del cliente (o la general) de Configuración → 💲 Tarifas a clientes: llena el precio si está vacío.
-  const [sugerida, setSugerida] = useState<{ precio: number | null; origen: "cliente" | "general" | null } | null>(null);
+  type Sugerida = { precio: number | null; origen: "cliente" | "general" | null; viaje: { valor: number; origen: "cliente" | "general" } | null };
+  const [sugerida, setSugerida] = useState<Sugerida | null>(null);
+  // Flete POR VIAJE: monto fijo del viaje completo (el carro no llevó los QQ que debía).
+  const [modo, setModo] = useState<"qq" | "viaje">("qq");
+  const [valorViaje, setValorViaje] = useState("");
   useEffect(() => {
     let vivo = true;
-    apiGet<{ precio: number | null; origen: "cliente" | "general" | null }>(`/campo/partes/${parte.id}/tarifa-sugerida`)
-      .then((r) => { if (!vivo) return; setSugerida(r); if (r.precio) setPrecio((p) => (p === "" ? String(r.precio) : p)); })
+    apiGet<Sugerida>(`/campo/partes/${parte.id}/tarifa-sugerida`)
+      .then((r) => {
+        if (!vivo) return;
+        setSugerida(r);
+        if (r.precio) setPrecio((p) => (p === "" ? String(r.precio) : p));
+        if (r.viaje) setValorViaje((v) => (v === "" ? String(r.viaje?.valor) : v));
+      })
       .catch(() => undefined);
     return () => { vivo = false; };
   }, [parte.id]);
-  const pu = Number(precio);
-  const valido = precio !== "" && pu > 0;
-  const valor = valido ? Math.round(parte.qq * pu * 100) / 100 : 0;
   const tipoServicio = (parte.activo_tipo ?? "").toLowerCase() === "cosechadora" ? "cosecha" : "flete";
+  const porViaje = tipoServicio === "flete" && modo === "viaje";
+  const pu = Number(precio);
+  const vv = Number(valorViaje);
+  const valido = porViaje ? valorViaje !== "" && vv > 0 : precio !== "" && pu > 0;
+  const valor = !valido ? 0 : porViaje ? Math.round(vv * 100) / 100 : Math.round(parte.qq * pu * 100) / 100;
+  // Aviso: por QQ sale menos que el viaje completo (no se completó la carga).
+  const viajeSug = tipoServicio === "flete" ? sugerida?.viaje ?? null : null;
+  const sugiereViaje = !porViaje && viajeSug != null && valido && valor < viajeSug.valor;
 
   async function submit() {
     try {
       setBusy(true);
-      if (!valido) throw new Error("Ingresa el precio por QQ (mayor a 0)");
-      await apiPost(`/campo/partes/${parte.id}/cobrar`, { precio_unitario: pu });
+      if (!valido) throw new Error(porViaje ? "Ingresa el valor del viaje (mayor a 0)" : "Ingresa el precio por QQ (mayor a 0)");
+      await apiPost(`/campo/partes/${parte.id}/cobrar`, porViaje ? { valor_viaje: vv } : { precio_unitario: pu });
       await onDone();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
   }
@@ -496,6 +510,21 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
           <strong>{qqFmt(parte.qq)} QQ</strong>
           <small>{String(parte.fecha).slice(0, 10)}{parte.operador ? ` · ${parte.operador}` : ""}</small>
         </div>
+        {tipoServicio === "flete" && (
+          <div className="segmented" style={{ marginBottom: 8 }}>
+            <button type="button" className={modo === "qq" ? "active" : ""} onClick={() => setModo("qq")}>Por QQ</button>
+            <button type="button" className={modo === "viaje" ? "active" : ""} onClick={() => setModo("viaje")}>Por viaje</button>
+          </div>
+        )}
+        {porViaje ? (
+          <label><span>Valor del viaje completo $</span>
+            <input type="number" step="0.01" min="0" autoFocus value={valorViaje} onChange={(e) => setValorViaje(e.target.value)} placeholder="Ej: 40.00" />
+            <small className="muted" style={{ display: "block", marginTop: 4 }}>
+              Se cobra el viaje aunque el carro no llevó los QQ que debía ({qqFmt(parte.qq)} QQ).
+              {viajeSug && <> {viajeSug.origen === "cliente" ? "Tarifa por viaje de este cliente" : "Tarifa general por viaje"}: {money(viajeSug.valor)}.</>}
+            </small>
+          </label>
+        ) : (
         <label><span>Precio por QQ $</span>
           <input type="number" step="0.0001" min="0" autoFocus value={precio} onChange={(e) => setPrecio(e.target.value)} placeholder="Ej: 1.50" />
           {sugerida?.precio != null && (
@@ -505,9 +534,16 @@ function GenerarCobroModal({ parte, onClose, onDone, onError }: {
             </small>
           )}
         </label>
+        )}
+        {sugiereViaje && viajeSug && (
+          <p className="si-aviso" style={{ margin: "4px 0" }}>
+            🚚 Por QQ salen {money(valor)}, menos que el viaje completo ({money(viajeSug.valor)}).
+            <button type="button" className="btnGhost" style={{ padding: "0 6px" }} onClick={() => { setModo("viaje"); setValorViaje(String(viajeSug.valor)); }}>Cobrar por viaje</button>
+          </p>
+        )}
         {valido && (
           <div className="totalBox" style={{ background: "#eff6ff", borderColor: "#bfdbfe" }}>
-            <span>VALOR DEL COBRO ({qqFmt(parte.qq)} × {money(pu)})</span>
+            <span>VALOR DEL COBRO {porViaje ? "(viaje completo)" : `(${qqFmt(parte.qq)} × ${money(pu)})`}</span>
             <strong>{money(valor)}</strong>
           </div>
         )}

@@ -5870,3 +5870,6 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .campoDocs__acc, .campoDocs__renovar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .campoDocs__renovar { flex-basis: 100%; }
 .campoDocs__renovar input { flex: 1 1 140px; min-width: 0; }
+
+/* Cambio rapido de accionista arriba de cada modulo */
+.accionistaBarra { margin: 0 0 12px; }
