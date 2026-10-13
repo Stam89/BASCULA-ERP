@@ -1533,6 +1533,20 @@ Ampliado el 2026-09-24:
 - El comprobante de Fomento quedó simplificado: solo Estado de Cuenta y saldo; fletes, cosechadora y arroz permanecen en el comprobante de Liquidación.
 - Sin migraciones ni cambios de esquema. Verificaciones: backend build, 44/44 tests, frontend build, lint sin errores y preflight sin errores críticos.
 
+### Caja · Fomentos compactos y control de límite
+
+Implementado el 2026-10-13:
+
+- Se eliminó de Caja la lista extensa y repetida de todos los agricultores fomentados; el detalle completo permanece en el módulo Fomentos.
+- Caja conserva únicamente el formulario operativo y un resumen compacto del agricultor seleccionado: límite, entregado y disponible.
+- El selector ya no muestra disponibilidad negativa: identifica claramente los casos como `Límite superado`.
+- Al seleccionar un fomento que alcanzó el límite, o al digitar una entrega que lo sobrepasa, la pantalla muestra una advertencia visible.
+- El backend recalcula el cupo dentro de una transacción y bloquea la fila para evitar que entregas simultáneas omitan la validación.
+- Si una entrega excede el límite, el servidor exige confirmación explícita antes de guardar; cancelar no modifica Fomentos ni Caja.
+- Los saldos anteriores históricos no se consideran una nueva entrega operativa y conservan su flujo existente.
+- Sin migraciones ni cambios de esquema o registros existentes.
+- Verificaciones: backend build, frontend build, 225/225 tests, preflight sin errores críticos, ESLint sin errores y revisión visual local en Caja > Fomentos.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:

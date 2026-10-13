@@ -19554,7 +19554,14 @@ Motivo (obligatorio):`, "");
                   <div className="cajaMovimientosPanel">
                     {/* Form de acción */}
                     <form onSubmit={submitCajaFomento} style={{ background: "var(--c-surface)", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16, marginBottom: 16 }}>
-                      <h4 style={{ margin: "0 0 12px" }}>Operación de Fomento desde Caja</h4>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
+                        <h4 style={{ margin: 0 }}>Operación de Fomento desde Caja</h4>
+                        {visibleTabs.includes("Fomentos") && (
+                          <button type="button" className="btnGhost" onClick={() => irATab("Fomentos")} style={{ fontSize: 11, padding: "5px 9px" }}>
+                            Ver estado de cuenta
+                          </button>
+                        )}
+                      </div>
 
                       {/* Tipo de acción */}
                       <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
@@ -19587,6 +19594,9 @@ Motivo (obligatorio):`, "");
                           <button type="button" className="btnGhost" onClick={() => refreshCajaFomentos().catch(() => undefined)}>Reintentar</button>
                         </div>
                       )}
+                      {!cajaFomentosCargando && !cajaFomentosError && fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
+                        <div className="infoBox" style={{ marginBottom: 10 }}>No hay fomentos activos para el socio seleccionado.</div>
+                      )}
 
                       {/* Seleccionar agricultor fomentado */}
                       <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
@@ -19596,9 +19606,10 @@ Motivo (obligatorio):`, "");
                           <option value="">{cajaFomentosCargando ? "— Cargando —" : "— Seleccionar —"}</option>
                           {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
                             const cuenta = obtenerResumenCuentaFomento(f);
+                            const disponible = Number(f.falta_por_pedir);
                             return (
                               <option key={f.id} value={f.id}>
-                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.enReal()} | Disp: ${Number(f.falta_por_pedir).enReal()}
+                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.enReal()} | {disponible > 0.005 ? `Disponible: $${disponible.enReal()}` : "Límite superado"}
                               </option>
                             );
                           })}
@@ -19610,12 +19621,32 @@ Motivo (obligatorio):`, "");
                         const f = fomentos.find(x => x.id === cajaFomentoId);
                         if (!f) return null;
                         const cuenta = obtenerResumenCuentaFomento(f);
+                        const limite = Number(f.monto_limite);
+                        const entregado = Number(f.total_pedido);
+                        const disponible = Math.max(0, limite - entregado);
+                        const nuevaEntrega = cajaFomentoAccion === "entrega" ? Math.max(0, Number(cajaFomentoMonto) || 0) : 0;
+                        const excesoResultante = Math.max(0, entregado + nuevaEntrega - limite);
+                        const mostrarAvisoLimite = cajaFomentoAccion === "entrega" && (disponible <= 0.005 || excesoResultante > 0.005);
                         return (
-                          <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6 }}>
-                            <div><span style={{ color: "var(--c-muted)" }}>Pedido</span><br/><strong>${Number(f.total_pedido).enReal()}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Gasto adm.</span><br/><strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong></div>
-                            <div><span style={{ color: "var(--c-muted)" }}>Deuda total</span><br/><strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.enReal()}</strong></div>
-                          </div>
+                          <>
+                            <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: mostrarAvisoLimite ? 6 : 10, fontSize: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                              <div><span style={{ color: "var(--c-muted)" }}>Límite</span><br/><strong>${limite.enReal()}</strong></div>
+                              <div><span style={{ color: "var(--c-muted)" }}>Entregado</span><br/><strong>${entregado.enReal()}</strong></div>
+                              <div><span style={{ color: "var(--c-muted)" }}>Disponible</span><br/><strong style={{ color: disponible > 0.005 ? "#16a34a" : "#dc2626" }}>${disponible.enReal()}</strong></div>
+                            </div>
+                            {mostrarAvisoLimite && (
+                              <div className="alert error" role="alert" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
+                                {excesoResultante > 0.005
+                                  ? `Límite superado: al registrar esta entrega quedará excedido por $${excesoResultante.enReal()}. Se pedirá confirmación antes de guardar.`
+                                  : "Este fomento ya alcanzó su límite. Una nueva entrega requerirá confirmación."}
+                              </div>
+                            )}
+                            {cajaFomentoAccion === "pago" && (
+                              <div style={{ margin: "-4px 0 10px", color: "var(--c-muted)", fontSize: 11 }}>
+                                Deuda pendiente: <strong>${cuenta.deudaPendiente.enReal()}</strong>
+                              </div>
+                            )}
+                          </>
                         );
                       })()}
 
@@ -19652,50 +19683,6 @@ Motivo (obligatorio):`, "");
                       </button>
                     </form>
 
-                    {/* Lista de todos los agricultores fomentados */}
-                    <h4 style={{ marginBottom: 8 }}>Agricultores Fomentados</h4>
-                    {!cajaFomentosCargando && !cajaFomentosError && fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
-                      <p style={{ color: "var(--c-muted)", textAlign: "center" }}>No hay fomentos activos para el socio seleccionado.</p>
-                    )}
-                    {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
-                      const cuenta = obtenerResumenCuentaFomento(f);
-                      return (
-                        <article key={f.id} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "12px 16px", marginBottom: 8, background: "var(--c-surface)" }}>
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                            <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
-                            <span style={{ fontSize: 11, background: f.estado_credito === "HABILITADO" ? "#dcfce7" : "#fee2e2",
-                              color: f.estado_credito === "HABILITADO" ? "#16a34a" : "#dc2626",
-                              borderRadius: 4, padding: "2px 8px", fontWeight: 700 }}>
-                              {f.estado_credito}
-                            </span>
-                          </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, fontSize: 12 }}>
-                            <div style={{ textAlign: "center" }}>
-                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PEDIDO</div>
-                              <strong>${Number(f.total_pedido).enReal()}</strong>
-                            </div>
-                            <div style={{ textAlign: "center" }}>
-                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>INTERÉS</div>
-                              <strong style={{ color: "#b45309" }}>${Number(f.gasto_adm).enReal()}</strong>
-                            </div>
-                            <div style={{ textAlign: "center" }}>
-                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>PAGADO</div>
-                              <strong style={{ color: "#16a34a" }}>${cuenta.totalPagado.enReal()}</strong>
-                            </div>
-                            <div style={{ textAlign: "center" }}>
-                              <div style={{ color: "var(--c-muted)", fontSize: 10 }}>DEUDA</div>
-                              <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>${cuenta.deudaPendiente.enReal()}</strong>
-                            </div>
-                          </div>
-                          <button type="button"
-                            onClick={() => { setCajaFomentoId(f.id); window.scrollTo({ top: 0, behavior: "smooth" }); }}
-                            style={{ marginTop: 8, fontSize: 11, padding: "4px 10px", borderRadius: 5, border: "1px solid var(--c-brand)",
-                              background: "transparent", color: "var(--c-brand)", cursor: "pointer" }}>
-                            Seleccionar para operar
-                          </button>
-                        </article>
-                      );
-                    })}
                   </div>
                 )}
                 </div>

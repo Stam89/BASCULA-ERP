@@ -8,10 +8,12 @@ import crypto from "crypto";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { inTransaction } from "../../db/transaction.js";
-import { ApiError } from "../../http/error-handler.js";
+import { ApiError, AvisoConfirmable } from "../../http/error-handler.js";
+import { confirmado } from "../../http/confirmaciones.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { nombreNormalSql } from "../../services/agricultor-nombres.js";
+import { calcularLimiteFomento } from "../../services/fomento-limite.js";
 
 export const fomentosRouter = Router();
 
@@ -923,7 +925,41 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (client) => {
-    await assertFomentoAccionista(client, fomentoId, accionistaId);
+    const fomentoBloqueado = await client.query<{ farmer_name: string; limite: number }>(
+      `SELECT farmer_name, ROUND(cuadras * 800, 2)::float AS limite
+         FROM fomentos
+        WHERE id = $1 AND accionista_id = $2
+        FOR UPDATE`,
+      [fomentoId, accionistaId]
+    );
+    if (!fomentoBloqueado.rowCount) {
+      throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+    }
+
+    // El saldo anterior describe una deuda histórica; no es una nueva entrega
+    // de crédito. Las entregas operativas sí requieren confirmación al rebasar
+    // el cupo, y el lock evita que dos registros simultáneos omitan el aviso.
+    if (!data.es_saldo_anterior) {
+      const acumulado = await client.query<{ total: number }>(
+        "SELECT COALESCE(SUM(valor), 0)::float AS total FROM fomento_entregas WHERE fomento_id = $1",
+        [fomentoId]
+      );
+      const estadoLimite = calcularLimiteFomento(
+        fomentoBloqueado.rows[0].limite,
+        acumulado.rows[0]?.total ?? 0,
+        data.valor
+      );
+      if (estadoLimite.superaLimite && !confirmado(req, "LIMITE_FOMENTO")) {
+        const yaExcedido = estadoLimite.totalActual > estadoLimite.limite;
+        const contexto = yaExcedido
+          ? `${fomentoBloqueado.rows[0].farmer_name} ya había superado su límite.`
+          : `Esta entrega supera el disponible de $${estadoLimite.disponibleAntes.toFixed(2)}.`;
+        throw new AvisoConfirmable(
+          `${contexto} El total quedará en $${estadoLimite.totalResultante.toFixed(2)}, excedido por $${estadoLimite.excesoResultante.toFixed(2)}. ¿Registrar de todos modos?`,
+          "LIMITE_FOMENTO"
+        );
+      }
+    }
     let tipoCaja: string | null = null;
     if (data.cash_register_id && !data.es_saldo_anterior) {
       const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
@@ -942,16 +978,12 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 
     // Un saldo ARRASTRADO no es un desembolso nuevo de caja: no genera egreso.
     if (data.cash_register_id && !data.es_saldo_anterior) {
-      const fomento = await client.query(
-        "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [fomentoId]
-      );
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
          VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4, $5)`,
         [data.cash_register_id, entrega.rows[0].id, data.valor,
-         `Fomento entregado a ${fomento.rows[0]?.farmer_name ?? "agricultor"}`,
+         `Fomento entregado a ${fomentoBloqueado.rows[0]?.farmer_name ?? "agricultor"}`,
          medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
       );
     }
