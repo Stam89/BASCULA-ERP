@@ -318,12 +318,63 @@ export async function renombrarProducto(client: PoolClient, id: string, nombreNu
 }
 
 /**
+ * ¿Dónde se usó el producto? Recorre TODAS las tablas que lo referencian (llaves foráneas)
+ * menos sus propias presentaciones y sacos; de los sacos cuenta solo los que tienen kárdex
+ * o stock. Lista vacía = nunca se usó y se puede borrar sin dejar nada huérfano.
+ */
+export async function usosDelProducto(client: { query: PoolClient["query"] }, productId: string): Promise<string[]> {
+  const fks = (await client.query(
+    `SELECT tc.table_name AS tabla, kcu.column_name AS columna
+       FROM information_schema.table_constraints tc
+       JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+       JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.table_schema = tc.table_schema
+      WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = 'public'
+        AND ccu.table_name = 'products' AND ccu.column_name = 'id'
+        AND tc.table_name NOT IN ('product_presentations', 'sack_inventory')`
+  )).rows as Array<{ tabla: string; columna: string }>;
+  const usos: string[] = [];
+  for (const f of fks) {
+    const n = Number((await client.query(`SELECT COUNT(*)::int AS n FROM "${f.tabla}" WHERE "${f.columna}" = $1`, [productId])).rows[0].n);
+    if (n > 0) usos.push(`${f.tabla} (${n})`);
+  }
+  // Renglones de pedido que apunten a sus presentaciones (columna sin llave foránea).
+  const porPres = Number((await client.query(
+    `SELECT COUNT(*)::int AS n FROM sales_order_items
+      WHERE presentation_id IN (SELECT id FROM product_presentations WHERE product_id = $1)`, [productId]
+  )).rows[0].n);
+  if (porPres > 0) usos.push(`sales_order_items.presentation_id (${porPres})`);
+  const sacos = Number((await client.query(
+    `SELECT COUNT(*)::int AS n FROM sack_inventory s
+      WHERE s.product_id = $1 AND (s.stock <> 0 OR EXISTS (SELECT 1 FROM sack_movements m WHERE m.sack_id = s.id))`, [productId]
+  )).rows[0].n);
+  if (sacos > 0) usos.push(`sacos con kárdex o stock (${sacos})`);
+  return usos;
+}
+
+/**
+ * ELIMINA un producto que nunca se usó (con sus presentaciones y sus sacos sin kárdex).
+ * Si tiene historial no borra nada y devuelve dónde se usó (entonces se desactiva).
+ * Volver a crearlo (Catálogo de productos o de sacos) con el mismo nombre lo crea limpio y enlazado.
+ */
+export async function eliminarProductoSinHistorial(client: PoolClient, productId: string): Promise<{ eliminado: boolean; nombre: string; usos: string[] }> {
+  const p = (await client.query("SELECT id, name FROM products WHERE id = $1 FOR UPDATE", [productId])).rows[0];
+  if (!p) throw new ApiError(404, "Producto no encontrado");
+  const usos = await usosDelProducto(client, productId);
+  if (usos.length) return { eliminado: false, nombre: p.name, usos };
+  await client.query("DELETE FROM sack_inventory WHERE product_id = $1", [productId]);
+  await client.query("DELETE FROM product_presentations WHERE product_id = $1", [productId]);
+  await client.query("DELETE FROM products WHERE id = $1", [productId]);
+  return { eliminado: true, nombre: p.name, usos: [] };
+}
+
+/**
  * Tras quitar un saco de MARCA: si la marca se quedó SIN sacos activos de la planta ya
- * no se puede vender empacada, así que se desactiva (deja de salir en Ventas, Inventario
- * y selectores; su historial se conserva y se reactiva al volver a agregar un saco).
+ * no se puede vender empacada. Si nunca se usó se ELIMINA (al volver a crear un saco con
+ * ese nombre se crea de nuevo, ya enlazada); si tiene historial se DESACTIVA (deja de salir
+ * en Ventas, Inventario y selectores y se reactiva al volver a agregar su saco).
  * Si tiene stock o pedidos pendientes NO se toca y se devuelve el motivo.
  */
-export async function desactivarMarcaSinSacos(client: PoolClient, productId: string | null): Promise<{ desactivada: boolean; marca?: string; motivo?: string }> {
+export async function desactivarMarcaSinSacos(client: PoolClient, productId: string | null, opts: { permitirBorrar?: boolean } = {}): Promise<{ desactivada: boolean; eliminada?: boolean; marca?: string; motivo?: string }> {
   if (!productId) return { desactivada: false };
   const p = (await client.query("SELECT id, name, product_type, is_active FROM products WHERE id = $1", [productId])).rows[0];
   if (!p || p.product_type !== "PACKAGED_GOOD" || p.is_active === false) return { desactivada: false };
@@ -331,9 +382,11 @@ export async function desactivarMarcaSinSacos(client: PoolClient, productId: str
     "SELECT COUNT(*)::int AS n FROM sack_inventory WHERE product_id = $1 AND activo AND accionista_id IS NULL", [productId]
   )).rows[0].n);
   if (quedan > 0) return { desactivada: false };
+  const borrado = opts.permitirBorrar === false ? { eliminado: false } : await eliminarProductoSinHistorial(client, productId);
+  if (borrado.eliminado) return { desactivada: true, eliminada: true, marca: p.name };
   try {
     await actualizarProductoCatalogo(client, productId, { is_active: false });
-    return { desactivada: true, marca: p.name };
+    return { desactivada: true, eliminada: false, marca: p.name };
   } catch (e) {
     // Solo validaciones (stock / pedidos pendientes): no hubo error de SQL, la transacción sigue sana.
     if (e instanceof ApiError) return { desactivada: false, marca: p.name, motivo: e.message };

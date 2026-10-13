@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin } from "../../auth/require-auth.js";
 import {
-  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, listarCatalogo, renombrarProducto
+  actualizarProductoCatalogo, agregarPresentacion, crearProductoCatalogo, eliminarProductoSinHistorial, listarCatalogo, renombrarProducto
 } from "../../services/catalogo-productos.js";
 
 export const productsRouter = Router();
@@ -146,6 +146,20 @@ productsRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   });
   const [producto] = await listarCatalogo(pool, String(req.params.id));
   res.json(producto);
+}));
+
+// ELIMINAR: si el producto nunca se usó (ni pedidos, ni inventario, ni compras, ni procesos,
+// ni sacos con kárdex) se borra con sus presentaciones y sacos; volver a crearlo con el mismo
+// nombre lo deja enlazado otra vez. Si tiene historial NO se borra: se DESACTIVA (o se explica
+// por qué no se puede: stock o pedidos pendientes).
+productsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
+  const out = await inTransaction(async (client) => {
+    const r = await eliminarProductoSinHistorial(client, String(req.params.id));
+    if (r.eliminado) return { resultado: "ELIMINADO" as const, nombre: r.nombre, usos: [] as string[] };
+    await actualizarProductoCatalogo(client, String(req.params.id), { is_active: false });
+    return { resultado: "DESACTIVADO" as const, nombre: r.nombre, usos: r.usos };
+  });
+  res.json(out);
 }));
 
 // Agrega una presentación (peso en libras); en una marca crea también su saco.

@@ -463,14 +463,15 @@ export function SacosCatalogoConfig({
     const tieneStock = num(s.stock) !== 0;
     const ultimoDeMarca = s.categoria === "MARCA" && !!s.product_id &&
       !sacos.some((x) => x.id !== s.id && x.product_id === s.product_id && x.activo !== false);
-    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${ultimoDeMarca ? `\n\nEs el último saco de la marca ${s.marca}: la marca también deja de ofrecerse en Ventas, Inventario y los selectores (se reactiva si vuelves a agregar su saco).` : ""}`)) return;
+    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${ultimoDeMarca ? `\n\nEs el último saco de la marca ${s.marca}: la marca también se quita (se borra si nunca se usó; si tiene historial se desactiva). Si vuelves a crear un saco con ese nombre, queda enlazada otra vez.` : ""}`)) return;
     try {
       const r = await apiFetch(`/sacks/${s.id}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error ?? "No se pudo eliminar");
       await onCambio();
       avisar(data.resultado === "ELIMINADO" ? `${s.tipo} eliminado` : `${s.tipo} desactivado (tenía historial)`, "success");
-      if (data.marca_desactivada) avisar(`La marca ${data.marca} quedó sin sacos y se desactivó: ya no aparece en Ventas ni en los selectores.`, "success");
+      if (data.marca_eliminada) avisar(`La marca ${data.marca} quedó sin sacos y se eliminó (no tenía historial). Si vuelves a crear un saco con ese nombre, la marca se crea de nuevo enlazada.`, "success");
+      else if (data.marca_desactivada) avisar(`La marca ${data.marca} quedó sin sacos y se desactivó (tiene historial): ya no aparece en Ventas ni en los selectores.`, "success");
       else if (data.aviso_marca) avisar(`La marca ${data.marca} quedó sin sacos pero sigue activa: ${data.aviso_marca}`, "warn");
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo eliminar", "error");

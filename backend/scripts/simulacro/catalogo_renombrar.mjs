@@ -39,28 +39,41 @@ try {
     check(rg.status === 400, "B4. un saco genérico / de subproducto (nombre del sistema) no se renombra (400)", mostrar(rg));
   }
 
-  // ── C. Eliminar los sacos: el último desactiva la marca ──
+  // ── C. Eliminar los sacos: el último ELIMINA la marca (nunca se usó) ──
   const sx = await sacosDe(pid);
   const d1 = exigir(await api("DELETE", `/sacks/${sx[0].id}`, undefined, matriz), "C1. se elimina el saco de 100 LB");
   check(d1.marca_desactivada === false && (await prod(pid)).is_active === true, "C2. la marca sigue activa (aún tiene el de 25 LB)", d1);
   const d2 = exigir(await api("DELETE", `/sacks/${sx[1].id}`, undefined, matriz), "C3. se elimina el último saco (25 LB)");
-  check(d2.marca_desactivada === true && (await prod(pid)).is_active === false, "C4. la marca queda DESACTIVADA (sin sacos no se puede vender)", d2);
-  const lista = exigir(await api("GET", "/products", undefined, matriz), "C5. lista de productos (la que usan Ventas y los selectores)");
-  check(lista.find((p) => p.id === pid)?.is_active === false, "C6. … la marca viene como inactiva (los selectores la ocultan)");
+  check(d2.marca_eliminada === true && !(await prod(pid)), "C4. la marca sin historial se ELIMINA (producto y presentaciones)", d2);
   const pres = await q("SELECT count(*)::int n FROM product_presentations WHERE product_id = $1", [pid]);
-  check(pres[0].n === 2, "C7. sus presentaciones se conservan (no quedan pedidos huérfanos)", pres[0]);
+  check(pres[0].n === 0, "C5. no quedan presentaciones huérfanas", pres[0]);
+  const lista = exigir(await api("GET", "/products", undefined, matriz), "C6. lista de productos (la que usan Ventas y los selectores)");
+  check(!lista.some((p) => p.name === "Sim Marca B"), "C7. … ya no aparece");
 
-  // ── D. Volver a agregar su saco la reactiva ──
-  exigir(await api("POST", "/sacks", { categoria: "MARCA", marca: "Sim Marca B", calidad: "0.11", pesos: [100] }, matriz), "D1. se vuelve a agregar «Sim Marca B 100 LB»");
-  check((await prod(pid)).is_active === true && (await sacosDe(pid)).length === 1, "D2. la marca vuelve a estar activa con su saco");
+  // ── D. Volver a crear un saco con el mismo nombre crea la marca enlazada ──
+  exigir(await api("POST", "/sacks", { categoria: "MARCA", marca: "Sim Marca B", calidad: "0.11", pesos: [100] }, matriz), "D1. se crea de nuevo «Sim Marca B 100 LB»");
+  const nueva = (await q("SELECT id, is_active, product_type FROM products WHERE name = 'Sim Marca B'"))[0];
+  check(nueva && nueva.is_active && nueva.product_type === "PACKAGED_GOOD", "D2. la marca «Sim Marca B» vuelve a existir, activa y empacada", nueva);
+  const pid2 = nueva.id;
+  const sn = await sacosDe(pid2);
+  const pn = await q("SELECT weight_lb::float w FROM product_presentations WHERE product_id = $1", [pid2]);
+  check(sn.length === 1 && sn[0].activo && pn.length === 1 && pn[0].w === 100, "D3. … enlazada con su saco y su presentación de 100 LB", { sn, pn });
 
-  // ── E. Marca con historial: desactivar su único saco (PATCH activo=false) y reactivarlo ──
-  const sh = (await sacosDe(pid))[0];
+  // ── E. Marca con historial: el último saco (con kárdex) se desactiva y la marca se DESACTIVA, no se borra ──
+  const sh = sn[0];
   await q("INSERT INTO sack_movements (sack_id, movement, cantidad, concepto) VALUES ($1, 'ENTRADA', 5, 'sim'), ($1, 'SALIDA', 5, 'sim')", [sh.id]);
   const d3 = exigir(await api("DELETE", `/sacks/${sh.id}`, undefined, matriz), "E1. eliminar un saco con kárdex lo DESACTIVA");
-  check(d3.resultado === "DESACTIVADO" && d3.marca_desactivada === true && (await prod(pid)).is_active === false, "E2. … y la marca se desactiva", d3);
+  check(d3.resultado === "DESACTIVADO" && d3.marca_desactivada === true && d3.marca_eliminada === false && (await prod(pid2))?.is_active === false,
+    "E2. … y la marca se DESACTIVA (tiene historial: no se borra)", d3);
   exigir(await api("PATCH", `/sacks/${sh.id}`, { activo: true }, matriz), "E3. Reactivar el saco");
-  check((await prod(pid)).is_active === true, "E4. … reactiva también la marca");
+  check((await prod(pid2)).is_active === true, "E4. … reactiva también la marca");
+  const dp = exigir(await api("DELETE", `/products/${pid2}`, undefined, matriz), "E5. 🗑 Eliminar producto con historial");
+  check(dp.resultado === "DESACTIVADO" && dp.usos.length > 0 && (await prod(pid2)).is_active === false, "E6. … NO se borra: se desactiva y dice dónde se usó", dp);
+
+  // ── E7. 🗑 Eliminar producto sin historial (un subproducto nuevo) lo borra ──
+  const sub = exigir(await api("POST", "/products/catalogo", { tipo: "BYPRODUCT", nombre: "Sim Subproducto", pesos: [100] }, matriz), "E7. se crea «Sim Subproducto»");
+  const ds = exigir(await api("DELETE", `/products/${sub.producto.id}`, undefined, matriz), "E8. 🗑 Eliminar producto");
+  check(ds.resultado === "ELIMINADO" && !(await prod(sub.producto.id)), "E9. sin historial se BORRA", ds);
 
   // ── F. Marca con pedido pendiente: el saco se quita pero la marca NO se desactiva (se avisa) ──
   const altaF = exigir(await api("POST", "/products/catalogo", { tipo: "PACKAGED_GOOD", nombre: "Sim Con Stock", calidad: "CORRIENTE", pesos: [100] }, matriz), "F0. marca «Sim Con Stock»");
@@ -103,6 +116,19 @@ try {
     const ajeno = await api("PATCH", `/sacks/${sp.id}/nombre`, { nombre: "Hack" }, matriz);
     check(ajeno.status === 403, "G4. la Matriz no puede renombrar el saco propio del socio (403)", ajeno.status);
   }
+
+  // ── H. Limpieza pedida por el dueño (en la copia): Extra, Lira Verde y 0.11 Selectado sin historial se BORRAN ──
+  for (const code of ["ARROZ-EXTRA", "ARROZ-LIRA-VERDE", "ARROZ-PILADO-011-SEL"]) {
+    const p = (await q("SELECT id, name FROM products WHERE code = $1", [code]))[0];
+    if (!p) { check(true, `H. ${code} no existe en la copia`); continue; }
+    const r = exigir(await api("DELETE", `/products/${p.id}`, undefined, matriz), `H1. 🗑 Eliminar «${p.name}»`);
+    check(r.resultado === "ELIMINADO" && !(await prod(p.id)), `H2. «${p.name}» se borró (no tenía historial)`, r);
+  }
+  const p011 = (await q("SELECT id, is_active FROM products WHERE code = 'ARROZ-PILADO-011'"))[0];
+  check(p011?.is_active === true, "H3. «Producto 0.11» sigue activo (hace de destino en Selección)");
+  exigir(await api("POST", "/sacks", { categoria: "MARCA", marca: "Extra", calidad: "0.11", pesos: [100, 25] }, matriz), "H4. si algún día se crea el saco «Extra» otra vez…");
+  const ex = (await q("SELECT p.id, p.is_active, (SELECT count(*)::int FROM sack_inventory s WHERE s.product_id = p.id) sacos FROM products p WHERE p.name = 'Extra'"))[0];
+  check(ex?.is_active && ex.sacos === 2, "H5. … la marca «Extra» se crea de nuevo enlazada con sus 2 sacos", ex);
 
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));

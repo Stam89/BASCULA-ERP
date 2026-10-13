@@ -180,7 +180,8 @@ sacksRouter.patch("/:id", requireAdmin, asyncRoute(async (req, res) => {
   // Reactivar el saco de una marca la vuelve a activar; desactivar el último la desactiva.
   if (body.activo === true) await reactivarMarcaDeSaco(client, String(req.params.id));
   if (body.activo === false && r.rows[0].categoria === "MARCA" && !r.rows[0].accionista_id) {
-    const m = await desactivarMarcaSinSacos(client, r.rows[0].product_id ?? null);
+    // Solo desactivar: el saco sigue en el catálogo (desactivado) y se puede reactivar.
+    const m = await desactivarMarcaSinSacos(client, r.rows[0].product_id ?? null, { permitirBorrar: false });
     return { ...r.rows[0], marca_desactivada: m.desactivada, aviso_marca: m.motivo ?? null };
   }
   return r.rows[0];
@@ -247,7 +248,7 @@ sacksRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
     const m = s.rows[0].categoria === "MARCA" && !s.rows[0].accionista_id
       ? await desactivarMarcaSinSacos(client, s.rows[0].product_id ?? null)
       : { desactivada: false, marca: undefined, motivo: undefined };
-    return { tipo: s.rows[0].tipo, resultado, marca_desactivada: m.desactivada, marca: m.marca ?? null, aviso_marca: m.motivo ?? null };
+    return { tipo: s.rows[0].tipo, resultado, marca_desactivada: m.desactivada, marca_eliminada: "eliminada" in m ? !!m.eliminada : false, marca: m.marca ?? null, aviso_marca: m.motivo ?? null };
   });
   res.json(result);
 }));

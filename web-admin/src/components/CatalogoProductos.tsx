@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { apiGet, apiPatch, apiPost } from "../api";
+import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
 
 // 🧺 CATÁLOGO DE PRODUCTOS (Configuración → Operación y Planta). Crea un producto y
 // lo ENLAZA con lo que necesita para funcionar, en un solo paso:
@@ -398,6 +398,31 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
   const nombreLimpio = nombre.replace(/\s+/g, " ").trim();
   const nombreSucio = nombreLimpio !== fila.name;
 
+  // Eliminar: si nunca se usó se borra con sus presentaciones y sacos (al volver a crear uno con
+  // el mismo nombre queda enlazado de nuevo); si tiene historial se desactiva.
+  async function eliminar() {
+    if (!window.confirm(`¿Eliminar «${fila.name}»?
+
+Si nunca se usó (pedidos, inventario, compras, procesos) se BORRA con sus presentaciones${esMarca ? " y sacos" : ""}.
+Si tiene historial se DESACTIVA para no romper ese historial.
+
+Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`)) return;
+    setOcupado(true);
+    try {
+      const r = await apiFetch(`/products/${fila.id}`, { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error ?? "No se pudo eliminar");
+      if (data.resultado === "ELIMINADO") avisar(`«${fila.name}» eliminado`, "success");
+      else avisar(`«${fila.name}» tiene historial (${(data.usos ?? []).join(", ")}): se desactivó en vez de borrarse`, "warn");
+      await onCambio();
+      onCerrar();
+    } catch (err) {
+      avisar(err instanceof Error ? err.message : "No se pudo eliminar", "error");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   async function ejecutar(accion: () => Promise<unknown>, ok: string) {
     setOcupado(true);
     try { await accion(); avisar(ok, "success"); await onCambio(); }
@@ -484,6 +509,15 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
                 Reactivar producto
               </button>
             )}
+          </div>
+        )}
+        {puedeEditar && (
+          <div className="buttonRow" style={{ marginTop: 8 }}>
+            <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} disabled={ocupado}
+              title="Si nunca se usó se borra; si tiene historial se desactiva"
+              onClick={() => void eliminar()}>
+              🗑 Eliminar producto
+            </button>
           </div>
         )}
         <div className="buttonRow"><button type="button" onClick={onCerrar}>Cerrar</button></div>
