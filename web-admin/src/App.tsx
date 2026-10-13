@@ -2342,6 +2342,7 @@ export function App() {
   const [secadorGuardia, setSecadorGuardia] = useState<SecadorGuardiaSemana | null>(null);
   const [secadorGuardiaDesde, setSecadorGuardiaDesde] = useState(() => semanaOperativaKey());
   const [secadorGuardiaBusy, setSecadorGuardiaBusy] = useState(false);
+  const [secadorasVista, setSecadorasVista] = useState<"operacion" | "guardia">("operacion");
   useEffect(() => {
     // Si la aplicación queda abierta del domingo al lunes, inicia la nueva
     // semana sin conservar en pantalla al responsable de la semana anterior.
@@ -3333,6 +3334,7 @@ export function App() {
   // Fase 2: al recibir, las salidas de un lote en proceso (por lote id).
   const [finishingBatchId, setFinishingBatchId] = useState<string | null>(null);
   const [finishOutputs, setFinishOutputs] = useState<LineDraft[]>([{ ...emptyLine }]);
+  const [finishLocation, setFinishLocation] = useState<"ALLA" | "PILADORA">("ALLA");
   const [newProviderForm, setNewProviderForm] = useState({ name: "", identification: "", phone: "" });
   const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
   // Personas externas: se editan en un modal desde Selección.
@@ -5725,7 +5727,7 @@ export function App() {
     await Promise.all([refreshSelection(), reloadStock()]);
   }
 
-  // FASE 2 — recibir lo procesado (ingresa las salidas al inventario).
+  // FASE 2 — registrar el resultado informado y su ubicación física.
   async function submitFinishBatch(batchId: string) {
     const outputs = finishOutputs
       .filter((l) => l.product_id && Number(l.quantity) > 0)
@@ -5752,13 +5754,13 @@ export function App() {
         }
         return { ...base, presentation: "TULA", empaque: "TULA" as const };
       });
-    if (outputs.length === 0) { addToast("Agrega al menos un producto que regresó", "error"); return; }
+    if (outputs.length === 0) { addToast("Agrega al menos un producto informado en el reporte", "error"); return; }
     if (finishOutputs.some((l) => Number(l.alla) > Number(l.quantity) + 0.0005)) { addToast("Lo que quedó allá no puede ser más que lo que salió de ese producto", "error"); return; }
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
     const batch = selectionBatches.find((b) => b.id === batchId);
-    const totalRecibido = outputs.reduce((sum, o) => sum + o.quantity, 0);
-    if (batch && totalRecibido > Number(batch.input_qq) + 0.001) {
-      addToast(`Lo recibido (${totalRecibido.enReal()} QQ) supera lo enviado (${Number(batch.input_qq).enReal()} QQ)`, "error");
+    const totalResultado = outputs.reduce((sum, o) => sum + o.quantity, 0);
+    if (batch && totalResultado > Number(batch.input_qq) + 0.001) {
+      addToast(`El resultado informado (${totalResultado.enReal()} QQ) supera lo enviado (${Number(batch.input_qq).enReal()} QQ)`, "error");
       return;
     }
     const cierre = await apiPost<{ sacos_propios?: Array<{ tipo: string; sacos: number; nuevo_stock: number }> }>(`/selection/batches/${batchId}/finish`, { outputs });
@@ -5767,9 +5769,12 @@ export function App() {
     setSelectionView("historial");
     const sp = cierre.sacos_propios ?? [];
     const qqAlla = outputs.reduce((s, o) => s + Number((o as { qty_alla?: number }).qty_alla ?? 0), 0);
+    const todoAlla = qqAlla >= totalResultado - 0.0005;
     addToast(
-      "Lote cerrado. Producto procesado ingresado al inventario." +
-      (qqAlla > 0 ? ` 📍 ${qqAlla.enReal()} QQ quedaron allá donde el proveedor (míralos en «En Proceso» y tráelos cuando lleguen).` : "") +
+      (todoAlla
+        ? `Reporte guardado. ${qqAlla.enReal()} QQ siguen donde ${batch?.provider_name ?? "el proveedor"}; todavía no están disponibles en la piladora.`
+        : "Recepción guardada. El producto que llegó ingresó al inventario de la piladora." +
+          (qqAlla > 0 ? ` 📍 ${qqAlla.enReal()} QQ continúan donde el proveedor; tráelos cuando lleguen.` : "")) +
       (sp.length ? ` Sacos descontados de tu inventario: ${sp.map((x) => `${x.sacos} × ${x.tipo} (quedan ${x.nuevo_stock})`).join(", ")}.` : ""),
       "success"
     );
@@ -13808,6 +13813,15 @@ Motivo (obligatorio):`, "");
 
         {activeTab === "Secadoras" && (
           <section className="panelGrid">
+            <div className="tablePanel" style={{ gridColumn: "1 / -1", padding: 8 }}>
+              <nav className="segmented" aria-label="Vistas de Secadoras">
+                <button type="button" className={secadorasVista === "operacion" ? "active" : ""} onClick={() => setSecadorasVista("operacion")}>🔥 Secado y túneles</button>
+                <button type="button" className={secadorasVista === "guardia" ? "active" : ""} onClick={() => setSecadorasVista("guardia")}>
+                  🌙 Guardia semanal{secadorSemana ? ` · ${secadorSemana}` : ""}
+                </button>
+              </nav>
+            </div>
+            {secadorasVista === "guardia" && (
             <div className="card" style={{ gridColumn: "1 / -1", padding: 16, border: "1px solid #bae6fd", background: "#f0f9ff" }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                 <div>
@@ -13853,6 +13867,8 @@ Motivo (obligatorio):`, "");
                 })}
               </div>
             </div>
+            )}
+            <div style={{ display: secadorasVista === "operacion" ? "contents" : "none" }}>
             {/* ── Acordeón operativo: 3 tarjetas expansibles. Colapsadas por
                   defecto (secadoraAbierta = null); el formulario correspondiente
                   solo aparece al hacer clic. Abrir un motor lo activa
@@ -14588,6 +14604,7 @@ Motivo (obligatorio):`, "");
                 </div>
               );
             })()}
+            </div>
           </section>
         )}
 
@@ -21350,7 +21367,13 @@ Motivo (obligatorio):`, "");
           const addInputLine = () => setSelectionForm((f) => ({ ...f, inputs: [...f.inputs, { ...emptyLine }] }));
           const removeInputLine = (i: number) => setSelectionForm((f) => ({ ...f, inputs: f.inputs.length > 1 ? f.inputs.filter((_, idx) => idx !== i) : f.inputs }));
           const setOutLine = (i: number, patch: Partial<LineDraft>) =>
-            setFinishOutputs((o) => o.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
+            setFinishOutputs((o) => o.map((l, idx) => {
+              if (idx !== i) return l;
+              const next = { ...l, ...patch };
+              return finishLocation === "ALLA" && patch.quantity !== undefined
+                ? { ...next, alla: patch.quantity }
+                : next;
+            }));
           const addOutLine = () => setFinishOutputs((o) => [...o, { ...emptyLine, sack_weight_lb: "100", empaque: "TULA" }]);
           const removeOutLine = (i: number) => {
             if (i === 0) return;
@@ -21362,6 +21385,7 @@ Motivo (obligatorio):`, "");
               ? (puedeEnvejecer ? productoEnvejecido?.id : undefined) ?? batch.inputs[0]?.product_id ?? ""
               : batch.inputs[0]?.product_id ?? "";
             setFinishingBatchId(batch.id);
+            setFinishLocation("ALLA");
             setFinishOutputs([{ ...emptyLine, product_id: productoInicial, sack_weight_lb: "100", empaque: "TULA" }]);
           };
 
@@ -21665,7 +21689,7 @@ Motivo (obligatorio):`, "");
                         {finishingBatchId === b.id ? (
                           <button type="button" className="btnGhost" onClick={() => setFinishingBatchId(null)}>Cerrar formulario</button>
                         ) : (
-                          <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b)}>📥 Registrar lo que regresó</button>
+                          <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b)}>📋 Registrar reporte / recepción</button>
                         )}
                         <button type="button" className="btnGhost" onClick={() => printTicketSalidaSeleccion(b)} title="Imprimir guía de salida de bodega">🖨️ Ticket de Salida</button>
                         <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>
@@ -21673,10 +21697,25 @@ Motivo (obligatorio):`, "");
 
                       {finishingBatchId === b.id && (
                         <div style={{ marginTop: 10, background: "#f9fafb", borderRadius: 8, padding: 10 }}>
-                          <span style={{ fontSize: 13, fontWeight: 700 }}>📥 Producto resultante</span>
+                          <span style={{ fontSize: 13, fontWeight: 700 }}>📋 Resultado informado por el proveedor</span>
                           <p className="muted" style={{ fontSize: 11.5, margin: "2px 0 4px" }}>
-                            Elige con qué nombre regresa el producto al inventario. Agrega debajo los subproductos o rechazos; la merma se calcula sola.
+                            Registra lo producido y confirma si todavía está donde el proveedor o si ya llegó físicamente a la piladora.
                           </p>
+                          <div className="segmented" style={{ margin: "10px 0 6px" }} aria-label="Ubicación física del resultado">
+                            <button type="button" className={finishLocation === "ALLA" ? "active" : ""} onClick={() => {
+                              setFinishLocation("ALLA");
+                              setFinishOutputs((o) => o.map((l) => ({ ...l, alla: l.quantity })));
+                            }}>📄 Solo recibí el reporte · sigue allá</button>
+                            <button type="button" className={finishLocation === "PILADORA" ? "active" : ""} onClick={() => {
+                              setFinishLocation("PILADORA");
+                              setFinishOutputs((o) => o.map((l) => ({ ...l, alla: "" })));
+                            }}>🏭 El producto ya llegó a la piladora</button>
+                          </div>
+                          <div style={{ padding: "8px 10px", borderRadius: 7, background: finishLocation === "ALLA" ? "#fff7ed" : "#ecfdf5", color: finishLocation === "ALLA" ? "#9a3412" : "#166534", fontSize: 12 }}>
+                            {finishLocation === "ALLA"
+                              ? `Se registra el rendimiento y la merma, pero el producto continúa en ${b.provider_name} y no queda disponible en la bodega de la piladora. Cuando llegue, usa «Traer a piladora».`
+                              : "El resultado ingresará al inventario físico de la piladora. Si una parte quedó allá, indícala en cada producto."}
+                          </div>
                           {finishOutputs.map((line, i) => (
                             <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 70px minmax(96px, 150px) auto auto", gap: 6, alignItems: "center", marginTop: 6 }}>
                               <span style={{ gridColumn: "1 / -1", fontSize: 11, fontWeight: 700, color: i === 0 ? "#166534" : "#64748b" }}>
@@ -21729,20 +21768,24 @@ Motivo (obligatorio):`, "");
                               )}
                               {i === 0 ? <span /> : <button type="button" onClick={() => removeOutLine(i)} title="Quitar" style={{ border: "none", background: "transparent", color: "#dc2626", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>}
                               {Number(line.quantity) > 0 && (
-                                <label className="selAlla">
-                                  <span>📍 De esto quedó allá ({b.provider_name}):</span>
-                                  <input type="number" step="0.01" min="0" max={line.quantity} placeholder="0" value={line.alla ?? ""} onChange={(e) => setOutLine(i, { alla: e.target.value })} />
-                                  <span>QQ</span>
-                                  <button type="button" onClick={() => setOutLine(i, { alla: line.quantity })}>Todo</button>
-                                  {Number(line.alla) > 0 && <small>🏭 llegan {Math.max(0, (Number(line.quantity) || 0) - (Number(line.alla) || 0)).enReal()} a la piladora</small>}
-                                </label>
+                                finishLocation === "ALLA" ? (
+                                  <div className="selAlla">
+                                    <span>📍 Todo continúa allá: {Number(line.quantity).enReal()} QQ</span>
+                                  </div>
+                                ) : (
+                                  <label className="selAlla">
+                                    <span>📍 De esto quedó allá ({b.provider_name}):</span>
+                                    <input type="number" step="0.01" min="0" max={line.quantity} placeholder="0" value={line.alla ?? ""} onChange={(e) => setOutLine(i, { alla: e.target.value })} />
+                                    <span>QQ</span>
+                                    <button type="button" onClick={() => setOutLine(i, { alla: line.quantity })}>Todo</button>
+                                    {Number(line.alla) > 0 && <small>🏭 llegaron {Math.max(0, (Number(line.quantity) || 0) - (Number(line.alla) || 0)).enReal()} QQ</small>}
+                                  </label>
+                                )
                               )}
                             </div>
                           ))}
                           <div style={{ marginTop: 8 }}>
                             <button type="button" onClick={addOutLine} style={{ background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "5px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar subproducto</button>
-                            <button type="button" className="selAllaTodo" onClick={() => setFinishOutputs((o) => o.map((l) => ({ ...l, alla: l.quantity })))}>📍 Todo quedó allá</button>
-                            <button type="button" className="selAllaTodo" onClick={() => setFinishOutputs((o) => o.map((l) => ({ ...l, alla: "" })))}>🏭 Todo llegó a la piladora</button>
                           </div>
                           {/* Resumen de recepción: QQ Limpios / Subproducto / Merma (auto). */}
                           {(() => {
@@ -21763,7 +21806,7 @@ Motivo (obligatorio):`, "");
                               <div style={{ marginTop: 8, border: "1px solid #e2e8f0", borderRadius: 8, background: "#fff" }}>
                                 <div style={{ display: "grid", gridTemplateColumns: `repeat(${rechazo > 0 ? 5 : 4}, 1fr)`, gap: 0 }}>
                                   {cell("Enviados", enviados, "#334155")}
-                                  {cell("Limpios recibidos", limpios, "#15803d")}
+                                  {cell("Resultado limpio", limpios, "#15803d")}
                                   {cell("Subproducto", sub, "#b45309")}
                                   {rechazo > 0 && cell("Rechazo", rechazo, "#6b7280")}
                                   {cell("Merma / Desecho", merma, merma > 0.001 ? "#b91c1c" : "#15803d")}
@@ -21776,7 +21819,9 @@ Motivo (obligatorio):`, "");
                               </div>
                             );
                           })()}
-                          <button type="button" className="primary" style={{ marginTop: 8 }} onClick={() => submitFinishBatch(b.id).catch((err) => addToast(err.message, "error"))}>Guardar e ingresar al inventario</button>
+                          <button type="button" className="primary" style={{ marginTop: 8 }} onClick={() => submitFinishBatch(b.id).catch((err) => addToast(err.message, "error"))}>
+                            {finishLocation === "ALLA" ? "Guardar reporte · producto sigue allá" : "Guardar recepción en piladora"}
+                          </button>
                         </div>
                       )}
                     </div>
@@ -21795,7 +21840,7 @@ Motivo (obligatorio):`, "");
               ) : (
                 <div style={{ overflowX: "auto" }}>
                   <table className="cajaTable" style={{ marginTop: 6 }}>
-                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Estado</th><th>Enviado</th><th>Productos resultantes</th><th>Regresó</th><th>Merma</th><th>Costo</th><th>Saldo</th>{canAnular && <th />}</tr></thead>
+                    <thead><tr><th>#</th><th>Fecha</th><th>Persona</th><th>Estado</th><th>Enviado</th><th>Productos resultantes</th><th>Resultado</th><th>Merma</th><th>Costo</th><th>Saldo</th>{canAnular && <th />}</tr></thead>
                     <tbody>
                       {historyBatches.map((b) => (
                         <tr key={b.id}>
