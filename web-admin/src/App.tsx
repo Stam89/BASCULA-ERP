@@ -2668,6 +2668,11 @@ export function App() {
   const [movProveedor, setMovProveedor] = useState("");
   const [movModalidad, setMovModalidad] = useState<"CONTADO" | "CREDITO">("CONTADO");
   const [movVence, setMovVence] = useState("");
+  // Mantiene el egreso cotidiano corto. Los datos avanzados siguen montados y
+  // conservan exactamente el mismo flujo; el usuario los despliega cuando aplican.
+  const [movOpcionesOpen, setMovOpcionesOpen] = useState(false);
+  const movOpcionesActivas = movOpcionesOpen || !!movSubcategoria.trim() || movEsFondo
+    || !!movProveedor.trim() || movModalidad === "CREDITO" || !!movVence;
   const [proveedoresCaja, setProveedoresCaja] = useState<Array<{ id: string; name: string }>>([]);
   const [cajaCreditos, setCajaCreditos] = useState<CajaCredito[]>([]);
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
@@ -9583,6 +9588,7 @@ export function App() {
       safeResetForm(formElement);
       setMovCategory("");
       setMovPayableId("");
+      setMovOpcionesOpen(false);
       return;
     }
     // INGRESO ligado a un SERVICIO (Cuenta por Cobrar): el ingreso se registra como
@@ -9599,6 +9605,7 @@ export function App() {
       setMovMedio("EFECTIVO");
       safeResetForm(formElement);
       setMovCategory(""); setMovReceivableId("");
+      setMovOpcionesOpen(false);
       addToast("Abono registrado: ingreso a caja y saldo de la cuenta reducido.", "success");
       await refreshCaja(registerId);
       await refresh();
@@ -9613,6 +9620,7 @@ export function App() {
       await submitEquipmentMaintenance(fileInput?.files?.[0]);
       // submitEquipmentMaintenance limpia su form, refresca caja e historial.
       setMovCategory("");
+      setMovOpcionesOpen(false);
       return;
     }
     // ── Categoría COMPRA DE SACOS: usa el widget COMPLETO embebido (lista con
@@ -9622,6 +9630,7 @@ export function App() {
       if (sackCart.length === 0) throw new Error("Agrega al menos un saco a la lista.");
       await confirmarCompraSacos(); // limpia carrito, refresca sacos y caja
       setMovCategory("");
+      setMovOpcionesOpen(false);
       return;
     }
     // ── Categoría REPUESTOS con lista: la compra entra al INVENTARIO DE REPUESTOS
@@ -9656,6 +9665,7 @@ export function App() {
       safeResetForm(formElement);
       setRepCart([]); setRepSel(null); setRepFactura(""); setMovCategory(""); setMovSubcategoria("");
       setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
+      setMovOpcionesOpen(false);
       setRepDestino("INVENTARIO"); setRepUbicacion(""); setMovMaquinaId("");
       const destinos = [
         r.total_bodega > 0 ? `${money(r.total_bodega)} a bodega` : "",
@@ -9716,6 +9726,7 @@ export function App() {
     setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
     setMovActivo({ nombre: "", tipo: "MAQUINARIA" });
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
+    setMovOpcionesOpen(false);
     await loadSubcategorias(); // refresca la memoria del datalist
     addToast(
       creado.credito
@@ -18531,24 +18542,26 @@ Motivo (obligatorio):`, "");
                 {/* ── Registrar movimiento (consolidado) ── */}
                 {cajaSubTab === "movimiento" && (
                   <form className="cj-card cj-form cj-col-form" onSubmit={(event) => submitCajaMovimiento(event).catch((e) => addToast(e.message, "error"))}>
-                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>💳 Registrar movimiento</h2>
-
-                    <fieldset style={{ border: "none", padding: 0, margin: 0, marginBottom: 16 }}>
-                      <legend style={{ fontSize: 13, fontWeight: 600, marginBottom: 10, display: "block" }}>Tipo de movimiento</legend>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="EXPENSE" checked={movType === "EXPENSE"} onChange={() => { setMovType("EXPENSE"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); }} style={{ cursor: "pointer" }} />
-                          <span style={{ fontWeight: 600 }}>⬇ Egreso</span>
-                        </label>
-                        <label style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", border: "1px solid #e5e7eb", borderRadius: 6, cursor: "pointer" }}>
-                          <input type="radio" name="movement" value="INCOME" checked={movType === "INCOME"} onChange={() => { setMovType("INCOME"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); }} style={{ cursor: "pointer" }} />
-                          <span style={{ fontWeight: 600 }}>⬆ Ingreso</span>
-                        </label>
+                    <div className="cj-mov-head">
+                      <div>
+                        <h2>Registrar en caja</h2>
+                        <p>{movType === "EXPENSE" ? "Anota una salida de dinero" : "Anota una entrada de dinero"}</p>
                       </div>
-                    </fieldset>
+                      <div className="cj-mov-type" role="group" aria-label="Tipo de movimiento">
+                        <button type="button" className={movType === "EXPENSE" ? "is-active is-expense" : ""} aria-pressed={movType === "EXPENSE"}
+                          onClick={() => { setMovType("EXPENSE"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false); }}>
+                          ↓ Egreso
+                        </button>
+                        <button type="button" className={movType === "INCOME" ? "is-active is-income" : ""} aria-pressed={movType === "INCOME"}
+                          onClick={() => { setMovType("INCOME"); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId(""); setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false); }}>
+                          ↑ Ingreso
+                        </button>
+                      </div>
+                    </div>
+                    <input type="hidden" name="movement" value={movType} />
 
-                    <label style={{ display: "block", marginBottom: 16 }}>
-                      <span style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Categoría {cfgLink("🏷️ Categorías de caja", "Categorías")}</span>
+                    <label className="cj-mov-step">
+                      <span className="cj-mov-step__label"><b>1</b>{movType === "EXPENSE" ? "¿Qué se pagó?" : "¿Qué ingreso recibió?"} {cfgLink("🏷️ Categorías", "Categorías")}</span>
                       {(() => {
                         const activeTipo = accionistas.find((a) => a.id === activeAccionistaId)?.tipo;
                         const esSocio = activeTipo === "SOCIO";
@@ -18557,6 +18570,10 @@ Motivo (obligatorio):`, "");
                         const visibles = cashCategories.filter((c) => c.activo && c.tipo === esteTipo && (esSocio
                           ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS" || (c.codigo === "COMPRA_SACOS" && manejaSacosPropios))
                           : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
+                        const esGuiada = (codigo: string) => codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
+                          || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo);
+                        const rapidas = visibles.filter((c) => !esGuiada(c.codigo));
+                        const guiadas = visibles.filter((c) => esGuiada(c.codigo));
                         return (
                           <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => {
                             const nextCategory = e.target.value;
@@ -18565,12 +18582,25 @@ Motivo (obligatorio):`, "");
                             setMovPayableId("");
                             setMovMaquinaId("");
                           }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                            <option value="">Seleccione una categoría</option>
-                            {visibles.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
+                            <option value="">Seleccione una opción</option>
+                            {rapidas.length > 0 && <optgroup label={movType === "EXPENSE" ? "EGRESOS FRECUENTES" : "INGRESOS"}>
+                              {rapidas.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
+                            </optgroup>}
+                            {guiadas.length > 0 && <optgroup label="COMPRAS Y PROCESOS ESPECIALES">
+                              {guiadas.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
+                            </optgroup>}
                           </select>
                         );
                       })()}
                     </label>
+
+                    {movType === "EXPENSE" && movCategory && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && (
+                      <button type="button" className={`cj-mov-more${movOpcionesActivas ? " is-open" : ""}`}
+                        aria-expanded={movOpcionesActivas} onClick={() => setMovOpcionesOpen((open) => !open)}>
+                        <span><strong>Más opciones</strong><small>Proveedor, crédito, subcategoría o fondo</small></span>
+                        <span aria-hidden="true">{movOpcionesActivas ? "−" : "+"}</span>
+                      </button>
+                    )}
 
                     {/* INGRESO · Ligar a un servicio (Cuenta por Cobrar): el ingreso se
                         registra como ABONO y reduce el saldo de esa cuenta. */}
@@ -18596,7 +18626,7 @@ Motivo (obligatorio):`, "");
 
                     {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
                         las escritas antes y se guarda cada término nuevo. */}
-                    {cashCategoryAllowsSubcategory(movCategory, cashCategories) && !CATEGORIAS_SIN_SUBCATEGORIA.has(movCategory) && <label style={{ display: "block", marginBottom: 16 }}>
+                    {cashCategoryAllowsSubcategory(movCategory, cashCategories) && !CATEGORIAS_SIN_SUBCATEGORIA.has(movCategory) && <label className={`cj-mov-advanced ${movType !== "EXPENSE" || !!CASH_REUSE[movCategory] || esCategoriaSacos(movCategory) || movOpcionesActivas ? "is-open" : ""}`} style={{ marginBottom: 16 }}>
                       <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Subcategoría <span className="muted" style={{ fontWeight: 400 }}>(opcional, se recuerda)</span></span>
                       <input list="subcatGastosList" value={movSubcategoria} onChange={(e) => setMovSubcategoria(e.target.value)}
                         placeholder="Ej: Alimentación, Filtros, Fletes, Herramientas"
@@ -18851,7 +18881,7 @@ Motivo (obligatorio):`, "");
                         Por Liquidar a nombre de un responsable. (En Mantenimiento va dentro
                         de su bloque «Monto y comprobante»; no aplica a una lista de repuestos.) */}
                     {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && !(movCategory === "REPUESTOS" && repCart.length > 0) && (
-                      <div style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
+                      <div className={`cj-mov-advanced ${!!CASH_REUSE[movCategory] || esCategoriaSacos(movCategory) || movOpcionesActivas ? "is-open" : ""}`} style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                           <input type="checkbox" checked={movEsFondo} onChange={(e) => { setMovEsFondo(e.target.checked); if (e.target.checked) setMovModalidad("CONTADO"); }} style={{ width: "auto" }} />
                           ☑️ Rendir cuentas (Fondo provisional)
@@ -19037,7 +19067,7 @@ Motivo (obligatorio):`, "");
                         </label>
                       );
                       return (
-                        <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16, display: "grid", gap: 10, background: credito ? "#faf5ff" : "transparent" }}>
+                        <div className={`cj-mov-advanced ${movOpcionesActivas ? "is-open" : ""}`} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16, gap: 10, background: credito ? "#faf5ff" : "transparent" }}>
                           <label style={{ fontSize: 13, fontWeight: 600 }}>
                             <span style={{ display: "block", marginBottom: 4 }}>🏪 Proveedor {credito ? "*" : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
                             <input list="proveedoresCajaList" value={movProveedor} onChange={(e) => setMovProveedor(e.target.value)}
@@ -19176,8 +19206,9 @@ Motivo (obligatorio):`, "");
 
                     {/* Descripción y Monto genéricos: se OCULTAN en Sacos y Mantenimiento,
                         que traen su propio detalle y su propio monto total. */}
-                    {movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
-                      <>
+                    {(movCategory || (movType === "INCOME" && movReceivableId)) && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && (
+                      <div className="cj-mov-core">
+                        <div className="cj-mov-step__label"><b>2</b>Detalle y valor</div>
                         <Input name="description" required={false}
                           label={movCategory === CATEGORIA_MATERIALES ? "Descripción / Detalle del trabajo (opcional)" : "Descripción (opcional)"}
                           placeholder={movCategory === CATEGORIA_MATERIALES ? "Ej: Compra de soldadura y pernos" : undefined} />
@@ -19188,24 +19219,26 @@ Motivo (obligatorio):`, "");
                             <input readOnly tabIndex={-1} value={repCartTotal.enReal()} aria-readonly="true" className="montoAuto" />
                           </label>
                         ) : <Input name="amount" label="Monto $" type="number" />}
-                      </>
+                      </div>
                     )}
-                    {dashboard.current_cash_register?.tipo === "MIXTO"
+                    {(movCategory || (movType === "INCOME" && movReceivableId)) && dashboard.current_cash_register?.tipo === "MIXTO"
                       && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME") && (
                       <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
-                        <span>¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
+                        <span><i>3</i> ¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
                         <label className={movMedio === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={movMedio === "EFECTIVO"} onChange={() => setMovMedio("EFECTIVO")} /> 💵 Efectivo</label>
                         <label className={movMedio === "BANCO" ? "is-on" : ""}><input type="radio" checked={movMedio === "BANCO"} onChange={() => setMovMedio("BANCO")} /> 🏦 Banco / transferencia</label>
                       </div>
                     )}
                     <button className="primary"
-                      disabled={CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (CASH_REUSE[movCategory] === "agricultor" && !movPayableId)
+                      disabled={(!movCategory && !(movType === "INCOME" && movReceivableId)) || CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (CASH_REUSE[movCategory] === "agricultor" && !movPayableId)
                         || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)
                         || (movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId)}
                       title={CASH_REUSE[movCategory] === "agricultor" && !movPayableId ? "Elige la liquidación que se paga (así baja la deuda con el agricultor)"
                         : movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar ? "El total a descontar de caja es $0.00"
                         : movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId ? "Elige el equipo / máquina" : undefined}
-                      style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>💾 Registrar movimiento</button>
+                      style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>
+                      {movType === "INCOME" ? "Registrar ingreso" : movModalidad === "CREDITO" ? "Guardar en Por Pagar" : movEsFondo ? "Entregar fondo" : "Registrar egreso"}
+                    </button>
                   </form>
                 )}
 

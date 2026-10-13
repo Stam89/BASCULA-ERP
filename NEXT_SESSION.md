@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-12
+Actualizado: 2026-10-13
 
 ## Inicio rapido
 
@@ -48,6 +48,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### 💵 Caja: egreso corto y opciones progresivas (2026-10-13, pedido del dueño)
+
+- «Registrar en caja» usa un selector compacto Egreso / Ingreso y guía el movimiento en pasos: categoría, detalle/valor y medio de pago. Las categorías frecuentes aparecen primero y mantenimiento, repuestos, activos, materiales y sacos quedan agrupados como procesos especiales.
+- En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
+- El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
 ### ⚖️ Báscula en pestañas (2026-10-13, pedido del dueño)
 

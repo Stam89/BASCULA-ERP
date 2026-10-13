@@ -4275,6 +4275,26 @@ textarea::placeholder {
 .cj-form fieldset label { border-radius: 10px !important; transition: border-color .15s, background .15s; }
 .cj-form fieldset label:has(input:checked) { border-color: #3b82f6 !important; background: #eff6ff; }
 .cj-form button.primary { border-radius: 10px; height: 44px; font-weight: 700; }
+.cj-mov-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.cj-mov-head h2 { margin: 0 !important; }
+.cj-mov-head p { margin: 4px 0 0; color: #64748b; font-size: 12.5px; }
+.cj-mov-type { display: inline-grid; grid-template-columns: 1fr 1fr; gap: 3px; min-width: 190px; padding: 3px; border: 1px solid #dbe3ec; border-radius: 9px; background: #f1f5f9; }
+.cj-mov-type button { min-height: 34px; padding: 6px 12px; border: 0; border-radius: 7px; background: transparent; color: #64748b; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.cj-mov-type button.is-active { background: #fff; color: #0f172a; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); }
+.cj-mov-type button.is-expense { color: #b91c1c; }
+.cj-mov-type button.is-income { color: #047857; }
+.cj-mov-step { display: block; margin-bottom: 12px; }
+.cj-mov-step__label { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: #334155; font-size: 13px; font-weight: 700; }
+.cj-mov-step__label > b, .cjMedio > span > i { display: inline-grid; place-items: center; width: 21px; height: 21px; flex: 0 0 21px; border-radius: 50%; background: #e2e8f0; color: #334155; font-style: normal; font-size: 11px; }
+.cj-mov-more { display: flex; align-items: center; justify-content: space-between; width: 100%; margin: -2px 0 16px; padding: 9px 11px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #f8fafc; color: #475569; text-align: left; cursor: pointer; }
+.cj-mov-more:hover, .cj-mov-more.is-open { border-color: #94a3b8; background: #f1f5f9; }
+.cj-mov-more > span:first-child { display: grid; gap: 1px; }
+.cj-mov-more strong { font-size: 12.5px; }
+.cj-mov-more small { color: #64748b; font-size: 11px; font-weight: 400; }
+.cj-mov-more > span:last-child { font-size: 20px; line-height: 1; }
+.cj-mov-advanced { display: none !important; }
+.cj-mov-advanced.is-open { display: grid !important; }
+.cj-mov-core { display: grid; gap: 10px; margin-top: 4px; }
 
 @media (max-width: 1100px) {
   .cj-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -4286,6 +4306,8 @@ textarea::placeholder {
   .cj-toolbar { flex-direction: column; align-items: stretch; }
   .cj-toolbar-group { justify-content: space-between; }
   .cj-menu, .cj-menu--right { left: 0; right: auto; min-width: min(280px, calc(100vw - 48px)); }
+  .cj-mov-head { display: grid; }
+  .cj-mov-type { width: 100%; min-width: 0; }
 }
 /* Movimientos junto al formulario: la tabla se desplaza en horizontal en vez de cortarse. */
 .cj-col-list > div:not(.cj-panel-head) { overflow-x: auto; }
