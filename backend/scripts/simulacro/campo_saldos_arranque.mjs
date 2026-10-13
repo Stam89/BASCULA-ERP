@@ -10,6 +10,8 @@ const exigir = (r, msg) => { check(r.ok, msg, r.ok ? undefined : mostrar(r)); if
 const CORTE = "2026-09-30";
 
 try {
+  // La base real ya puede tener su saldo inicial del banco: en la COPIA se quita para probar desde cero.
+  await q("DELETE FROM campo_movimientos WHERE naturaleza = 'saldo_inicial'");
   const stalyn = (await q("SELECT id FROM accionistas WHERE name='STALYN'"))[0].id;
   const est0 = exigir(await api("GET", "/campo/config/estado", undefined, matriz), "0. estado de la configuración");
   check(typeof est0.flota === "number" && typeof est0.saldos_cobrar === "number", "0b. trae flota, operadores, tarifas, categorías, caja y saldos", est0);

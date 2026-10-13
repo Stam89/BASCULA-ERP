@@ -676,8 +676,8 @@ campoRouter.post("/movimientos", asyncRoute(async (req, res) => {
     const concepto = [catNombre, parsed.concepto?.trim()].filter(Boolean).join(" · ") || null;
     const nuevo = (await pool.query(
       `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen, lectura, unidad_lectura, cliente_id)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10,
-               (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2)) LIMIT 1)) RETURNING id`,
+       VALUES (COALESCE($1::date, CURRENT_DATE), $2::text, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10,
+               (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2::text)) LIMIT 1)) RETURNING id`,
       [parsed.fecha ?? null, proveedor.toUpperCase(), concepto, parsed.monto, userId(req),
        parsed.categoria_id ?? null, parsed.activo_id ?? null, parsed.vence ?? null, lectura, unidadLectura]
     )).rows[0];
@@ -2739,8 +2739,9 @@ campoRouter.post("/saldos-iniciales/pagar", asyncRoute(async (req, res) => {
   }).parse(req.body);
   const row = (await pool.query(
     `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, origen, cliente_id)
-     VALUES ($1, $2, $3, $4, $5, 'SALDO_INICIAL',
-             (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2)) LIMIT 1)) RETURNING id`,
+     VALUES ($1, $2::text, $3, $4, $5, 'SALDO_INICIAL',
+             -- $2::text en ambos lados: sin el cast Postgres deduce varchar y text para el mismo parámetro (42P08).
+             (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2::text)) LIMIT 1)) RETURNING id`,
     [body.fecha, body.acreedor.toUpperCase(), `Saldo inicial (deuda de antes del sistema)${body.nota ? ` · ${body.nota}` : ""}`,
      Math.round(body.monto * 100) / 100, userId(req)]
   )).rows[0];

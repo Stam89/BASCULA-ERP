@@ -85,6 +85,12 @@ try {
   exigir(await api("DELETE", `/campo/documentos/${dVencido.id}`, undefined, matriz), "B23. Quitar un documento");
   check(!(await q("SELECT 1 FROM campo_documentos WHERE id = $1", [dVencido.id])).length, "B24. … se borró");
 
+  // ── C. Regresión: gasto A CRÉDITO y deuda de arranque (fallaban con 500 por el tipo del parámetro del acreedor) ──
+  const cred = await api("POST", "/campo/movimientos", { signo: "salida", monto: 12.5, concepto: "repuesto", proveedor: "Sim Taller Credito", modalidad_pago: "CREDITO" }, matriz);
+  check(cred.status === 201, "C1. un gasto a crédito se registra (Por Pagar de Transporte)", mostrar(cred));
+  const arr = await api("POST", "/campo/saldos-iniciales/pagar", { acreedor: "Sim Taller Arranque", monto: 30, fecha: "2026-09-30" }, matriz);
+  check(arr.status === 201, "C2. una deuda de arranque de Transporte se registra", mostrar(arr));
+
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
