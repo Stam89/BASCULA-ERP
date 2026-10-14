@@ -2,12 +2,23 @@
 
 Actualizado: 2026-10-14
 
+## Último cambio: Nómina del secador desde el encendido
+
+- El pago automático del rol `SECADOR` suma el valor por túnel desde que existe
+  `dry_start_at`; ya no espera a finalizar el secado.
+- Se conserva una sola guardianía por trabajador y día. La carga mixta no
+  duplica pagos porque se cuentan túneles físicos distintos.
+- `20261097_secador_pago_al_encender.sql` recalcula solo pagos `PENDING`; nunca
+  modifica pagos ya realizados.
+- Caso real auditado: MARGARO tenía tres túneles iniciados y figuraba con cero
+  túneles / `$10.00`; con las tarifas actuales debe quedar en tres / `$25.00`.
+
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Cuentas por Pagar muestra el motivo operativo, agricultor y acreedor/prestador en vez del numero tecnico de liquidacion; Liquidaciones se adapta mejor a celular.
+- Ultimo cambio funcional: Nómina del secador reconoce y paga los túneles desde el encendido del motor.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.

@@ -185,10 +185,11 @@ function fmtInicio(value: unknown): string {
 // AUTOMATIZACIÓN NÓMINA · SECADOR. Genera/actualiza AUTOMÁTICAMENTE el pago del
 // operador ('Secador', ej. MARGARO) en worker_payments (Nómina → Pagos
 // pendientes), consolidando en UN SOLO registro por empleado y DÍA (guardianía +
-// $/túnel × túneles finalizados).
+// $/túnel × túneles que ya encendieron). El pago nace al guardar la hora de
+// inicio; no espera al cierre, porque el trabajo del secador ya comenzó.
 // REGLA #1 (pilotaje): la jornada se registra desde que el secado INICIA (se
 // guarda la hora de inicio), no solo al finalizar. Al iniciar queda la guardianía
-// del día; cada túnel que se finaliza suma su $/túnel al MISMO registro. Encender
+// del día y cada túnel iniciado suma su $/túnel al MISMO registro. Encender
 // otra máquina el mismo día no duplica la guardianía.
 // REUBICAR: si se corrige la fecha (o el secador) de una corrida ya iniciada, la
 // fila PENDIENTE que quedó huérfana se MUEVE al nuevo día/secador (conserva sus
@@ -228,12 +229,15 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
     return;
   }
 
-  // Túneles distintos YA finalizados de esta CORRIDA (misma fecha de llenado) y
-  // mismo secador → una sola guardianía + $/túnel por los túneles hechos.
+  // Túneles físicos distintos que YA INICIARON de esta corrida (misma fecha de
+  // llenado) y mismo secador. Una carga mixta puede crear varios reportes para
+  // un mismo túnel, por eso se usa DISTINCT y nunca se paga doble ese túnel.
   const t = await client.query(
     `SELECT COUNT(DISTINCT tunnel_number)::int AS tunnels
      FROM drying_tunnel_reports
-     WHERE status = 'COMPLETED'
+     WHERE dry_start_at IS NOT NULL
+       AND COALESCE(dry_method, 'TUNEL') = 'TUNEL'
+       AND tunnel_number IS NOT NULL
        AND btrim(COALESCE(operator_name, '')) = $1
        AND COALESCE(filled_at, dry_start_at::date, created_at::date) = $2::date`,
     [worker, workDate]
@@ -246,7 +250,7 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
   const base = round2(guardiania + perTunel * tunnels);
 
   const inicio = fmtInicio(rep.dry_start_at ?? rep.filled_at ?? rep.created_at);
-  const notes = `Secado - Inicio: ${inicio || workDate} · Guardianía${tunnels ? ` + ${tunnels} túnel(es)` : ""}`;
+  const notes = `Secado - Inicio: ${inicio || workDate} · Guardianía${tunnels ? ` + ${tunnels} túnel(es) iniciado(s)` : ""}`;
 
   // Filas HUÉRFANAS que pertenecen a este secador+día: PENDIENTES, cuyo propio
   // (secador, día) ya no tiene ningún túnel iniciado/finalizado, y cuyo reporte
