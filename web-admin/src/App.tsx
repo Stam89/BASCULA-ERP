@@ -11125,8 +11125,9 @@ export function App() {
     let presentation: string;
     let tulas: number | undefined;
     if (millingPiladoDestino === "TULA") {
+      if (millingPiladoTulas.trim() === "") return null;
       const count = Number(millingPiladoTulas);
-      if (!Number.isFinite(count) || count <= 0) return null;
+      if (!Number.isFinite(count) || count < 0) return null;
       presentation = "🧺 Tula";
       tulas = count;
     } else {
@@ -11143,10 +11144,17 @@ export function App() {
   // Auto-captura: si hay un QQ escrito sin añadir, lo incorpora a las entradas y
   // limpia los inputs. Devuelve la lista EFECTIVA (con el renglón ya incluido)
   // para usarla en el mismo tick, sin esperar al re-render del estado.
-  function flushPendingPiladoEntry(): MillingPiladoEntry[] {
+  function confirmarTulasEnCero(): boolean {
+    return window.confirm(
+      "⚠️ Ha colocado 0 tulas.\n\nEl arroz pilado sí se registrará, pero esta línea no generará pago por tulas al estibador.\n\n¿Desea continuar?"
+    );
+  }
+
+  function flushPendingPiladoEntry(): MillingPiladoEntry[] | null {
     const base = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
     const pending = buildPendingPiladoEntry();
     if (!pending) return base;
+    if (pending.destino === "TULA" && pending.tulas === 0 && !confirmarTulasEnCero()) return null;
     const eff = [...base, pending];
     setMillingPiladoEntries(eff);
     setMillingPiladoQq("");
@@ -11168,11 +11176,16 @@ export function App() {
     if (millingPiladoDestino === "TULA") {
       // Línea en TULAS (va a Selección). Se captura el N.º de tulas para el pago
       // del estibador; la presentación queda como "Tula".
-      const count = Number(millingPiladoTulas);
-      if (!Number.isFinite(count) || count <= 0) {
+      if (millingPiladoTulas.trim() === "") {
         setMessage("Ingrese la cantidad de tulas de esta línea");
         return;
       }
+      const count = Number(millingPiladoTulas);
+      if (!Number.isFinite(count) || count < 0) {
+        setMessage("La cantidad de tulas no puede ser negativa");
+        return;
+      }
+      if (count === 0 && !confirmarTulasEnCero()) return;
       presentation = "🧺 Tula";
       tulas = count;
     } else {
@@ -11226,6 +11239,7 @@ export function App() {
     }
     // Auto-captura del QQ escrito sin añadir, para no perderlo en el borrador.
     const effEntries = flushPendingPiladoEntry();
+    if (!effEntries) return;
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
       report: millingReport,
       pilado_entries: effEntries
@@ -11667,6 +11681,7 @@ Motivo (obligatorio):`, "");
     // pulsado [+ Añadir]. effEntries/effTotalQq/effMix son la producción EFECTIVA
     // (con ese renglón ya incluido), usable en este mismo tick.
     const effEntries = flushPendingPiladoEntry();
+    if (!effEntries) return;
     const effTotalQq = effEntries.reduce((sum, e) => sum + e.quantityQq, 0);
     const effMix = computeMillingMix(effEntries);
     const effSubproductosQq =
@@ -11678,6 +11693,9 @@ Motivo (obligatorio):`, "");
       showFinalizeValidation("Registre al menos una salida real: arroz pilado, arrocillo o polvillo");
       return;
     }
+    if (effTotalQq <= 0 && !window.confirm(
+      `⚠️ No ha registrado arroz pilado.\n\nSolo constan ${effSubproductosQq.enReal()} QQ de subproductos. Si finaliza, el lote quedará cerrado con 0 QQ de arroz blanco.\n\n¿Confirma que este resultado es correcto?`
+    )) return;
 
     const inputProduct = src.rice_type === "CORRIENTE" ? rawProductCorriente : rawProduct011;
     const outputProduct = src.rice_type === "CORRIENTE" ? whiteRiceCorrienteProduct : whiteRiceProduct;
@@ -16200,8 +16218,8 @@ Motivo (obligatorio):`, "");
                     ) : (
                       <label>
                         <span>N.º de tulas</span>
-                        <input min="1" step="1" type="number" value={millingPiladoTulas}
-                          onChange={(event) => setMillingPiladoTulas(event.target.value)} placeholder="Ej: 6" />
+                        <input min="0" step="1" type="number" value={millingPiladoTulas}
+                          onChange={(event) => setMillingPiladoTulas(event.target.value)} placeholder="0 permitido" />
                       </label>
                     )}
                     <label>
@@ -16225,7 +16243,7 @@ Motivo (obligatorio):`, "");
                       <div className="dryerEntryRow" key={entry.id}>
                         <strong>
                           {entry.destino === "TULA" ? "🧺 Tula" : `📦 ${entry.presentation}`}
-                          {entry.destino === "TULA" && entry.tulas ? <span className="muted" style={{ fontWeight: 400 }}> · {entry.tulas} tula(s)</span> : null}
+                          {entry.destino === "TULA" && entry.tulas != null ? <span className="muted" style={{ fontWeight: 400 }}> · {entry.tulas} tula(s)</span> : null}
                         </strong>
                         <span>{entry.quantityQq.enReal()} QQ</span>
                         <button type="button" onClick={() => removeMillingPiladoEntry(entry.id)}>
@@ -16236,31 +16254,11 @@ Motivo (obligatorio):`, "");
                   </section>
                   </div>
                   <div className="productionOutputPanel productionByproductPanel">
-                  <div className="productionSubsectionTitle"><span>Subproductos</span><small>QQ obtenidos y libras por saco</small></div>
+                  <div className="productionSubsectionTitle"><span>Subproductos</span><small>QQ obtenidos</small></div>
                   <div className="productionSackGrid">
                     <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
                     <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                     <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
-                  </div>
-                  {/* Libras por saco de cada subproducto (variable según cliente: 95, 96,
-                      100…). Definen cuántos sacos ESPECIALES descuenta la matriz:
-                      Arrocillo → "Saco Usado", Polvillo → "Saco Negro". sacos = QQ×100/lb. */}
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 8 }}>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo 3/4
-                      <input type="number" min="1" step="1" value={millingReport.broken34_lb} title="Descuenta de Saco Usado (Arrocillo)"
-                        onChange={(e) => updateMillingField("broken34_lb", e.target.value)}
-                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                    </label>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Arrocillo Fino
-                      <input type="number" min="1" step="1" value={millingReport.fineBroken_lb} title="Descuenta de Saco Usado (Arrocillo)"
-                        onChange={(e) => updateMillingField("fineBroken_lb", e.target.value)}
-                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                    </label>
-                    <label style={{ fontSize: 11, fontWeight: 600, color: "var(--c-muted)" }}>lb/saco Polvillo
-                      <input type="number" min="1" step="1" value={millingReport.polvillo_lb} title="Descuenta de Saco Negro (Polvillo)"
-                        onChange={(e) => updateMillingField("polvillo_lb", e.target.value)}
-                        style={{ display: "block", width: "100%", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 12 }} />
-                    </label>
                   </div>
                   </div>
                   </div>

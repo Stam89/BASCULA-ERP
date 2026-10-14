@@ -2,6 +2,23 @@
 
 Actualizado: 2026-10-14
 
+## Último cambio: Producción protegida y reapertura de lote accidental
+
+- La sección `Subproductos` ya no muestra los tres campos manuales de
+  `lb/saco`; conserva internamente el estándar existente de 100 lb para no
+  alterar inventario, sacos ni cálculos históricos.
+- Producción permite registrar `0 tulas`, pero exige una confirmación visible
+  al pulsar `Añadir` o al guardar/finalizar una fila pendiente. La línea queda
+  registrada con 0 y no genera pago de tulas al estibador.
+- Finalizar con subproductos pero con `0 QQ` de arroz pilado muestra una
+  advertencia bloqueante y requiere confirmación explícita, evitando cierres
+  accidentales como el detectado.
+- El proceso `PROC-20261014161029-FQAL` de SEBASTIAN BANCHON GALLO fue anulado
+  mediante el servicio transaccional existente: se compensaron exactamente
+  sus 4 movimientos de inventario, se eliminaron 3 pagos pendientes y el lote
+  `00001-13-10-26` volvió a `WEIGHED`. La anulación conserva motivo y auditoría.
+- Verificación: 226 pruebas backend y build frontend correctos.
+
 ## Último cambio: Nómina del secador desde el encendido
 
 - El pago automático del rol `SECADOR` suma el valor por túnel desde que existe
@@ -18,7 +35,7 @@ Actualizado: 2026-10-14
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Nómina del secador reconoce y paga los túneles desde el encendido del motor.
+- Ultimo cambio funcional: Producción advierte cierres sin arroz pilado, acepta 0 tulas con confirmación y reabrió de forma auditada el lote accidental de Sebastián Banchón.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
