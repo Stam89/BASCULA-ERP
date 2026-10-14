@@ -101,7 +101,7 @@ export async function registrarCargoCampoLiquidacion(
      SELECT $1, 'campo_servicio', $2, $3, $4, $4, 'CONFIRMED'
      WHERE NOT EXISTS (SELECT 1 FROM accounts_payable WHERE reference_type = 'campo_servicio' AND reference_id = $2)`,
     [origen.accionista_id, servicioId,
-     `Transporte y Cosechadora · ${etiqueta} · ${origen.liquidation_number}`, monto]
+     `Servicio de ${etiqueta.toLowerCase()} de ${origen.agricultor}${prestador ? ` · Prestador/equipo: ${prestador}` : ""}`, monto]
   );
   return { servicio_id: servicioId, cliente: cliente.nombre, tipo: input.tipo, monto };
 }

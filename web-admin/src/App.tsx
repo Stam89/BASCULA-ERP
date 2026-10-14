@@ -1091,6 +1091,7 @@ type AccountPayable = {
   reference_type?: string | null;
   due_date?: string | null;
   description?: string | null;
+  detalle_humano?: string | null;
   /** Deuda entre socios / Matriz / Transporte (se espeja con la otra cara). */
   entre_socios?: boolean | null;
 };
@@ -2060,8 +2061,9 @@ function groupPayablesByAcreedor(list: AccountPayable[]): Array<{ key: string; n
 
 // Etiqueta corta del concepto de una cuenta por pagar, para el estado de cuenta.
 function conceptoPayable(p: AccountPayable): string {
-  if (p.liquidation_number) return `Liquidación ${p.liquidation_number}`;
+  if (p.detalle_humano) return p.detalle_humano;
   if (p.description) return p.description;
+  if (p.liquidation_number) return "Pago derivado de liquidación";
   const m: Record<string, string> = {
     pilado_service: "Servicio de pilado", service_charge: "Servicio (maquila)", packaging_charge: "Cargo por sacos",
     lot_transfer: "Traspaso de lote", selection_batch: "Selección / envejecido"
@@ -19953,24 +19955,30 @@ Motivo (obligatorio):`, "");
                           <strong>{selEntry ? entryLabel(selEntry) : "Ingreso"}</strong>
                           <small>{selEntry?.placa?.trim() || "S/P"} · {selEntry?.rice_type ?? "—"}</small>
                         </div>
-                        <input type="number" step="0.01" min="0"
-                          placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).enReal()) : "QQ"}
-                          value={line.quintals}
-                          onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
-                        <input type="number" step="0.01" min="0" placeholder="0.00"
-                          value={line.price}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setLiqLines((prev) => {
-                              const u = [...prev];
-                              // La fila editada guarda su valor; si es secundaria, queda como override.
-                              u[i] = { ...u[i], price: v, price_manual: i > 0 ? true : u[i].price_manual };
-                              // Desde la PRIMERA fila se replica a las que no tienen override.
-                              if (i === 0) for (let j = 1; j < u.length; j++) if (!u[j].price_manual) u[j] = { ...u[j], price: v };
-                              return u;
-                            });
-                          }}
-                          required />
+                        <label className="liqLineField">
+                          <span>QQ</span>
+                          <input type="number" step="0.01" min="0"
+                            placeholder={farmerLots.find((l) => l.id === line.lot_id) ? String(Number(farmerLots.find((l) => l.id === line.lot_id)!.quintals ?? 0).enReal()) : "QQ"}
+                            value={line.quintals}
+                            onChange={(e) => { const u = [...liqLines]; u[i] = { ...u[i], quintals: e.target.value }; setLiqLines(u); }} />
+                        </label>
+                        <label className="liqLineField">
+                          <span>Precio / QQ</span>
+                          <input type="number" step="0.01" min="0" placeholder="0.00"
+                            value={line.price}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setLiqLines((prev) => {
+                                const u = [...prev];
+                                // La fila editada guarda su valor; si es secundaria, queda como override.
+                                u[i] = { ...u[i], price: v, price_manual: i > 0 ? true : u[i].price_manual };
+                                // Desde la PRIMERA fila se replica a las que no tienen override.
+                                if (i === 0) for (let j = 1; j < u.length; j++) if (!u[j].price_manual) u[j] = { ...u[j], price: v };
+                                return u;
+                              });
+                            }}
+                            required />
+                        </label>
                         {liqLines.length > 1 && (
                           <button type="button" className="liqRemoveBtn"
                             onClick={() => setLiqLines(liqLines.filter((_, j) => j !== i))}>×</button>

@@ -123,7 +123,6 @@ export async function aplicarPagosFomento(
   //    ese remanente continúa como fomento del acreedor, no como deuda entre socios.
   const deficit = Math.max(0, Math.round(Number(input.deficit ?? 0) * 100) / 100);
   const liquidador = liqAcc ? (await client.query("SELECT name FROM accionistas WHERE id = $1", [liqAcc])).rows[0] : null;
-  const nota = `Cruce inter-socios por Liquidación #${input.liquidationNumber}`;
   for (const ap of aplicados) {
     if (!(ap.fom.accionista_id && liqAcc && ap.fom.accionista_id !== liqAcc)) continue;
     // El déficit reduce el cruce SOLO del fomento principal (el que genera el remanente).
@@ -136,12 +135,14 @@ export async function aplicarPagosFomento(
     await client.query(
       `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'fomento_cruce', $5, $6)`,
-      [ap.fom.farmer_id ?? null, input.liquidationId, cruce, liqAcc, ap.pagoId, `${nota}: fomento de ${dueno?.name ?? "socio"}`]
+      [ap.fom.farmer_id ?? null, input.liquidationId, cruce, liqAcc, ap.pagoId,
+       `Devolución de fomento entregado a ${input.farmerName} · Acreedor: ${dueno?.name ?? "socio"}`]
     );
     await client.query(
       `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES ($1, $2, $2, 'CONFIRMED', $3, 'fomento_cruce', $4, $5)`,
-      [ap.fom.farmer_id ?? null, cruce, ap.fom.accionista_id, ap.pagoId, `${nota}: liquidada por ${liquidador?.name ?? "otro socio"}`]
+      [ap.fom.farmer_id ?? null, cruce, ap.fom.accionista_id, ap.pagoId,
+       `Devolución de fomento de ${input.farmerName} · Pagada por ${liquidador?.name ?? "otro socio"}`]
     );
     out.cruce_inter_socios = Math.round((out.cruce_inter_socios + cruce) * 100) / 100;
   }
@@ -266,16 +267,17 @@ export async function amortizarFomentosLIFO(
     let interSocios = false;
     if (f.accionista_id && liqAcc && f.accionista_id !== liqAcc) {
       interSocios = true;
-      const nota = `Cruce inter-socios por Liquidación #${input.liquidationNumber}`;
       await client.query(
         `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
          VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'fomento_cruce', $5, $6)`,
-        [f.farmer_id ?? null, input.liquidationId, abono, liqAcc, f.id, `${nota}: fomento de ${f.accionista_nombre ?? "socio"}`]
+        [f.farmer_id ?? null, input.liquidationId, abono, liqAcc, f.id,
+         `Devolución de fomento entregado a ${input.farmerName} · Acreedor: ${f.accionista_nombre ?? "socio"}`]
       );
       await client.query(
         `INSERT INTO accounts_receivable (farmer_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
          VALUES ($1, $2, $2, 'CONFIRMED', $3, 'fomento_cruce', $4, $5)`,
-        [f.farmer_id ?? null, abono, f.accionista_id, f.id, `${nota}: liquidada por ${liquidador?.name ?? "otro socio"}`]
+        [f.farmer_id ?? null, abono, f.accionista_id, f.id,
+         `Devolución de fomento de ${input.farmerName} · Pagada por ${liquidador?.name ?? "otro socio"}`]
       );
       out.cruce_inter_socios = r2(out.cruce_inter_socios + abono);
     }

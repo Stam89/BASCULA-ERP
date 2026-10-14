@@ -7,7 +7,7 @@ Actualizado: 2026-10-14
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: la Nomina de Transporte y Cosechadora usa un flujo semanal simple como Matriz, con resumen por trabajador, adicionales rapidos, vista previa, ajustes avanzados e historial separado.
+- Ultimo cambio funcional: Cuentas por Pagar muestra el motivo operativo, agricultor y acreedor/prestador en vez del numero tecnico de liquidacion; Liquidaciones se adapta mejor a celular.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,14 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### 📤 CxP explicables y Liquidaciones responsive (2026-10-14)
+
+- `GET /cash/payables` devuelve `detalle_humano` para cuentas actuales e historicas sin modificar datos: fomento indica agricultor y socio acreedor; flete/cosechadora indica agricultor y equipo/prestador; el pago normal indica a quien se compro el arroz.
+- Las nuevas CxP de liquidacion ya guardan ese detalle humano desde su origen. La referencia tecnica a la liquidacion permanece en sus columnas para auditoria y reversa, pero deja de dominar el recibo.
+- Verificacion real de solo lectura sobre STALYN: ROVINSON `$657.79` se interpreta como `Devolucion de fomento entregado a SEBASTIAN BANCHON GALLO · Acreedor: ROVINSON`; Transporte muestra cosechadora `$40.00` y flete `$22.59` con su agricultor/equipo.
+- Liquidaciones en celular convierte cada ingreso en tarjeta con etiquetas QQ/Precio, acomoda flete y cosechadora a una columna, y permite desplazar resultados anchos. Auditoria a `390 px` sin desborde en Liquidaciones, Produccion, Caja, Ventas, Secadoras y Configuracion; tambien comprobado a `768 px` y `1366 px`.
+- Verificacion: 226 pruebas backend, builds backend/frontend, lint sin errores (warnings historicos) y preflight sin errores criticos.
 
 ### 💵 Nomina de Campo con flujo semanal tipo Matriz (2026-10-14)
 

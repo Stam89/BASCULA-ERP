@@ -351,6 +351,10 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
     ]
   );
   let liquidacionFinal = liquidation.rows[0];
+  const farmerName = (await client.query(
+    "SELECT full_name FROM farmers WHERE id = $1",
+    [data.farmer_id]
+  )).rows[0]?.full_name ?? "agricultor";
 
   // El lote solo se marca como liquidado cuando TODOS sus ingresos ya se
   // pagaron: un lote puede juntar arroz de varios agricultores.
@@ -397,7 +401,7 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
       `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'flete_tercero', $1, $4)`,
       [liquidation.rows[0].id, data.flete_detalle.monto, accionistaId,
-       `Flete (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+       `Servicio de flete de ${farmerName} · Prestador: ${prestador}`]
     );
   }
 
@@ -407,10 +411,6 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
   // a un fomento nuevo (renovación); el abono conserva el cruce inter-socios.
   let fomentoPagos: AmortizacionFomentoResultado | null = null;
   const fomentoDiscount = data.discount_breakdown?.fomento ?? 0;
-  const necesitaFarmerName = fomentoDiscount > 0 || (data.saldo_en_contra ?? 0) > 0;
-  const farmerName = necesitaFarmerName
-    ? ((await client.query("SELECT full_name FROM farmers WHERE id = $1", [data.farmer_id])).rows[0]?.full_name ?? "")
-    : "";
   if (fomentoDiscount > 0) {
     fomentoPagos = await amortizarFomentosLIFO(client, {
       liquidationId: liquidation.rows[0].id,
@@ -474,9 +474,10 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
 
   if (calculoFinal.neto > 0) {
     await client.query(
-      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
-       VALUES ($1, $2, $3, $3, $4)`,
-      [data.farmer_id, liquidation.rows[0].id, calculoFinal.neto, accionistaId]
+      `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id, description)
+       VALUES ($1, $2, $3, $3, $4, $5)`,
+      [data.farmer_id, liquidation.rows[0].id, calculoFinal.neto, accionistaId,
+       `Pago por compra de arroz a ${farmerName}`]
     );
   }
 
@@ -573,7 +574,7 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
       `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
       [liquidation.rows[0].id, monto, accionistaId,
-       `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+       `Servicio de cosechadora de ${farmerName} · Prestador: ${prestador}`]
     );
   }
 
@@ -584,7 +585,7 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
       `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, status, accionista_id, reference_type, reference_id, description)
        VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'cosechadora_tercero', $1, $4)`,
       [liquidation.rows[0].id, cosechadora, accionistaId,
-       `Cosechadora (tercero) - ${prestador} - ${liquidation.rows[0].liquidation_number}`]
+       `Servicio de cosechadora de ${farmerName} · Prestador: ${prestador}`]
     );
   }
 
@@ -744,8 +745,9 @@ liquidationsRouter.put("/:id", asyncRoute(async (req, res) => {
       } else if (net > 0) {
         // Antes el neto era 0 (sin cuenta); al corregir aparece saldo a pagar.
         await client.query(
-          `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id)
-           VALUES ($1, $2, $3, $3, $4)`,
+          `INSERT INTO accounts_payable (farmer_id, liquidation_id, amount, balance, accionista_id, description)
+           SELECT $1, $2, $3, $3, $4, concat('Pago por compra de arroz a ', f.full_name)
+             FROM farmers f WHERE f.id = $1`,
           [liq.farmer_id, req.params.id, net, liq.accionista_id]
         );
       }

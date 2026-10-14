@@ -1198,11 +1198,43 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
             -- Deuda entre socios / Matriz / Transporte (se espeja con la otra cara).
             (ap.reference_type IN ('campo_servicio', 'fomento_cruce', 'retencion_matriz', 'packaging_charge', 'pilado_service', 'lot_transfer', 'service_charge', 'saldo_inicial_socio', 'compra_producto_socio', 'cobro_por_socio', 'pago_por_socio')
               OR ps.id IS NOT NULL OR msc.id IS NOT NULL OR mpc.id IS NOT NULL OR lt.id IS NOT NULL) AS entre_socios,
+            -- Texto operativo para el estado de cuenta. Se deriva también para
+            -- registros históricos, sin reescribir ni migrar movimientos reales.
+            CASE
+              WHEN ap.reference_type = 'fomento_cruce' THEN concat(
+                'Devolución de fomento entregado a ', COALESCE(f.full_name, 'agricultor'),
+                CASE WHEN par.name IS NOT NULL THEN concat(' · Acreedor: ', par.name) ELSE '' END
+              )
+              WHEN ap.reference_type = 'campo_servicio' THEN concat(
+                CASE WHEN cs.tipo = 'cosecha' THEN 'Servicio de cosechadora de ' ELSE 'Servicio de flete de ' END,
+                COALESCE(
+                  NULLIF(btrim(split_part(split_part(COALESCE(cs.notas, ''), 'Agricultor:', 2), '·', 1)), ''),
+                  'agricultor'
+                ),
+                CASE
+                  WHEN position('Equipo:' in COALESCE(cs.notas, '')) > 0
+                    THEN concat(' · Prestador/equipo: ', btrim(split_part(cs.notas, 'Equipo:', 2)))
+                  WHEN ca.nombre IS NOT NULL THEN concat(' · Equipo: ', ca.nombre)
+                  ELSE ''
+                END
+              )
+              WHEN ap.reference_type IN ('flete_tercero', 'cosechadora_tercero') THEN concat(
+                CASE WHEN ap.reference_type = 'cosechadora_tercero' THEN 'Servicio de cosechadora de ' ELSE 'Servicio de flete de ' END,
+                COALESCE(lf.full_name, 'agricultor'),
+                ' · Prestador: ', COALESCE(NULLIF(btrim(split_part(COALESCE(ap.description, ''), ' - ', 2)), ''), 'tercero')
+              )
+              WHEN ap.reference_type IS NULL AND ap.liquidation_id IS NOT NULL
+                THEN concat('Pago por compra de arroz a ', COALESCE(lf.full_name, f.full_name, 'agricultor'))
+              ELSE NULLIF(ap.description, '')
+            END AS detalle_humano,
             l.liquidation_number, l.batch_id
      FROM accounts_payable ap
      LEFT JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN suppliers ap_sup ON ap_sup.id = ap.supplier_id
      LEFT JOIN liquidations l ON l.id = ap.liquidation_id
+     LEFT JOIN farmers lf ON lf.id = l.farmer_id
+     LEFT JOIN campo_servicios cs ON cs.id = ap.reference_id AND ap.reference_type = 'campo_servicio'
+     LEFT JOIN campo_activos ca ON ca.id = cs.activo_id
      LEFT JOIN selection_batches sb ON sb.id = ap.reference_id AND ap.reference_type = 'selection_batch'
      LEFT JOIN external_providers sp ON sp.id = sb.provider_id
      LEFT JOIN pilado_services ps ON ps.payable_id = ap.id

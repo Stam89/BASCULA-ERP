@@ -273,6 +273,8 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 .liqLine select:focus,
 .liqLine input:focus { outline: none; border-color: var(--c-brand); }
+.liqLineField { margin: 0; min-width: 0; }
+.liqLineField > span { display: none; }
 
 .liqEntryLabel {
   min-width: 0;
@@ -326,6 +328,43 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 
 @media (max-width: 760px) {
   .liqHarvesterFields { grid-template-columns: 1fr 1fr; }
+}
+
+/* Liquidaciones en teléfono: cada lote se vuelve una tarjeta legible. En PC
+   conserva exactamente la grilla compacta anterior. */
+@media (max-width: 600px) {
+  .liqLayout { gap: 12px; }
+  .liqLayout .liqLinesHeader { display: none; }
+  .liqLayout .liqLine {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+    gap: 8px; padding: 10px; margin: 10px 0 0;
+    border: 1px solid var(--c-border); border-radius: var(--r);
+    background: var(--c-surface-2);
+  }
+  .liqLayout .liqEntryLabel { grid-column: 1 / -1; }
+  .liqLineField > span {
+    display: block; margin-bottom: 4px; color: var(--c-muted);
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+  }
+  .liqLineField input { min-height: 42px; }
+  .liqFleteRow {
+    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px; margin: 0 0 12px; padding: 10px;
+    border: 1px solid var(--c-border); border-top: 0;
+    border-left: 3px solid var(--c-brand); border-radius: 0 0 var(--r) var(--r);
+    background: var(--c-surface);
+  }
+  .liqFleteRow .liqFleteLbl { grid-column: 1 / -1; font-weight: 700; }
+  .liqFleteRow .liqFleteEq { display: none; }
+  .liqFleteRow :is(input, select) { width: 100%; min-width: 0; min-height: 42px; }
+  .liqFleteRow .liqFleteAuto { grid-column: 1 / -1; }
+  .liqDiscRow { grid-template-columns: minmax(0, 1fr) auto; }
+  .liqHarvesterFields { grid-template-columns: minmax(0, 1fr); }
+  .liqHarvesterTitle { align-items: flex-start; flex-wrap: wrap; }
+  .liqHarvesterTitle .liqRemoveBtn { margin-left: auto; }
+  .liqResultTable { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .liqResultHead, .liqResultRow, .liqResultTotal { min-width: 610px; }
+  .liqResultActions > button, .liqLayout .primary { width: 100%; justify-content: center; }
 }
 
 .liqRemoveBtn {
