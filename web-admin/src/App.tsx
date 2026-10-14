@@ -17,6 +17,7 @@ import { PrestamosBancarios } from "./components/PrestamosBancarios";
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
+import { CruceSocios } from "./components/CruceSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
@@ -21195,6 +21196,8 @@ Motivo (obligatorio):`, "");
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· quién te debe, agrupado por persona o entidad</span></h2>
+                <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                  onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidas.length > 0 && (
                     <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#fee2e2", borderColor: "#fecaca" }}>
@@ -21343,6 +21346,8 @@ Motivo (obligatorio):`, "");
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
+                <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                  onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidos.length > 0 && (
                     <div className="totalBox" style={{ minWidth: 150, margin: 0, background: "#fef3c7", borderColor: "#fde68a" }}>

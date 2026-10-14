@@ -121,6 +121,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### ⇄ Cruce de cuentas entre accionistas y Selección (2026-10-14, pedido del dueño)
+
+- Cruce: migración 20261098 `cruces_cuentas_socios`; `services/cruce-socios.ts` (`resumenCruce`: mis CxC cuya hermana es CxP del otro y mis CxP cuya hermana es CxC del otro, sin campo_servicio; `aplicarCruce` FIFO baja por igual las dos caras sin caja, notifica; `anularCruce` devuelve saldos). Rutas `/receivable/cruce-socios` (GET lista, GET /resumen?contraparte_id, POST, POST /:id/anular). UI `components/CruceSocios.tsx`: botón «⇄ Cruzar cuentas con un socio» en Por Cobrar y Por Pagar. Simulacro `cruce_socios.mjs` OK (salvo el aviso de báscula de datos reales).
+- Selección › informe: el principal solo ofrece lo ENVIADO (0.11 no muestra Corriente); subproductos: arrocillos, POLVILLO y rechazo (`salidasDeLinea`).
+- Retiro del banco a caja: existe en Caja → ⚙️ Opciones → «Depositar / retirar del banco» solo en cajas MIXTO; la caja de CEYRO es EFECTIVO (banco no se lleva ahí).
+
 ### 🏦🔄 Transporte: cobro por transferencia/cheque, historial en pestaña y auto-actualización (2026-10-14, pedido del dueño)
 
 - Migración 20261095: `campo_movimientos.medio_pago` (EFECTIVO|TRANSFERENCIA|CHEQUE) y `referencia`. `POST /campo/cxc/abono` acepta `medio_pago` y `referencia` (transferencia/cheque no pueden entrar a CAJA; el concepto agrega «· Transferencia N.º …»). Estado de cuenta → Registrar cobro: Efectivo (CAJA) / Transferencia / Cheque (BANCO u otra cuenta), N.º opcional.

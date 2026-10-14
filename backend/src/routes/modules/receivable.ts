@@ -9,6 +9,7 @@ import { dinero, notificar } from "../../services/notificaciones.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { anularCruce, aplicarCruce, listarCruces, resumenCruce } from "../../services/cruce-socios.js";
 
 export const receivableRouter = Router();
 
@@ -75,6 +76,42 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows);
+}));
+
+// ── CRUCE DE CUENTAS ENTRE ACCIONISTAS ───────────────────────────────────────
+// La Matriz le debe a un socio y el socio a la Matriz: se compensa sin mover caja (ver services/cruce-socios.ts).
+const contexto = (req: unknown) => {
+  const r = req as AuthenticatedRequest;
+  if (!r.accionistaId) throw new ApiError(400, "Selecciona un accionista antes de continuar.");
+  return { accionistaId: r.accionistaId, userId: r.user?.id ?? null };
+};
+receivableRouter.get("/cruce-socios/resumen", asyncRoute(async (req, res) => {
+  const { accionistaId } = contexto(req);
+  const { contraparte_id } = z.object({ contraparte_id: z.string().uuid() }).parse(req.query);
+  const client = await pool.connect();
+  try { res.json(await resumenCruce(client, accionistaId, contraparte_id)); } finally { client.release(); }
+}));
+receivableRouter.get("/cruce-socios", asyncRoute(async (req, res) => {
+  const { accionistaId } = contexto(req);
+  res.json(await listarCruces(pool, accionistaId));
+}));
+receivableRouter.post("/cruce-socios", asyncRoute(async (req, res) => {
+  const { accionistaId, userId } = contexto(req);
+  const body = z.object({
+    contraparte_id: z.string().uuid(),
+    monto: z.number().positive().max(10_000_000).optional(),
+    nota: z.string().trim().max(300).optional()
+  }).parse(req.body);
+  const out = await inTransaction((client) => aplicarCruce(client, {
+    accionistaId, contraparteId: body.contraparte_id, monto: body.monto, nota: body.nota ?? null, userId
+  }));
+  res.status(201).json(out);
+}));
+receivableRouter.post("/cruce-socios/:id/anular", asyncRoute(async (req, res) => {
+  const { accionistaId } = contexto(req);
+  const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
+  await inTransaction((client) => anularCruce(client, String(req.params.id), accionistaId, motivo));
+  res.json({ ok: true });
 }));
 
 // GET historial completo (incluye pagadas)
