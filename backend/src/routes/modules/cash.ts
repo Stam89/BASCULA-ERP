@@ -10,7 +10,7 @@ import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devo
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
-import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
+import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
@@ -1466,19 +1466,21 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
 //     ('cobro_por_socio'): «con esa misma plata» — sin mover más caja; queda en cruces_entre_socios;
 //  2) lo que pase de eso queda como deuda nueva de este socio con el que pagó ('pago_por_socio').
 // Solo para deudas con terceros (cosechadores, agricultores, proveedores), no entre socios.
-cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
-  const body = z.object({
+// Pago de varias cuentas (también el que hizo OTRO socio): función reutilizable por /payables/pay-group y por el
+// cobro con pagos por socio. Va DENTRO de una transacción.
+export const pagoGrupoSchema = z.object({
     payable_ids: z.array(z.string().uuid()).min(1),
     cash_register_id: z.string().uuid().optional(),
     amount: z.number().positive().transform(round2),
     pagado_por: z.string().uuid().optional(),
     medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional()
-  }).parse(req.body);
+  });
+export type PagoGrupo = z.infer<typeof pagoGrupoSchema>;
+export async function pagarCuentasEnGrupo(client: PoolClient, req: AuthenticatedRequest, body: PagoGrupo) {
 
-  const auth = req as AuthenticatedRequest;
+  const auth = req;
   const accionistaId = auth.accionistaId;
   const otroSocio = body.pagado_por && body.pagado_por !== accionistaId ? body.pagado_por : null;
-  const result = await inTransaction(async (client) => {
     let cajaId: string;
     let pagador: { id: string; name: string; caja_tipo: string } | null = null;
     if (otroSocio) {
@@ -1518,9 +1520,11 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       throw new ApiError(409, `El monto supera el saldo pendiente ($${pendiente.toFixed(2)})`);
     }
     if (pagador) {
+      // Deudas con terceros y con Transporte y Cosechadora (el cobro se registra en la caja de Transporte).
+      // Las deudas con OTRO socio se pagan desde la caja de quien la debe (o con «Cruzar cuentas»).
       for (const ap of cuentas.rows) {
-        if (ap.reference_type === "campo_servicio" || await buscarCuentaHermana(client, "payable", ap.id)) {
-          throw new ApiError(409, "Esa deuda es entre socios (o con Transporte): págala desde la caja de quien la debe.");
+        if (ap.reference_type !== "campo_servicio" && await buscarCuentaHermana(client, "payable", ap.id)) {
+          throw new ApiError(409, "Esa deuda es con otro socio: págala desde la caja de quien la debe o usa «Cruzar cuentas».");
         }
       }
     }
@@ -1541,6 +1545,8 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
       // (Un pago hecho por otro socio solo cubre deudas con terceros: no hay espejo.)
       if (abono > 0 && pagador) {
         desglose.push({ id: ap.id, monto: abono });
+        // Deuda con Transporte pagada por otro socio: entra como cobro a la caja de Transporte.
+        if (ap.reference_type === "campo_servicio") await espejarPagoATransporte(client, String(ap.id), abono);
       } else if (abono > 0) {
         desglose.push({ id: ap.id, monto: abono });
         espejos.push(await espejarAbonoEnContraparte(client, {
@@ -1638,7 +1644,9 @@ cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
     }
 
     return { paid: body.amount, remaining: round2(pendiente - body.amount), espejos: espejos.filter(Boolean), pago_por_socio: porSocio };
-  });
+}
 
-  res.json(result);
+cashRouter.post("/payables/pay-group", asyncRoute(async (req, res) => {
+  const body = pagoGrupoSchema.parse(req.body);
+  res.json(await inTransaction((client) => pagarCuentasEnGrupo(client, req as AuthenticatedRequest, body)));
 }));

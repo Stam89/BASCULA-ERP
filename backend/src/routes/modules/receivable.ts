@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { PoolClient } from "pg";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -10,6 +11,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { anularCruce, aplicarCruce, listarCruces, resumenCruce } from "../../services/cruce-socios.js";
+import { pagarCuentasEnGrupo } from "./cash.js";
 
 export const receivableRouter = Router();
 
@@ -378,20 +380,21 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
 // COBRO_POR_SOCIO, por defecto al banco) y nace la deuda entre los dos: Por Pagar del que recibió ↔ Por Cobrar
 // de este socio (reference_type 'cobro_por_socio', reference_id = el ingreso). Se salda como cualquier deuda
 // entre socios. No es venta ni ingreso del que recibió: es dinero ajeno de paso.
-receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
-  const body = z.object({
+// Cobro de varias cuentas (también el que RECIBIÓ OTRO socio): función reutilizable por /pay-group y por el
+// cobro con pagos por socio (POST /cobro-y-pagos-por-socio). Va DENTRO de una transacción.
+export const cobroGrupoSchema = z.object({
     receivable_ids:   z.array(z.string().uuid()).min(1),
     amount:           z.number().positive().transform(round2),
     cash_register_id: z.string().uuid().optional(),
     concepto:         z.string().max(200).optional(),
     recibido_por:     z.string().uuid().optional(),
     medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional()
-  }).parse(req.body);
-  const auth = req as AuthenticatedRequest;
+  });
+export type CobroGrupo = z.infer<typeof cobroGrupoSchema>;
+export async function cobrarCuentasEnGrupo(client: PoolClient, auth: AuthenticatedRequest, body: CobroGrupo) {
   const accionistaId = auth.accionistaId;
   const otroSocio = body.recibido_por && body.recibido_por !== accionistaId ? body.recibido_por : null;
 
-  const result = await inTransaction(async (client) => {
     let cajaId: string;
     let receptor: { id: string; name: string; caja_tipo: string } | null = null;
     if (otroSocio) {
@@ -503,6 +506,58 @@ receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
       deudaEntreSocios = { deudor: receptor.name, monto: body.amount };
     }
     return { paid: body.amount, cuentas: desglose.length, remaining: round2(pendiente - body.amount), espejos, deuda_entre_socios: deudaEntreSocios };
+}
+
+receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
+  const body = cobroGrupoSchema.parse(req.body);
+  res.json(await inTransaction((client) => cobrarCuentasEnGrupo(client, req as AuthenticatedRequest, body)));
+}));
+
+// ── COBRO RECIBIDO POR OTRO SOCIO + PAGOS QUE HIZO CON ESA PLATA (un solo paso) ──────────────────────
+// Caso real: el cliente de un socio (el que vendió, el que registra) le transfiere a OTRO socio, y ese otro
+// con esa plata paga deudas del que vendió (cáscara a agricultores, cosecha/transporte, proveedores).
+//  1) Cobro: baja la Por Cobrar del cliente, entra a la caja del que recibió (banco) y nace «el que recibió
+//     le debe al que vendió» (cobro_por_socio).
+//  2) Cada pago: baja la deuda del que vendió, sale de la caja del que recibió y se DESCUENTA de lo anterior
+//     (cruces_entre_socios); si pagó más de lo que recibió, la diferencia queda como «el que vendió le debe»
+//     (pago_por_socio). Todo en UNA transacción: se guarda completo o nada.
+receivableRouter.post("/cobro-y-pagos-por-socio", asyncRoute(async (req, res) => {
+  const auth = req as AuthenticatedRequest;
+  const body = z.object({
+    receivable_ids: z.array(z.string().uuid()).min(1),
+    amount: z.number().positive().transform(round2),
+    recibido_por: z.string().uuid(),
+    medio_pago: z.enum(["EFECTIVO", "BANCO"]).default("BANCO"),
+    concepto: z.string().max(200).optional(),
+    pagos: z.array(z.object({
+      payable_ids: z.array(z.string().uuid()).min(1),
+      amount: z.number().positive().transform(round2)
+    })).max(30).default([])
+  }).parse(req.body);
+  if (body.recibido_por === auth.accionistaId) throw new ApiError(400, "Elige el socio que recibió el dinero (no tú).");
+  const out = await inTransaction(async (client) => {
+    const cobro = await cobrarCuentasEnGrupo(client, auth, {
+      receivable_ids: body.receivable_ids, amount: body.amount, recibido_por: body.recibido_por,
+      medio_pago: body.medio_pago, concepto: body.concepto
+    });
+    let descontado = 0, deudaNueva = 0, pagado = 0;
+    for (const p of body.pagos) {
+      const r = await pagarCuentasEnGrupo(client, auth, {
+        payable_ids: p.payable_ids, amount: p.amount, pagado_por: body.recibido_por, medio_pago: body.medio_pago
+      });
+      pagado = round2(pagado + r.paid);
+      descontado = round2(descontado + (r.pago_por_socio?.descontado ?? 0));
+      deudaNueva = round2(deudaNueva + (r.pago_por_socio?.deuda_nueva ?? 0));
+    }
+    const receptor = (await client.query("SELECT name FROM accionistas WHERE id = $1", [body.recibido_por])).rows[0]?.name ?? "el socio";
+    // Saldo TOTAL entre los dos después de la operación (todas sus deudas enlazadas, no solo esta).
+    const saldo = await resumenCruce(client, String(auth.accionistaId), body.recibido_por);
+    return {
+      cobrado: cobro.paid, pagado, receptor, descontado, deuda_nueva: deudaNueva,
+      el_receptor_te_debe: saldo.total_me_debe,
+      tu_le_debes: saldo.total_le_debo,
+      se_puede_cruzar: saldo.maximo
+    };
   });
-  res.json(result);
+  res.status(201).json(out);
 }));

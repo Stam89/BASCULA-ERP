@@ -5994,3 +5994,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cruceSoc__hist { margin-top: 10px; font-size: 13px; }
 .cruceSoc__fila { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--c-border); }
 .cruceSoc__fila.is-anulado { opacity: .55; }
+
+/* Por Cobrar · cobro recibido por otro socio: «con esa plata pagó deudas mías» */
+.pagosConPlata { margin-top: 10px; border: 1px solid #bfdbfe; background: #f8fbff; border-radius: 10px; padding: 8px 12px; }
+.pagosConPlata summary { cursor: pointer; font-weight: 700; font-size: 13.5px; }
+.pagosConPlata__fila { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 0; border-top: 1px solid #e2e8f0; flex-wrap: wrap; }
+.pagosConPlata__fila label { display: flex; align-items: center; gap: 8px; margin: 0; flex: 1 1 200px; min-width: 0; font-size: 13px; }
+.pagosConPlata__fila label input { width: 18px; height: 18px; flex: none; }
+.pagosConPlata__fila > input { width: 120px; text-align: right; }
+.pagosConPlata__fila.is-on { background: #eff6ff; }

@@ -2709,6 +2709,8 @@ export function App() {
   const [medioOperacion, setMedioOperacion] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   // Por Cobrar: el cliente le depositó a OTRO socio (casi siempre a la Matriz). "" = entra a mi caja.
   const [cobroRecibidoPor, setCobroRecibidoPor] = useState("");
+  // «Con esa plata, el otro socio pagó deudas mías»: monto por grupo de Por Pagar (clave = acreedor).
+  const [pagosConPlata, setPagosConPlata] = useState<Record<string, string>>({});
   // Por Pagar: OTRO socio pagó esta deuda por mí (p. ej. la Matriz pagó a mis cosechadores). "" = sale de mi caja.
   const [pagoHechoPor, setPagoHechoPor] = useState("");
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
@@ -7813,6 +7815,30 @@ export function App() {
     if (!registerId && !recibidoPor) { addToast("No hay caja abierta", "error"); return; }
     const total = round2(monto);
     if (!(total > 0)) { addToast("Monto inválido", "error"); return; }
+    // Cobro recibido por OTRO socio que además pagó deudas mías con esa plata → un solo paso (todo o nada).
+    const gruposPagar = groupPayablesByAcreedor(cashPayables);
+    const pagos = recibidoPor ? Object.entries(pagosConPlata)
+      .map(([key, v]) => ({ grupo: gruposPagar.find((g) => g.key === key), amount: round2(Number(v)) }))
+      .filter((p) => p.grupo && p.amount > 0)
+      .map((p) => ({ payable_ids: p.grupo!.items.map((it) => it.id), amount: p.amount, nombre: p.grupo!.nombre })) : [];
+    if (recibidoPor && pagos.length > 0) {
+      const otro = accionistas.find((a) => a.id === recibidoPor)?.name ?? "el socio";
+      const totalPagos = round2(pagos.reduce((s, p) => s + p.amount, 0));
+      if (!window.confirm(`${otro} recibió ${money(total)} de este cliente y con esa plata pagó:\n\n${pagos.map((p) => `• ${p.nombre}: ${money(p.amount)}`).join("\n")}\n\nTotal pagado: ${money(totalPagos)}. ¿Registrar todo junto?`)) return;
+      const rc = await apiPost<{ cobrado: number; pagado: number; receptor: string; el_receptor_te_debe: number; tu_le_debes: number; se_puede_cruzar: number }>(
+        "/receivable/cobro-y-pagos-por-socio",
+        { receivable_ids: items.map((it) => it.id), amount: total, recibido_por: recibidoPor, medio_pago: medioOperacion,
+          pagos: pagos.map(({ payable_ids, amount }) => ({ payable_ids, amount })) }
+      );
+      setMedioOperacion("EFECTIVO");
+      setCobroRecibidoPor("");
+      setPagosConPlata({});
+      await Promise.all([refreshReceivables(), refreshPayables()]);
+      addToast(`${rc.receptor} recibió ${money(rc.cobrado)} y pagó ${money(rc.pagado)} de tus deudas. ` +
+        `Entre ustedes: ${rc.receptor} te debe ${money(rc.el_receptor_te_debe)} · tú le debes ${money(rc.tu_le_debes)}.` +
+        (rc.se_puede_cruzar > 0.005 ? ` Puedes cruzar ${money(rc.se_puede_cruzar)} con «⇄ Cruzar cuentas con un socio».` : ""), "success");
+      return;
+    }
     const r = await apiPost<{ paid: number; cuentas: number; espejos: Array<{ accionista: string; caja_registrada: boolean }>; deuda_entre_socios?: { deudor: string; monto: number } | null }>(
       "/receivable/pay-group",
       recibidoPor
@@ -21298,7 +21324,7 @@ Motivo (obligatorio):`, "");
                 color="cobrar"
                 disabled={!dashboard.current_cash_register && !cobroRecibidoPor}
                 disabledMsg="Abre una caja para poder cobrar (o elige abajo quién recibió el dinero)."
-                onClose={() => { setArDetalleKey(null); setCobroRecibidoPor(""); setMedioOperacion("EFECTIVO"); }}
+                onClose={() => { setArDetalleKey(null); setCobroRecibidoPor(""); setMedioOperacion("EFECTIVO"); setPagosConPlata({}); }}
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
@@ -21306,11 +21332,21 @@ Motivo (obligatorio):`, "");
                 recibidoPor={detalleGrupo.items.some((it) => it.entre_socios) ? undefined : {
                   value: cobroRecibidoPor,
                   // Lo normal es que le depositen al banco del otro socio.
-                  onChange: (id) => { setCobroRecibidoPor(id); setMedioOperacion(id ? "BANCO" : "EFECTIVO"); },
+                  onChange: (id) => {
+                    setCobroRecibidoPor(id); setMedioOperacion(id ? "BANCO" : "EFECTIVO"); setPagosConPlata({});
+                    if (id) refreshPayables().catch(() => undefined); // mis deudas, para «con esa plata pagó…»
+                  },
                   opciones: accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "MATRIZ" || a.tipo === "SOCIO"))
                     .map((a) => ({ id: a.id, name: a.tipo === "MATRIZ" ? `${a.name} (Matriz)` : a.name }))
                 }}
                 onVerInforme={(id) => loadPiladoReport(id).catch((err) => addToast(err.message, "error"))}
+                pagosConPlata={cobroRecibidoPor ? {
+                  // Mis deudas que el otro socio pudo pagar: con terceros (agricultores, proveedores…) y con Transporte.
+                  grupos: groupPayablesByAcreedor(cashPayables.filter((p) => !p.entre_socios || p.reference_type === "campo_servicio"))
+                    .map((g) => ({ key: g.key, nombre: g.nombre, saldo: round2(g.items.reduce((s, it) => s + Number(it.balance), 0)), transporte: g.items.some((it) => it.reference_type === "campo_servicio") })),
+                  valores: pagosConPlata,
+                  onChange: (key, v) => setPagosConPlata((prev) => ({ ...prev, [key]: v }))
+                } : undefined}
               />
             )}
             {piladoReportModal}
@@ -21439,7 +21475,7 @@ Motivo (obligatorio):`, "");
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
                 medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
-                recibidoPor={detalleGrupo.items.some((it) => it.entre_socios) ? undefined : {
+                recibidoPor={detalleGrupo.items.some((it) => it.entre_socios && it.reference_type !== "campo_servicio") ? undefined : {
                   value: pagoHechoPor,
                   onChange: (id) => { setPagoHechoPor(id); setMedioOperacion("EFECTIVO"); },
                   opciones: accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "MATRIZ" || a.tipo === "SOCIO"))
@@ -27466,6 +27502,12 @@ function CuentaDetalleModal(props: {
   /** Por Cobrar: ¿quién recibió el dinero? · Por Pagar: ¿quién pagó? "" = mi caja; otro socio = el dinero entró/salió de
    *  la caja de ese socio y queda la cuenta entre los dos. */
   recibidoPor?: { value: string; onChange: (id: string) => void; opciones: Array<{ id: string; name: string }> };
+  /** Por Cobrar recibido por otro socio: «con esa plata pagó deudas mías» (grupos de mi Por Pagar y monto de cada uno). */
+  pagosConPlata?: {
+    grupos: Array<{ key: string; nombre: string; saldo: number; transporte?: boolean }>;
+    valores: Record<string, string>;
+    onChange: (key: string, valor: string) => void;
+  };
 }) {
   const saldoTotal = props.rows.reduce((s, r) => s + Number(r.saldo), 0);
   const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
@@ -27532,6 +27574,36 @@ function CuentaDetalleModal(props: {
                 </small>
               ))}
             </div>
+          );
+        })()}
+
+        {props.pagosConPlata && props.recibidoPor?.value && (() => {
+          const pp = props.pagosConPlata;
+          const otro = props.recibidoPor.opciones.find((o) => o.id === props.recibidoPor!.value)?.name ?? "el socio";
+          const total = round2(Object.values(pp.valores).reduce((s, v) => s + (Number(v) > 0 ? Number(v) : 0), 0));
+          return (
+            <details className="pagosConPlata" open={total > 0}>
+              <summary>💸 Con esa plata, {otro} pagó deudas mías <small className="muted">(opcional)</small>{total > 0 && <strong> · {money(total)}</strong>}</summary>
+              <p className="muted" style={{ margin: "4px 0 8px", fontSize: 12.5 }}>
+                Marca lo que {otro} pagó por ti (cáscara a agricultores, cosecha/transporte, proveedores). Se registra junto con el cobro:
+                se descuenta de lo que {otro} te debe y, si pagó más, la diferencia se la quedas debiendo.
+              </p>
+              {pp.grupos.length === 0 && <p className="muted" style={{ fontSize: 12.5 }}>No tienes deudas pendientes que {otro} pueda pagar.</p>}
+              {pp.grupos.map((g) => {
+                const v = pp.valores[g.key] ?? "";
+                const on = v !== "" && Number(v) > 0;
+                return (
+                  <div key={g.key} className={`pagosConPlata__fila ${on ? "is-on" : ""}`}>
+                    <label>
+                      <input type="checkbox" checked={on} onChange={(e) => pp.onChange(g.key, e.target.checked ? g.saldo.toFixed(2) : "")} />
+                      <span>{g.transporte ? "🚜 " : ""}{g.nombre}<small className="muted"> · debes {money(g.saldo)}</small></span>
+                    </label>
+                    <input type="number" min="0" step="0.01" max={g.saldo} value={v} placeholder="0.00"
+                      onChange={(e) => pp.onChange(g.key, e.target.value)} aria-label={`Monto pagado a ${g.nombre}`} />
+                  </div>
+                );
+              })}
+            </details>
           );
         })()}
 

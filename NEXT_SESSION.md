@@ -121,6 +121,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### 💸 Cobro recibido por otro socio + pagos con esa plata, en un paso (2026-10-14, pedido del dueño)
+
+- Caso real: el cliente del socio que VENDIÓ le transfiere a OTRO socio (casi siempre CEYRO) y ese otro, con esa plata, paga deudas del que vendió (cáscara, cosecha/transporte, proveedores). Lo registra el que vendió desde su Por Cobrar.
+- `cobrarCuentasEnGrupo` (receivable.ts) y `pagarCuentasEnGrupo` (cash.ts) son ahora funciones (las rutas /pay-group igual). `POST /receivable/cobro-y-pagos-por-socio` {receivable_ids, amount, recibido_por, medio_pago, pagos[{payable_ids, amount}]}: una transacción; responde el saldo total entre los dos (`resumenCruce`) y cuánto se puede cruzar. El pago por otro socio ahora acepta deudas con Transporte (`espejarPagoATransporte`); las deudas con otro socio siguen rechazadas (usar Cruzar cuentas).
+- UI: CuentaDetalleModal (Por Cobrar) con «Le depositaron a X» muestra «💸 Con esa plata, X pagó deudas mías» (grupos de mi Por Pagar con monto). Por Pagar: «Lo pagó X» también en deudas con Transporte. Simulacro `cobro_y_pagos_por_socio.mjs` TODO OK.
+
 ### ⇄ Cruce de cuentas entre accionistas y Selección (2026-10-14, pedido del dueño)
 
 - Cruce: migración 20261098 `cruces_cuentas_socios`; `services/cruce-socios.ts` (`resumenCruce`: mis CxC cuya hermana es CxP del otro y mis CxP cuya hermana es CxC del otro, sin campo_servicio; `aplicarCruce` FIFO baja por igual las dos caras sin caja, notifica; `anularCruce` devuelve saldos). Rutas `/receivable/cruce-socios` (GET lista, GET /resumen?contraparte_id, POST, POST /:id/anular). UI `components/CruceSocios.tsx`: botón «⇄ Cruzar cuentas con un socio» en Por Cobrar y Por Pagar. Simulacro `cruce_socios.mjs` OK (salvo el aviso de báscula de datos reales).
