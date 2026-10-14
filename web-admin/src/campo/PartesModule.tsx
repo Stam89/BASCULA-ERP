@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
+import { useAutoRefresh } from "./autoRefresh";
 import { ClienteSearchInput } from "../components/ClienteSearchInput";
 
 const hoy = () => new Date().toISOString().slice(0, 10);
@@ -86,6 +87,14 @@ export default function PartesModule() {
     } catch (e) { notify((e as Error).message, "err"); }
   }, [cargarPartes]);
   useEffect(() => { refrescar(); }, [refrescar]);
+  // Lo cobrado o registrado en otro equipo (celular / PC) aparece solo.
+  useAutoRefresh(cargarPartes);
+  // Pestañas: el formulario y el historial por separado (la página no se hace larga).
+  const [vista, setVista] = useState<"nuevo" | "historial">(() => {
+    try { return localStorage.getItem("bascula-erp:partes-vista") === "historial" ? "historial" : "nuevo"; } catch { return "nuevo"; }
+  });
+  const cambiarVista = (v: "nuevo" | "historial") => { setVista(v); try { localStorage.setItem("bascula-erp:partes-vista", v); } catch { /* sin almacenamiento */ } };
+  const porCobrar = partes.filter((p) => p.estado === "por_cobrar").length;
 
   async function anular(p: Parte) {
     if (!window.confirm(`¿Anular el parte de ${p.cliente} (${qqFmt(p.qq)} QQ)? Esta acción no se puede deshacer.`)) return;
@@ -133,9 +142,16 @@ export default function PartesModule() {
         <h2 style={{ marginBottom: 2 }}>📝 Partes Diarios de Campo <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· cosecha y transporte</span></h2>
         <p className="muted" style={{ margin: "2px 0 0" }}>Registro diario del trabajo de cosechadoras y vehículos. Los cobros tomados por una liquidación se identifican automáticamente.</p>
         {flashEl}
+        <nav className="segmented" style={{ marginTop: 8 }} aria-label="Vistas de Partes Diarios">
+          <button type="button" className={vista === "nuevo" ? "active" : ""} onClick={() => cambiarVista("nuevo")}>＋ Nuevo parte</button>
+          <button type="button" className={vista === "historial" ? "active" : ""} onClick={() => cambiarVista("historial")}>
+            📋 Historial{porCobrar > 0 ? ` · ${porCobrar} por cobrar` : ""}
+          </button>
+        </nav>
       </div>
 
       {/* A · Formulario de nuevo reporte */}
+      {vista === "nuevo" && (
       <form className="formPanel" onSubmit={(e) => { e.preventDefault(); guardar(); }}>
         <h2>＋ Nuevo parte de trabajo</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
@@ -206,8 +222,10 @@ export default function PartesModule() {
           <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>No hay maquinaria activa. Da de alta cosechadoras en <strong>⚙️ Configuración → 🚜 Flota y Maquinaria</strong>.</p>
         )}
       </form>
+      )}
 
       {/* B · Historial */}
+      {vista === "historial" && (
       <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0 }}>Historial de partes <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>({partesVista.length})</span></h2>
@@ -324,6 +342,7 @@ export default function PartesModule() {
           </table>
         </div>
       </div>
+      )}
 
       {cobrando && (
         <GenerarCobroModal parte={cobrando}

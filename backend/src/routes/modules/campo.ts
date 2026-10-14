@@ -2180,11 +2180,21 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
     monto: z.number().positive(),
     cuenta_id: z.string().uuid(),
     fecha: fechaSchema.optional(),
-    concepto: z.string().max(300).optional()
+    concepto: z.string().max(300).optional(),
+    // Efectivo (CAJA) · Transferencia o Cheque (BANCO u otra cuenta que no sea CAJA), con su número.
+    medio_pago: z.enum(["EFECTIVO", "TRANSFERENCIA", "CHEQUE"]).optional(),
+    referencia: z.string().trim().max(60).optional()
   }).parse(req.body);
   const cta = await pool.query("SELECT nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id]);
   if (!cta.rowCount) throw new ApiError(404, "Cuenta no encontrada");
   if (cta.rows[0].nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
+  const esCaja = String(cta.rows[0].nombre).trim().toUpperCase() === "CAJA";
+  const medio = body.medio_pago ?? (esCaja ? "EFECTIVO" : "TRANSFERENCIA");
+  if (medio !== "EFECTIVO" && esCaja) {
+    throw new ApiError(400, `Un cobro por ${medio === "CHEQUE" ? "cheque" : "transferencia"} entra al BANCO, no a la CAJA.`);
+  }
+  const referencia = body.referencia?.trim() || null;
+  const etiquetaMedio = medio === "EFECTIVO" ? "" : ` · ${medio === "CHEQUE" ? "Cheque" : "Transferencia"}${referencia ? ` N.º ${referencia}` : ""}`;
   const cli = await pool.query("SELECT nombre FROM campo_clientes WHERE id = $1", [body.cliente_id]);
   if (!cli.rowCount) throw new ApiError(404, "Cliente no encontrado");
 
@@ -2212,14 +2222,15 @@ campoRouter.post("/cxc/abono", asyncRoute(async (req, res) => {
       if (restante <= 0.005) break;
       const abono = Math.round(Math.min(restante, Number(s.saldo)) * 100) / 100;
       await client.query(
-        `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id, created_by)
-         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'entrada', $3, $4, $5, $6, $7)`,
-        [body.fecha ?? null, body.cuenta_id, abono, body.concepto?.trim() || "Abono directo de flete/cosecha", s.id, body.cliente_id, userId(req)]
+        `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id, created_by, medio_pago, referencia)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'entrada', $3, $4, $5, $6, $7, $8, $9)`,
+        [body.fecha ?? null, body.cuenta_id, abono, (body.concepto?.trim() || "Abono directo de flete/cosecha") + etiquetaMedio, s.id, body.cliente_id, userId(req),
+         medio, referencia]
       );
       restante = Math.round((restante - abono) * 100) / 100;
       afectados++;
     }
-    return { aplicado: Math.round((body.monto - restante) * 100) / 100, servicios_afectados: afectados };
+    return { aplicado: Math.round((body.monto - restante) * 100) / 100, servicios_afectados: afectados, medio_pago: medio, cuenta: cta.rows[0].nombre };
   });
   res.status(201).json(result);
 }));

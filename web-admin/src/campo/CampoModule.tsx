@@ -13,6 +13,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar la maquinaria");
 }
 import { money } from "../format";
+import { useAutoRefresh } from "./autoRefresh";
 import PartesModule from "./PartesModule";
 import EstadoResultadosCampo from "./EstadoResultadosCampo";
 import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
@@ -309,6 +310,9 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
       .then(() => Promise.all([refreshCatalogos(), refreshServicios()]))
       .catch((e) => notify(e.message, "err"));
   }, [refreshCatalogos, refreshServicios, refreshSesion]);
+
+  // Caja de Transporte al día sin recargar: lo registrado en otro equipo aparece solo.
+  useAutoRefresh(() => Promise.all([refreshCatalogos(), refreshServicios(), refreshSesion()]).then(() => setLibroVersion((v) => v + 1)));
 
   const activosActivos = useMemo(() => activos.filter((a) => a.activo), [activos]);
   const pendientes = useMemo(() => servicios.filter((s) => s.estado !== "pagado"), [servicios]);
@@ -1236,11 +1240,13 @@ function ConvertirAplicarModal({ credito, onClose, onDone, onError }: {
 }
 
 // Modal: ficha de Estado de Cuenta con rango de fecha, línea de tiempo y impresión.
-function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, onAbonoRegistrado, onClose, onError }: {
+function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, cuentas = [], onAbonoRegistrado, onClose, onError }: {
   cliente: ClienteCuenta;
   nombreOperacion: string;
   matrizName: string;
   cajaCuenta?: Cuenta;
+  /** Cuentas de Transporte: la transferencia o el cheque entran al BANCO (u otra que no sea CAJA). */
+  cuentas?: Cuenta[];
   onAbonoRegistrado?: (mensaje: string) => void | Promise<void>;
   onClose: () => void;
   onError: (m: string) => void;
@@ -1251,6 +1257,13 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
   const [montoAbono, setMontoAbono] = useState("");
   const [fechaAbono, setFechaAbono] = useState(hoy());
   const [cobrando, setCobrando] = useState(false);
+  // Medio del cobro: efectivo → CAJA; transferencia / cheque → BANCO (o la cuenta elegida), con su número.
+  const [medio, setMedio] = useState<"EFECTIVO" | "TRANSFERENCIA" | "CHEQUE">("EFECTIVO");
+  const cuentasBanco = cuentas.filter((c) => !["CAJA", "CRUCE PILADORA"].includes(c.nombre.trim().toUpperCase()));
+  const [bancoId, setBancoId] = useState("");
+  const [referencia, setReferencia] = useState("");
+  const bancoSel = cuentasBanco.find((c) => c.id === bancoId) ?? cuentasBanco.find((c) => c.nombre.trim().toUpperCase() === "BANCO") ?? cuentasBanco[0];
+  const cuentaDestino = medio === "EFECTIVO" ? cajaCuenta : bancoSel;
   const cargar = useCallback(async () => {
     try {
       const qs = new URLSearchParams();
@@ -1264,7 +1277,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
   async function registrarAbono(montoSolicitado?: number) {
     try {
       setCobrando(true);
-      if (!cajaCuenta) throw new Error("No existe la cuenta CAJA en Configuración.");
+      if (!cuentaDestino) throw new Error(medio === "EFECTIVO" ? "No existe la cuenta CAJA en Configuración." : "No hay una cuenta de BANCO en Configuración → Cuentas.");
       const saldo = Number(ec?.saldo_final ?? cliente.saldo);
       const monto = montoSolicitado ?? Number(montoAbono);
       if (!(monto > 0)) throw new Error("Indica el valor del abono.");
@@ -1272,13 +1285,17 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
       const r = await apiPost<{ aplicado: number; servicios_afectados: number }>("/campo/cxc/abono", {
         cliente_id: cliente.id,
         monto,
-        cuenta_id: cajaCuenta.id,
+        cuenta_id: cuentaDestino.id,
         fecha: fechaAbono,
-        concepto: `Cobro CxC de ${cliente.nombre}`
+        concepto: `Cobro CxC de ${cliente.nombre}`,
+        medio_pago: medio,
+        referencia: medio !== "EFECTIVO" && referencia.trim() ? referencia.trim() : undefined
       });
       setMontoAbono("");
+      setReferencia("");
       await cargar();
-      await onAbonoRegistrado?.(`Ingresaron ${money(r.aplicado)} a CAJA y se aplicaron a ${r.servicios_afectados} cargo(s).`);
+      const como = medio === "EFECTIVO" ? "en efectivo a CAJA" : `por ${medio === "CHEQUE" ? "cheque" : "transferencia"} a ${cuentaDestino.nombre}`;
+      await onAbonoRegistrado?.(`Ingresaron ${money(r.aplicado)} ${como} y se aplicaron a ${r.servicios_afectados} cargo(s).`);
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -1347,9 +1364,30 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, o
           {cajaCuenta && onAbonoRegistrado && (ec?.saldo_final ?? cliente.saldo) > 0.005 && (
             <div style={{ border: "1px solid #bfdbfe", background: "#f8fbff", borderRadius: 8, padding: 14, marginBottom: 14 }}>
               <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 10 }}>
-                <div><strong>Registrar cobro</strong><small className="muted" style={{ display: "block" }}>El dinero ingresará directamente a <b>CAJA</b>.</small></div>
-                <span className="chip ok">CAJA · {money(cajaCuenta.saldo)}</span>
+                <div><strong>Registrar cobro</strong><small className="muted" style={{ display: "block" }}>
+                  {medio === "EFECTIVO" ? <>El dinero ingresa a <b>CAJA</b>.</> : <>Entra a <b>{bancoSel?.nombre ?? "BANCO"}</b> (no a la caja).</>}
+                </small></div>
+                {cuentaDestino && <span className="chip ok">{cuentaDestino.nombre} · {money(cuentaDestino.saldo)}</span>}
               </div>
+              <div className="segmented" style={{ marginBottom: 10 }} role="radiogroup" aria-label="Medio de pago">
+                {([["EFECTIVO", "💵 Efectivo"], ["TRANSFERENCIA", "🏦 Transferencia"], ["CHEQUE", "🧾 Cheque"]] as const).map(([v, l]) => (
+                  <button key={v} type="button" role="radio" aria-checked={medio === v} className={medio === v ? "active" : ""} onClick={() => setMedio(v)}>{l}</button>
+                ))}
+              </div>
+              {medio !== "EFECTIVO" && (
+                <div className="cxcCobroGrid" style={{ marginBottom: 8 }}>
+                  {cuentasBanco.length > 1 && (
+                    <label style={{ margin: 0 }}><span>Entra a</span>
+                      <select value={bancoSel?.id ?? ""} onChange={(e) => setBancoId(e.target.value)}>
+                        {cuentasBanco.map((c) => <option key={c.id} value={c.id}>{c.nombre} · {money(c.saldo)}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <label style={{ margin: 0 }}><span>{medio === "CHEQUE" ? "N.º de cheque" : "N.º de transferencia"} <small className="muted">(opcional)</small></span>
+                    <input type="text" maxLength={60} value={referencia} onChange={(e) => setReferencia(e.target.value)} placeholder={medio === "CHEQUE" ? "Ej: 000123 · Pichincha" : "Ej: 4587120"} />
+                  </label>
+                </div>
+              )}
               <div className="cxcCobroGrid">
                 <label style={{ margin: 0 }}><span>Monto del abono</span><input type="number" min="0.01" step="0.01" value={montoAbono} onChange={(e) => setMontoAbono(e.target.value)} placeholder="0.00" /></label>
                 <label style={{ margin: 0 }}><span>Fecha</span><input type="date" value={fechaAbono} onChange={(e) => setFechaAbono(e.target.value)} /></label>
@@ -2233,6 +2271,7 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
     } catch (e) { onError((e as Error).message); }
   }, [onError]);
   useEffect(() => { cargar(); }, [cargar]);
+  useAutoRefresh(cargar); // lo cobrado desde el celular aparece solo
 
   const clientes = data?.clientes ?? [];
   const cajaCuenta = cuentas.find((cuenta) => cuenta.nombre.trim().toUpperCase() === "CAJA");
@@ -2276,7 +2315,7 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
 
       {verCuenta && (
         <EstadoCuentaModal cliente={verCuenta} nombreOperacion={nombreOperacion} matrizName={matrizName}
-          cajaCuenta={cajaCuenta}
+          cajaCuenta={cajaCuenta} cuentas={cuentas}
           onAbonoRegistrado={async (mensaje) => { await cargar(); onNotify(mensaje); }}
           onClose={() => setVerCuenta(null)} onError={onError} />
       )}

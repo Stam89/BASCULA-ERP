@@ -78,6 +78,11 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### 🏦🔄 Transporte: cobro por transferencia/cheque, historial en pestaña y auto-actualización (2026-10-14, pedido del dueño)
+
+- Migración 20261095: `campo_movimientos.medio_pago` (EFECTIVO|TRANSFERENCIA|CHEQUE) y `referencia`. `POST /campo/cxc/abono` acepta `medio_pago` y `referencia` (transferencia/cheque no pueden entrar a CAJA; el concepto agrega «· Transferencia N.º …»). Estado de cuenta → Registrar cobro: Efectivo (CAJA) / Transferencia / Cheque (BANCO u otra cuenta), N.º opcional.
+- Partes Diarios en pestañas «＋ Nuevo parte» / «📋 Historial · N por cobrar». `campo/autoRefresh.ts` (`useAutoRefresh`: cada 30 s con la pestaña visible y al volver a la ventana) en Partes, Cuentas por Cobrar y Caja de Transporte: lo hecho en el celular aparece solo en la PC.
+
 ### 🚜 Parte con varios clientes el mismo día (2026-10-13, pedido del dueño)
 
 - «Nuevo parte» (Transporte → Partes Diarios): fecha + máquina + operador una vez y filas «Cliente / QQ / observación» con «➕ Otro cliente del mismo día». Con 1 fila usa `POST /campo/partes` (igual que antes); con varias `POST /campo/partes/varios` (un parte por cliente, una sola transacción). Lógica compartida en `crearParte`. Cada parte se cobra aparte; la nómina por DÍA ya contaba fechas distintas (un día aunque haya varios partes). Simulacro `campo_varios_clientes.mjs` TODO OK. Mapeo de rubros: «+ Asignar» solo ofrece categorías/nómina libres.
