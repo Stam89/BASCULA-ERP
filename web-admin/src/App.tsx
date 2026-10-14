@@ -21562,10 +21562,27 @@ Motivo (obligatorio):`, "");
           const entradasSel = porCodigos(CODIGOS_SELECCION);
           const entradasEnv = porCodigos(["ARROZ-PILADO-011"]);
           const inputProducts = (selectionForm.service_type === "ENVEJECIMIENTO" ? entradasEnv : entradasSel);
+          // Productos que puede tener cada línea del resultado:
+          //  · Principal (línea 0) de una SELECCIÓN: solo lo que se ENVIÓ (si se mandó 0.11, regresa 0.11;
+          //    no se ofrece Corriente). Envejecimiento: el arroz envejecido.
+          //  · Subproductos / rechazo (líneas 1…): arrocillos, POLVILLO y rechazo.
+          const SUBPRODUCTOS_SELECCION = ["ARROCILLO-34", "ARROCILLO-FINO", "POLVILLO", "RECHAZO"];
+          const salidasDeLinea = (b: SelectionBatch, i: number) => {
+            if (i === 0 && b.service_type !== "ENVEJECIMIENTO") {
+              const enviados = b.inputs.map((x) => selectableProducts.find((p) => p.id === x.product_id))
+                .filter((p, k, arr): p is (typeof selectableProducts)[number] => Boolean(p) && arr.findIndex((q) => q?.id === p!.id) === k);
+              if (enviados.length) return enviados;
+            }
+            if (i > 0) {
+              const subs = porCodigos(SUBPRODUCTOS_SELECCION);
+              if (subs.length) return subs;
+            }
+            return salidasDe(b);
+          };
           const salidasDe = (b: SelectionBatch) => {
             const base = porCodigos(b.service_type === "ENVEJECIMIENTO"
-              ? ["ARROZ-ENVEJECIDO", "ARROCILLO-34", "ARROCILLO-FINO", "RECHAZO"]
-              : [...CODIGOS_SELECCION, "RECHAZO"]);
+              ? ["ARROZ-ENVEJECIDO", "ARROCILLO-34", "ARROCILLO-FINO", "POLVILLO", "RECHAZO"]
+              : [...CODIGOS_SELECCION, "POLVILLO", "RECHAZO"]);
             // Lotes antiguos que enviaron otro producto: se conserva para no bloquearlos.
             const extra = b.inputs.map((i) => selectableProducts.find((p) => p.id === i.product_id))
               .filter((p): p is (typeof selectableProducts)[number] => Boolean(p) && !base.some((x) => x.id === p!.id));
@@ -21965,7 +21982,7 @@ Motivo (obligatorio):`, "");
                                 });
                               }} style={inputStyle}>
                                 <option value="">Selecciona producto…</option>
-                                {salidasDe(b).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                {salidasDeLinea(b, i).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                               </select>
                               <input type="number" step="0.01" min="0" placeholder="QQ" value={line.quantity} onChange={(e) => setOutLine(i, { quantity: e.target.value })} style={inputStyle} />
                               {(() => {
