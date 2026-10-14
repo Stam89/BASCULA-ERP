@@ -41,7 +41,14 @@ export default function PartesModule() {
   const [activos, setActivos] = useState<Activo[]>([]);
   const [operadores, setOperadores] = useState<Operador[]>([]);
   const [partes, setPartes] = useState<Parte[]>([]);
-  const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "", cliente: "", cliente_id: "", qq: "", observaciones: "" });
+  const [f, setF] = useState({ fecha: hoy(), activo_id: "", operador: "" });
+  // Clientes del día: una cosechadora le cosecha a varios dueños en un día → un parte por cliente
+  // (misma fecha, máquina y operador). Con una sola fila es el parte de siempre.
+  type LineaParte = { key: number; cliente: string; cliente_id: string; qq: string; observaciones: string };
+  const lineaVacia = (): LineaParte => ({ key: Date.now() + Math.random(), cliente: "", cliente_id: "", qq: "", observaciones: "" });
+  const [lineas, setLineas] = useState<LineaParte[]>(() => [lineaVacia()]);
+  const setLinea = (key: number, cambio: Partial<LineaParte>) => setLineas((ls) => ls.map((l) => (l.key === key ? { ...l, ...cambio } : l)));
+  const qqLineas = lineas.reduce((s, l) => s + (Number(l.qq) > 0 ? Number(l.qq) : 0), 0);
   const [busy, setBusy] = useState(false);
   const [cobrando, setCobrando] = useState<Parte | null>(null);
   const [editando, setEditando] = useState<Parte | null>(null);
@@ -95,18 +102,22 @@ export default function PartesModule() {
     try {
       setBusy(true);
       if (!f.activo_id) throw new Error("Elige la máquina / cosechadora");
-      const cliente = f.cliente.trim();
-      if (!cliente) throw new Error("Ingresa el cliente / dueño del cultivo");
-      const qq = Number(f.qq);
-      if (!(qq > 0)) throw new Error("Ingresa los quintales trabajados (mayor a 0)");
-      await apiPost("/campo/partes", {
-        fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || undefined,
-        cliente, cliente_id: f.cliente_id || undefined, is_nuevo_externo: !f.cliente_id,
-        qq, observaciones: f.observaciones.trim() || undefined
+      const payload = lineas.map((l, i) => {
+        const cliente = l.cliente.trim();
+        const n = lineas.length > 1 ? ` (fila ${i + 1})` : "";
+        if (!cliente) throw new Error(`Ingresa el cliente / dueño del cultivo${n}`);
+        const qq = Number(l.qq);
+        if (!(qq > 0)) throw new Error(`Ingresa los quintales trabajados (mayor a 0)${n}`);
+        return { cliente, cliente_id: l.cliente_id || undefined, is_nuevo_externo: !l.cliente_id, qq, observaciones: l.observaciones.trim() || undefined };
       });
-      setF({ ...f, cliente: "", cliente_id: "", qq: "", observaciones: "" });
+      const cab = { fecha: f.fecha, activo_id: f.activo_id, operador: f.operador.trim() || undefined };
+      if (payload.length === 1) await apiPost("/campo/partes", { ...cab, ...payload[0] });
+      else await apiPost("/campo/partes/varios", { ...cab, lineas: payload });
+      setLineas([lineaVacia()]);
       await refrescar();
-      notify(nuevoEsCosecha ? "Parte de cosecha guardado" : "Parte de transporte guardado");
+      notify(payload.length > 1
+        ? `${payload.length} partes guardados (${qqFmt(qqLineas)} QQ): uno por cliente`
+        : nuevoEsCosecha ? "Parte de cosecha guardado" : "Parte de transporte guardado");
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
 
@@ -142,36 +153,55 @@ export default function PartesModule() {
             </select>
           </label>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label><span>Operador</span>
-            <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
-              <option value="">(sin operador)</option>
-              {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
-            </select>
-          </label>
-          <label><span>{activoSeleccionado ? (nuevoEsCosecha ? "Quintales cosechados" : "Quintales transportados") : "Quintales trabajados"} [QQ]</span>
-            <input type="number" step="0.01" min="0" value={f.qq} onChange={(e) => setF({ ...f, qq: e.target.value })} placeholder="Ej: 120" />
-          </label>
-        </div>
+        <label><span>Operador</span>
+          <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
+            <option value="">(sin operador)</option>
+            {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
+          </select>
+        </label>
         {operadores.length === 0 && (
           <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>No hay operadores. Agrégalos en <strong>⚙️ Configuración → 👷 Operadores</strong>.</p>
         )}
-        <label><span>Cliente / Dueño del cultivo</span>
-          <ClienteSearchInput kind="farmer" value={f.cliente}
-            allowCreate={false}
-            onChange={(name) => setF((p) => ({ ...p, cliente: name, cliente_id: "" }))}
-            onSelect={(hit) => setF((p) => ({ ...p, cliente: hit.full_name, cliente_id: hit.id }))}
-            onError={(m) => notify(m, "err")}
-            placeholder="Buscar en Báscula o escribir cliente externo…"
-            style={{ width: "100%" }} />
-          {f.cliente.trim() && !f.cliente_id && (
-            <small className="muted" style={{ display: "block", marginTop: 4 }}>Se guardará como cliente externo.</small>
-          )}
-        </label>
-        <label><span>Observaciones (opcional)</span>
-          <input type="text" value={f.observaciones} onChange={(e) => setF({ ...f, observaciones: e.target.value })} placeholder="Ej: Terreno húmedo" />
-        </label>
-        <button className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar reporte"}</button>
+        {lineas.map((l, i) => (
+          <div key={l.key} className={lineas.length > 1 ? "parteLinea" : undefined}>
+            {lineas.length > 1 && (
+              <div className="parteLinea__head">
+                <strong>Cliente {i + 1}</strong>
+                <button type="button" className="btnGhost" title="Quitar este cliente" onClick={() => setLineas((ls) => ls.filter((x) => x.key !== l.key))}>✕ Quitar</button>
+              </div>
+            )}
+            <label><span>Cliente / Dueño del cultivo</span>
+              <ClienteSearchInput kind="farmer" value={l.cliente}
+                allowCreate={false}
+                onChange={(name) => setLinea(l.key, { cliente: name, cliente_id: "" })}
+                onSelect={(hit) => setLinea(l.key, { cliente: hit.full_name, cliente_id: hit.id })}
+                onError={(m) => notify(m, "err")}
+                placeholder="Buscar en Báscula o escribir cliente externo…"
+                style={{ width: "100%" }} />
+              {l.cliente.trim() && !l.cliente_id && (
+                <small className="muted" style={{ display: "block", marginTop: 4 }}>Se guardará como cliente externo.</small>
+              )}
+            </label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label><span>{activoSeleccionado ? (nuevoEsCosecha ? "Quintales cosechados" : "Quintales transportados") : "Quintales trabajados"} [QQ]</span>
+                <input type="number" step="0.01" min="0" value={l.qq} onChange={(e) => setLinea(l.key, { qq: e.target.value })} placeholder="Ej: 120" />
+              </label>
+              <label><span>Observaciones (opcional)</span>
+                <input type="text" value={l.observaciones} onChange={(e) => setLinea(l.key, { observaciones: e.target.value })} placeholder="Ej: Terreno húmedo" />
+              </label>
+            </div>
+          </div>
+        ))}
+        <button type="button" className="btnSecondary" onClick={() => setLineas((ls) => [...ls, lineaVacia()])}>
+          ➕ Otro cliente del mismo día
+        </button>
+        {lineas.length > 1 && (
+          <p className="muted" style={{ margin: "2px 0 0", fontSize: 12.5 }}>
+            Se guarda <strong>un parte por cliente</strong> ({lineas.length} · {qqFmt(qqLineas)} QQ en total), con la misma fecha, máquina y operador.
+            Cada uno se cobra aparte. Si el operador cobra por día, ese día se le paga una sola vez.
+          </p>
+        )}
+        <button className="primary" disabled={busy}>{busy ? "Guardando…" : lineas.length > 1 ? `Guardar ${lineas.length} partes` : "Guardar reporte"}</button>
         {activosActivos.length === 0 && (
           <p className="muted" style={{ marginTop: 6, fontSize: 12 }}>No hay maquinaria activa. Da de alta cosechadoras en <strong>⚙️ Configuración → 🚜 Flota y Maquinaria</strong>.</p>
         )}

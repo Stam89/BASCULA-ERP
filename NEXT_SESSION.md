@@ -78,6 +78,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### 🚜 Parte con varios clientes el mismo día (2026-10-13, pedido del dueño)
+
+- «Nuevo parte» (Transporte → Partes Diarios): fecha + máquina + operador una vez y filas «Cliente / QQ / observación» con «➕ Otro cliente del mismo día». Con 1 fila usa `POST /campo/partes` (igual que antes); con varias `POST /campo/partes/varios` (un parte por cliente, una sola transacción). Lógica compartida en `crearParte`. Cada parte se cobra aparte; la nómina por DÍA ya contaba fechas distintas (un día aunque haya varios partes). Simulacro `campo_varios_clientes.mjs` TODO OK. Mapeo de rubros: «+ Asignar» solo ofrece categorías/nómina libres.
+
 ### ⚖️ Báscula en pestañas (2026-10-13, pedido del dueño)
 
 - Báscula: «📲 Tickets de báscula» (por defecto; ahí se ingresa la materia prima) · «🔁 Corregir accionista» (solo si hay ingresos y más de un accionista) · «🔗 Sincronización» (con punto de estado; ahí están «Contar desde el ticket #» y «Forzar sincronización completa»). `basculaVista` recordada en localStorage; desde Inicio abre Tickets. Solo cambia qué se muestra; la lógica es la misma.

@@ -1410,38 +1410,62 @@ campoRouter.post("/partes/integracion-bascula", asyncRoute(async (req, res) => {
   res.status(201).json(parte);
 }));
 
+// Un parte = una máquina + un cliente + QQ de un día. Usado por POST /partes y POST /partes/varios.
+const lineaParteSchema = z.object({
+  cliente: z.string().min(1).max(160),
+  cliente_id: z.string().uuid().optional(),
+  is_nuevo_externo: z.boolean().optional(),
+  qq: z.number().positive(),
+  observaciones: z.string().max(400).optional()
+});
+async function crearParte(
+  client: Q,
+  cab: { fecha?: string; activo_id: string; operador?: string },
+  l: z.infer<typeof lineaParteSchema>,
+  creadoPor: string | null
+) {
+  const act = await client.query("SELECT activo FROM campo_activos WHERE id = $1", [cab.activo_id]);
+  if (!act.rowCount) throw new ApiError(404, "Maquina no encontrada");
+  if (act.rows[0].activo === false) throw new ApiError(409, "Esa máquina está dada de baja: reactívala en el catálogo o elige otra.");
+  const cliente = await resolverClienteParte(client, { cliente: l.cliente, cliente_id: l.cliente_id, is_nuevo_externo: l.is_nuevo_externo });
+  const farmerId = await resolverFarmerIdParte(client, l.cliente_id, cliente.nombre);
+  const parte = (await client.query(
+    `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq, observaciones, created_by)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq::float AS qq,
+               observaciones, estado, origen, created_at`,
+    [cab.fecha ?? null, cab.activo_id, cab.operador?.trim() || null, cliente.nombre,
+     cliente.id, farmerId, l.qq, l.observaciones?.trim() || null, creadoPor]
+  )).rows[0];
+  return { ...parte, cliente_tipo: cliente.tipo };
+}
+
 campoRouter.post("/partes", asyncRoute(async (req, res) => {
+  const body = lineaParteSchema.extend({
+    fecha: fechaSchema.optional(),
+    activo_id: z.string().uuid(),
+    operador: z.string().max(140).optional()
+  }).parse(req.body);
+  const parte = await inTransaction((client) => crearParte(client, body, body, userId(req)));
+  res.status(201).json(parte);
+}));
+
+// VARIOS CLIENTES EL MISMO DÍA (una cosechadora le cosecha a varios dueños en un día): un parte por
+// cliente con la misma fecha, máquina y operador, todos en UNA transacción (se guardan todos o ninguno).
+// Cada parte se cobra aparte; la nómina del operador por DÍA cuenta ese día una sola vez.
+campoRouter.post("/partes/varios", asyncRoute(async (req, res) => {
   const body = z.object({
     fecha: fechaSchema.optional(),
     activo_id: z.string().uuid(),
     operador: z.string().max(140).optional(),
-    cliente: z.string().min(1).max(160),
-    cliente_id: z.string().uuid().optional(),
-    is_nuevo_externo: z.boolean().optional(),
-    qq: z.number().positive(),
-    observaciones: z.string().max(400).optional()
+    lineas: z.array(lineaParteSchema).min(1).max(30)
   }).parse(req.body);
-  const result = await inTransaction(async (client) => {
-    const act = await client.query("SELECT activo FROM campo_activos WHERE id = $1", [body.activo_id]);
-    if (!act.rowCount) throw new ApiError(404, "Maquina no encontrada");
-    if (act.rows[0].activo === false) throw new ApiError(409, "Esa máquina está dada de baja: reactívala en el catálogo o elige otra.");
-    const cliente = await resolverClienteParte(client, {
-      cliente: body.cliente,
-      cliente_id: body.cliente_id,
-      is_nuevo_externo: body.is_nuevo_externo
-    });
-    const farmerId = await resolverFarmerIdParte(client, body.cliente_id, cliente.nombre);
-    const parte = (await client.query(
-      `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq, observaciones, created_by)
-       VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING id, fecha, activo_id, operador, cliente, cliente_id, farmer_id, qq::float AS qq,
-                 observaciones, estado, origen, created_at`,
-      [body.fecha ?? null, body.activo_id, body.operador?.trim() || null, cliente.nombre,
-       cliente.id, farmerId, body.qq, body.observaciones?.trim() || null, userId(req)]
-    )).rows[0];
-    return { parte, cliente_tipo: cliente.tipo };
+  const partes = await inTransaction(async (client) => {
+    const out = [];
+    for (const l of body.lineas) out.push(await crearParte(client, body, l, userId(req)));
+    return out;
   });
-  res.status(201).json({ ...result.parte, cliente_tipo: result.cliente_tipo });
+  res.status(201).json({ partes, total_qq: Math.round(partes.reduce((s, p) => s + Number(p.qq), 0) * 100) / 100 });
 }));
 
 // ── Tarifas de operadores (por operador + máquina) ──────────────────────────

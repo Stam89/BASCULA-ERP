@@ -5902,3 +5902,8 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 /* Bascula: pestanas Tickets / Corregir accionista / Sincronizacion */
 .basculaTabs { display: flex; flex-wrap: wrap; max-width: 100%; }
 .basculaTabs button { flex: 1 1 auto; white-space: nowrap; }
+
+/* Transporte › Parte con varios clientes el mismo día */
+.parteLinea { border: 1px solid var(--c-border); border-radius: 10px; padding: 8px 10px; margin-bottom: 8px; background: var(--c-surface); }
+.parteLinea__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.parteLinea__head button { padding: 2px 8px; font-size: 12px; }
