@@ -267,6 +267,7 @@ type PagoHist = {
   cargo: string | null; es_sueldo_semanal: boolean;
   cuenta_nombre: string | null; anulado_at: string | null; anulado_motivo: string | null;
 };
+type VistaNomina = "semana" | "ajustes" | "historial";
 
 export default function NominaOperadores() {
   const [periodo, setPeriodo] = useState<Periodo>("semana");
@@ -281,6 +282,8 @@ export default function NominaOperadores() {
   const [pagos, setPagos] = useState<PagoHist[]>([]);
   const [busy, setBusy] = useState(false);
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
+  const [vista, setVista] = useState<VistaNomina>("semana");
+  const [previewScope, setPreviewScope] = useState<"semana" | "ajustes" | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 4000); };
 
   const cambiarPeriodo = (p: Periodo) => { setPeriodo(p); if (p !== "personalizado") setRango(rangoDe(p)); };
@@ -310,17 +313,19 @@ export default function NominaOperadores() {
     setEdits((prev) => ({ ...prev, [clave]: { ...prev[clave], ...cambio } }));
   }, []);
 
-  const visibles = useMemo(() => {
-    const filtradas = filas.filter((f) => area === "todas" || f.area === area);
+  // El sueldo fijo debe asignarse una sola vez por persona antes de filtrar por
+  // area. Asi la vista simple y Ajustes avanzados siempre suman lo mismo.
+  const filasPreparadas = useMemo(() => {
     const sueldoAsignado = new Set<string>();
-    return filtradas.map((f) => {
+    return filas.map((f) => {
       if (!f.modalidad_fija) return f;
       const claveOperador = f.operador_id ?? f.operador.trim().toLowerCase();
       const principal = f.periodo_semanal && !f.sueldo_semanal_pagado && !sueldoAsignado.has(claveOperador);
       if (principal) sueldoAsignado.add(claveOperador);
       return { ...f, sueldo_semanal_principal: principal, sugerido: principal ? f.sueldo_semanal : 0 };
     });
-  }, [filas, area]);
+  }, [filas]);
+  const visibles = useMemo(() => filasPreparadas.filter((f) => area === "todas" || f.area === area), [filasPreparadas, area]);
   const resumen = useMemo(() => {
     const t = { base: 0, extras: 0, descuentos: 0, total: 0, incluidas: 0, errores: 0 };
     for (const f of visibles) {
@@ -332,16 +337,79 @@ export default function NominaOperadores() {
     return { ...t, base: r2(t.base), extras: r2(t.extras), descuentos: r2(t.descuentos), total: r2(t.total) };
   }, [visibles, edits]);
 
-  async function procesar() {
+  const gruposSemana = useMemo(() => {
+    const mapa = new Map<string, { clave: string; operador: string; cargo: string | null; filas: FilaMatriz[] }>();
+    for (const f of filasPreparadas) {
+      const clave = f.operador_id ?? f.operador.trim().toLowerCase();
+      const actual = mapa.get(clave);
+      if (actual) actual.filas.push(f);
+      else mapa.set(clave, { clave, operador: f.operador, cargo: f.cargo, filas: [f] });
+    }
+    return [...mapa.values()].map((g) => {
+      const calculos = g.filas.map((f) => ({ f, c: calcularFila(f, edits[f.clave]) }));
+      const areas = [...new Set(g.filas.map((f) => AREA_LABEL[f.area]))];
+      const maquinas = [...new Set(g.filas.map((f) => f.activo_nombre).filter((v): v is string => !!v))];
+      const base = r2(calculos.reduce((s, x) => s + (x.c.incluida ? x.c.base : 0), 0));
+      const extras = r2(calculos.reduce((s, x) => s + (x.c.incluida ? x.c.extras : 0), 0));
+      const descuentos = r2(calculos.reduce((s, x) => s + (x.c.incluida ? x.c.descuentos : 0), 0));
+      const total = r2(calculos.reduce((s, x) => s + (x.c.incluida ? x.c.total : 0), 0));
+      const incluida = calculos.some((x) => x.c.incluida);
+      const puedeIncluir = calculos.some((x) => x.c.sugeridaIncluir);
+      const error = calculos.find((x) => x.c.error)?.c.error ?? "";
+      const principal = g.filas.find((f) => f.sueldo_semanal_principal) ?? g.filas[0];
+      return { ...g, calculos, areas, maquinas, base, extras, descuentos, total, incluida, puedeIncluir, error, principal };
+    });
+  }, [filasPreparadas, edits]);
+
+  const resumenSemana = useMemo(() => {
+    const incluidos = gruposSemana.filter((g) => g.incluida);
+    return {
+      personas: incluidos.length,
+      base: r2(incluidos.reduce((s, g) => s + g.base, 0)),
+      extras: r2(incluidos.reduce((s, g) => s + g.extras, 0)),
+      descuentos: r2(incluidos.reduce((s, g) => s + g.descuentos, 0)),
+      total: r2(incluidos.reduce((s, g) => s + g.total, 0)),
+      errores: incluidos.filter((g) => g.error).length
+    };
+  }, [gruposSemana]);
+
+  function cambiarInclusionGrupo(filasGrupo: FilaMatriz[], incluir: boolean) {
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const f of filasGrupo) next[f.clave] = { ...next[f.clave], excluir: !incluir };
+      return next;
+    });
+  }
+
+  function cambiarExtraGrupo(filasGrupo: FilaMatriz[], principal: FilaMatriz, valor: string) {
+    setEdits((prev) => {
+      const next = { ...prev };
+      for (const f of filasGrupo) {
+        const actual = { ...next[f.clave] };
+        actual.extras = f.clave === principal.clave ? valor : "";
+        next[f.clave] = actual;
+      }
+      return next;
+    });
+  }
+
+  const filasPreview = previewScope === "semana" ? filasPreparadas : previewScope === "ajustes" ? visibles : [];
+  const lotePreview = filasPreview.map((f) => ({ f, c: calcularFila(f, edits[f.clave]) })).filter(({ c }) => c.incluida);
+  const totalPreview = r2(lotePreview.reduce((s, x) => s + x.c.total, 0));
+
+  function abrirPreview(scope: "semana" | "ajustes") {
     if (!cuentaId) { notify("Selecciona la cuenta desde la que se pagará la nómina.", "err"); return; }
-    const lote = visibles.map((f) => ({ f, c: calcularFila(f, edits[f.clave]) })).filter(({ c }) => c.incluida);
-    if (!lote.length) { notify("No hay filas para pagar: escribe montos o marca las filas a incluir.", "err"); return; }
+    const base = scope === "semana" ? filasPreparadas : visibles;
+    const lote = base.map((f) => ({ f, c: calcularFila(f, edits[f.clave]) })).filter(({ c }) => c.incluida);
+    if (!lote.length) { notify("No hay pagos seleccionados. Revisa los trabajadores y sus montos.", "err"); return; }
     const conError = lote.find(({ c }) => c.error);
     if (conError) { notify(`${conError.f.operador}: ${conError.c.error}.`, "err"); return; }
-    const cuenta = cuentas.find((c) => c.id === cuentaId)?.nombre ?? "la cuenta seleccionada";
-    if (!window.confirm(`¿Procesar la nómina de ${lote.length} operador(es) por ${money(resumen.total)} desde ${cuenta}?\n\n`
-      + lote.map(({ f, c }) => `• ${f.operador}${f.activo_nombre ? ` (${f.activo_nombre})` : ""}: ${money(c.total)}`).join("\n")
-      + "\n\nSe registra un egreso por operador; sus partes quedan pagados y los vales descontados, rendidos. Todo o nada.")) return;
+    setPreviewScope(scope);
+  }
+
+  async function procesarConfirmado() {
+    const lote = lotePreview;
+    if (!lote.length || !previewScope) { setPreviewScope(null); return; }
     try {
       setBusy(true);
       const r = await apiPost<{ total: number; pagos: unknown[] }>("/campo/nomina-operadores/lote", {
@@ -356,6 +424,7 @@ export default function NominaOperadores() {
         }))
       });
       notify(`Nómina procesada: ${r.pagos.length} pago(s) por ${money(r.total)} ✓`);
+      setPreviewScope(null);
       await cargar();
     } catch (e) { notify((e as Error).message, "err"); } finally { setBusy(false); }
   }
@@ -381,80 +450,113 @@ Motivo (obligatorio):`, "");
   return (
     <section className="panelGrid">
       {flash && <div className={`tablePanel`} style={{ gridColumn: "1 / -1", background: flash.kind === "ok" ? "#dcfce7" : "#fee2e2", color: flash.kind === "ok" ? "#15803d" : "#b91c1c", fontWeight: 600 }}>{flash.text}</div>}
-      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+      <div className="tablePanel" style={{ gridColumn: "1 / -1", paddingBottom: 8 }}>
         <div className="nomMatriz__barra">
-          <h2 style={{ margin: 0 }}>💵 Nómina de Operadores</h2>
-          <div className="nomMatriz__filtros">
-            <label>Periodo de pago
-              <select value={periodo} onChange={(e) => cambiarPeriodo(e.target.value as Periodo)}>
-                {PERIODOS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}
-              </select>
-            </label>
-            {periodo === "personalizado" ? (
-              <>
-                <label>Desde<input type="date" value={rango.from} onChange={(e) => setRango({ ...rango, from: e.target.value })} /></label>
-                <label>Hasta<input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label>
-              </>
-            ) : <span className="nomMatriz__rango">{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</span>}
-            <label className="nomMatriz__anteriores" title="Partes no pagados de antes del periodo (se deben igual)">
-              <span><input type="checkbox" checked={conAnteriores} onChange={(e) => setConAnteriores(e.target.checked)} /> Incluir pendientes anteriores</span>
-            </label>
-            <label>Departamento / Área
-              <select value={area} onChange={(e) => setArea(e.target.value as "todas" | Area)}>
-                <option value="todas">Todas</option>
-                <option value="cosechadora">🌾 Cosechadora</option>
-                <option value="transporte">🚛 Transporte</option>
-                <option value="otro">Sin máquina</option>
-              </select>
-            </label>
-            <label>Pagar desde
-              <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
-                <option value="">Seleccione cuenta</option>
-                {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
-              </select>
-            </label>
-            <button type="button" onClick={cargar} disabled={busy}>↻ Actualizar</button>
+          <div>
+            <h2 style={{ margin: 0 }}>💵 Nómina de Transporte y Cosechadora</h2>
+            <p className="muted" style={{ margin: "3px 0 0" }}>Pago semanal con el mismo flujo claro de la Matriz, conservando producción, vales y ajustes.</p>
+          </div>
+          <button type="button" onClick={cargar} disabled={busy}>{busy ? "Cargando…" : "↻ Actualizar"}</button>
+        </div>
+        <nav className="cajaSubNav campoNomina__nav">
+          <button type="button" className={vista === "semana" ? "active" : ""} onClick={() => {
+            setVista("semana"); setArea("todas");
+            if (periodo !== "semana" && periodo !== "semana_ant") cambiarPeriodo("semana");
+          }}>🗓️ Pagar la semana</button>
+          <button type="button" className={vista === "ajustes" ? "active" : ""} onClick={() => setVista("ajustes")}>✎ Ajustes avanzados</button>
+          <button type="button" className={vista === "historial" ? "active" : ""} onClick={() => setVista("historial")}>📜 Historial de pagos</button>
+        </nav>
+      </div>
+
+      {vista === "semana" && (
+        <div className="semana campoNomina__semana" style={{ gridColumn: "1 / -1" }}>
+          <div className="semana-head">
+            <div>
+              <h3 className="semana-title">🗓️ Pagar la semana</h3>
+              <p className="semana-sub">Revisa el sueldo, los adicionales y los descuentos antes de confirmar. El pago completo se guarda en una sola operación.</p>
+            </div>
+            <div className="campoNomina__semanaControles">
+              <label>Semana
+                <select value={periodo === "semana_ant" ? "semana_ant" : "semana"} onChange={(e) => cambiarPeriodo(e.target.value as "semana" | "semana_ant")}>
+                  <option value="semana">Semana actual</option>
+                  <option value="semana_ant">Semana anterior</option>
+                </select>
+              </label>
+              <span className="nomMatriz__rango">{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</span>
+              <label>Pagar desde
+                <select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}>
+                  <option value="">Seleccione cuenta</option>
+                  {cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div className="semana-kpis">
+            <div><span>Trabajadores</span><b>{resumenSemana.personas}</b></div>
+            <div><span>Sueldo / Producción</span><b>{money(resumenSemana.base)}</b></div>
+            <div><span>Adicionales</span><b>{money(resumenSemana.extras)}</b></div>
+            <div><span>Vales / Descuentos</span><b className={resumenSemana.descuentos > 0 ? "neg" : ""}>{money(resumenSemana.descuentos)}</b></div>
+            <div className="semana-kpi-total"><span>Total a pagar</span><b>{money(resumenSemana.total)}</b></div>
+          </div>
+          {resumenSemana.errores > 0 && <p className="semana-aviso semana-aviso--warn">Hay {resumenSemana.errores} trabajador(es) que requieren una nota o corrección antes de pagar.</p>}
+          <div className="campoNomina__lista">
+            {gruposSemana.length === 0 && <div className="emptyState"><p>{busy ? "Cargando nómina…" : "No hay trabajadores activos."}</p></div>}
+            {gruposSemana.map((g) => (
+              <article key={g.clave} className={`campoNomina__persona ${g.error ? "is-error" : ""} ${g.incluida ? "" : "is-fuera"}`}>
+                <label className="campoNomina__personaCheck" title={g.puedeIncluir ? "Incluir en el pago semanal" : "Este trabajador no tiene valores pendientes"}>
+                  <input type="checkbox" checked={g.incluida} disabled={!g.puedeIncluir} onChange={(e) => cambiarInclusionGrupo(g.filas, e.target.checked)} />
+                </label>
+                <div className="campoNomina__identidad">
+                  <strong>{g.operador}</strong>
+                  <small>{g.cargo || "Operador"} · {g.areas.join(" / ")}</small>
+                  <small>{g.maquinas.length ? g.maquinas.join(", ") : "Sin máquina asignada"}</small>
+                </div>
+                <div className="campoNomina__monto"><span>Ganó</span><b>{money(g.base)}</b></div>
+                <label className="campoNomina__adicional"><span>Adicional / Bono</span>
+                  <input type="number" min="0" step="0.01" value={g.extras ? String(g.extras) : ""} placeholder="0.00"
+                    onChange={(e) => cambiarExtraGrupo(g.filas, g.principal, e.target.value)} />
+                </label>
+                <div className="campoNomina__monto campoNomina__descuento"><span>Vales / Desc.</span><b>{g.descuentos > 0 ? `−${money(g.descuentos)}` : "—"}</b></div>
+                <div className="campoNomina__monto campoNomina__neto"><span>A pagar</span><b>{money(g.total)}</b></div>
+                <button type="button" className="btnGhost" onClick={() => { setVista("ajustes"); setArea("todas"); }} title="Ver producción, descuentos y notas">Revisar</button>
+                {g.error && <small className="nomMatriz__alerta campoNomina__error">{g.error}</small>}
+              </article>
+            ))}
+          </div>
+          <div className="semana-acciones">
+            <button type="button" className="semana-pagar" disabled={busy || resumenSemana.personas === 0 || resumenSemana.errores > 0} onClick={() => abrirPreview("semana")}>
+              Revisar y pagar · {money(resumenSemana.total)}
+            </button>
+            <small className="muted">Nada se descuenta hasta confirmar la vista previa.</small>
           </div>
         </div>
-        <p className="muted" style={{ margin: "8px 0 0", fontSize: 12.5 }}>
-          Escribe directo en las celdas (Enter o ↓ baja a la siguiente fila). <strong>Base</strong> usa el sueldo semanal configurado o producción × tarifa;
-          <strong> Adicional / Bonos</strong> sirve para pagos ocasionales. <strong>Total</strong> = Base + Adicionales − Descuentos.
-          Se pagan las filas marcadas con total mayor a 0 o modificadas.{conAnteriores ? " Incluye los partes sin pagar de antes del periodo." : ""}
-        </p>
-      </div>
+      )}
 
-      <div className="tablePanel nomMatriz" style={{ gridColumn: "1 / -1" }}>
-        <div className="nomMatriz__scroll">
-          <table className="nomMatriz__tabla">
-            <thead><tr>
-              <th className="nomMatriz__check" title="Incluir en el lote">✓</th>
-              <th>Operador</th><th>Producción</th>
-              <th className="num">Sueldo semanal / Base</th><th className="num">Adicional / Bonos</th>
-              <th className="num">Vales / Descuentos</th><th className="num">Total a Pagar</th><th>Nota</th>
-            </tr></thead>
-            <tbody>
-              {visibles.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 16 }}>{busy ? "Cargando…" : "No hay operadores activos ni partes pendientes en este periodo."}</td></tr>}
-              {visibles.map((f, i) => <FilaNomina key={f.clave} fila={f} idx={i} edit={edits[f.clave]} onEdit={onEdit} />)}
-            </tbody>
-            {visibles.length > 0 && (
-              <tfoot><tr>
-                <td></td><td colSpan={2}>{resumen.incluidas} a pagar{resumen.errores ? <span className="nomMatriz__alerta"> · {resumen.errores} con error</span> : ""}</td>
-                <td className="num">{money(resumen.base)}</td><td className="num">{money(resumen.extras)}</td>
-                <td className="num">{money(resumen.descuentos)}</td><td className="num nomMatriz__total">{money(resumen.total)}</td><td></td>
-              </tr></tfoot>
-            )}
-          </table>
+      {vista === "ajustes" && (<>
+        <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+          <div className="nomMatriz__barra">
+            <div><h3 style={{ margin: 0 }}>✎ Ajustes avanzados</h3><p className="muted" style={{ margin: "3px 0 0" }}>Producción, vales, descuentos y notas por máquina.</p></div>
+            <div className="nomMatriz__filtros">
+              <label>Periodo de pago<select value={periodo} onChange={(e) => cambiarPeriodo(e.target.value as Periodo)}>{PERIODOS.map(([k, t]) => <option key={k} value={k}>{t}</option>)}</select></label>
+              {periodo === "personalizado" ? <><label>Desde<input type="date" value={rango.from} onChange={(e) => setRango({ ...rango, from: e.target.value })} /></label><label>Hasta<input type="date" value={rango.to} onChange={(e) => setRango({ ...rango, to: e.target.value })} /></label></> : <span className="nomMatriz__rango">{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</span>}
+              <label className="nomMatriz__anteriores" title="Partes no pagados de antes del periodo (se deben igual)"><span><input type="checkbox" checked={conAnteriores} onChange={(e) => setConAnteriores(e.target.checked)} /> Incluir pendientes anteriores</span></label>
+              <label>Área<select value={area} onChange={(e) => setArea(e.target.value as "todas" | Area)}><option value="todas">Todas</option><option value="cosechadora">🌾 Cosechadora</option><option value="transporte">🚛 Transporte</option><option value="otro">Sin máquina</option></select></label>
+              <label>Pagar desde<select value={cuentaId} onChange={(e) => setCuentaId(e.target.value)}><option value="">Seleccione cuenta</option>{cuentas.map((c) => <option key={c.id} value={c.id}>{c.nombre} ({money(c.saldo)})</option>)}</select></label>
+            </div>
+          </div>
         </div>
-        <div className="nomMatriz__acciones">
-          <small className="muted">Un egreso por operador desde la cuenta elegida; los partes quedan pagados y los vales descontados, rendidos. Si una fila falla, no se paga ninguna.</small>
-          <button type="button" className="primary" disabled={busy || resumen.incluidas === 0 || resumen.errores > 0} onClick={procesar}>
-            {busy ? "Procesando…" : `💾 Procesar Nómina en Lote · ${resumen.incluidas} · ${money(resumen.total)}`}
-          </button>
+        <div className="tablePanel nomMatriz" style={{ gridColumn: "1 / -1" }}>
+          <div className="nomMatriz__scroll"><table className="nomMatriz__tabla">
+            <thead><tr><th className="nomMatriz__check" title="Incluir en el lote">✓</th><th>Operador</th><th>Producción</th><th className="num">Sueldo semanal / Base</th><th className="num">Adicional / Bonos</th><th className="num">Vales / Descuentos</th><th className="num">Total a Pagar</th><th>Nota</th></tr></thead>
+            <tbody>{visibles.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 16 }}>{busy ? "Cargando…" : "No hay operadores activos ni partes pendientes en este periodo."}</td></tr>}{visibles.map((f, i) => <FilaNomina key={f.clave} fila={f} idx={i} edit={edits[f.clave]} onEdit={onEdit} />)}</tbody>
+            {visibles.length > 0 && <tfoot><tr><td></td><td colSpan={2}>{resumen.incluidas} a pagar{resumen.errores ? <span className="nomMatriz__alerta"> · {resumen.errores} con error</span> : ""}</td><td className="num">{money(resumen.base)}</td><td className="num">{money(resumen.extras)}</td><td className="num">{money(resumen.descuentos)}</td><td className="num nomMatriz__total">{money(resumen.total)}</td><td></td></tr></tfoot>}
+          </table></div>
+          <div className="nomMatriz__acciones"><small className="muted">Si una fila falla, no se paga ninguna.</small><button type="button" className="primary" disabled={busy || resumen.incluidas === 0 || resumen.errores > 0} onClick={() => abrirPreview("ajustes")}>{busy ? "Procesando…" : `Revisar pago · ${money(resumen.total)}`}</button></div>
         </div>
-      </div>
+      </>)}
 
-      <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
-        <h3 style={{ margin: "0 0 8px" }}>🧾 Pagos de nómina recientes</h3>
+      {vista === "historial" && <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
+        <h3 style={{ margin: "0 0 8px" }}>📜 Historial de pagos de nómina</h3>
         <div className="nomMatriz__scroll">
           <table className="nomMatriz__tabla nomHist">
             <thead><tr><th>Fecha</th><th>Operador</th><th>Máquina</th><th className="num">Partes</th><th className="num">Monto</th><th>Cuenta</th><th>Estado</th><th></th></tr></thead>
@@ -475,7 +577,21 @@ Motivo (obligatorio):`, "");
             </tbody>
           </table>
         </div>
-      </div>
+      </div>}
+
+      {previewScope && (
+        <div className="modalOverlay" onClick={() => !busy && setPreviewScope(null)}>
+          <div className="modalCard semana-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="nomMatriz__barra"><div><h3 style={{ margin: 0 }}>Revisar pago de nómina</h3><p className="muted" style={{ margin: "3px 0 0" }}>{rango.from.split("-").reverse().join("/")} → {rango.to.split("-").reverse().join("/")}</p></div><button type="button" className="btnGhost" disabled={busy} onClick={() => setPreviewScope(null)}>✕</button></div>
+            <div className="semana-detalle">
+              {lotePreview.map(({ f, c }) => <div className="semana-fila" key={f.clave}><span><strong>{f.operador}</strong><small style={{ display: "block" }}>{f.sueldo_semanal_principal ? "Sueldo semanal" : f.activo_nombre ?? "Adicional"}</small></span><b>{money(c.total)}</b></div>)}
+            </div>
+            <div className="semana-total"><span>Total a pagar</span><b>{money(totalPreview)}</b></div>
+            <p className="semana-aviso semana-aviso--info">Se registrará desde <strong>{cuentas.find((c) => c.id === cuentaId)?.nombre ?? "la cuenta seleccionada"}</strong>. Los partes quedarán pagados y los vales incluidos quedarán rendidos.</p>
+            <div className="buttonRow" style={{ marginTop: 12 }}><button type="button" className="semana-pagar" disabled={busy} onClick={procesarConfirmado}>{busy ? "Procesando…" : `Confirmar pago · ${money(totalPreview)}`}</button><button type="button" disabled={busy} onClick={() => setPreviewScope(null)}>Volver</button></div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

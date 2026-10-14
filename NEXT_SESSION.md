@@ -1,13 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-13
+Actualizado: 2026-10-14
 
 ## Inicio rapido
 
 - Repositorio: `C:\Users\Usuario\OneDrive\Documentos\GitHub\BASCULA-ERP`
 - Rama de trabajo: `main`
 - Estado esperado: limpio.
-- Ultimo cambio funcional: Transporte y Cosechadora permite configurar cargo y sueldo fijo semanal por operador, pagar adicionales por separado y conserva el esquema por produccion para quienes no tienen sueldo fijo.
+- Ultimo cambio funcional: la Nomina de Transporte y Cosechadora usa un flujo semanal simple como Matriz, con resumen por trabajador, adicionales rapidos, vista previa, ajustes avanzados e historial separado.
 - ERP local: `http://localhost:4000/`
 - Backend: Node/Express/TypeScript/PostgreSQL en `backend/`.
 - Frontend: React/TypeScript/Vite en `web-admin/`.
@@ -48,6 +48,13 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 ```
 
 ## Estado funcional reciente
+
+### 💵 Nomina de Campo con flujo semanal tipo Matriz (2026-10-14)
+
+- `NominaOperadores` abre en `Pagar la semana`: agrupa las filas tecnicas por trabajador y muestra Ganó, Adicional/Bono, Vales/Descuentos y Neto, con selector de semana y cuenta de pago.
+- `Revisar y pagar` abre una vista previa bloqueante con el desglose y total antes de ejecutar el mismo endpoint transaccional existente. No se cambio el calculo ni el guardado de pagos.
+- La matriz anterior permanece completa en `Ajustes avanzados` (produccion, tarifas, descuentos y notas por maquina). El historial queda en una pestana propia con su anulacion existente.
+- Verificacion sin pagar datos reales: vista semanal, Ajustes, Historial y modal revisados en el ERP local; frontend build, ESLint focalizado y 226 pruebas backend correctos; consola del navegador sin errores.
 
 ### 🚜 Nomina de Campo: sueldo semanal y adicionales (2026-10-13)
 

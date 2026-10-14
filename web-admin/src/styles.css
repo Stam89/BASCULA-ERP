@@ -4597,6 +4597,41 @@ textarea::placeholder {
 .nomMatriz__tabla tfoot td { border-top: 2px solid #e2e8f0; font-weight: 800; padding-top: 10px; font-variant-numeric: tabular-nums; }
 .nomMatriz__acciones { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
 .nomMatriz__acciones small { margin-right: auto; max-width: 520px; }
+/* Transporte y Cosechadora · pago semanal simplificado, igual al flujo de Matriz. */
+.campoNomina__nav { margin: 14px -4px 0; }
+.campoNomina__semana { min-width: 0; }
+.campoNomina__semanaControles { display: flex; align-items: flex-end; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.campoNomina__semanaControles label { display: grid; gap: 3px; margin: 0; font-size: 12px; font-weight: 700; color: #475569; }
+.campoNomina__semanaControles select { min-width: 170px; }
+.campoNomina__lista { display: grid; gap: 7px; margin-top: 12px; }
+.campoNomina__persona { display: grid; grid-template-columns: 28px minmax(180px, 1.5fr) repeat(4, minmax(100px, .75fr)) auto; align-items: center; gap: 10px; padding: 9px 11px; border: 1px solid #d1fae5; border-radius: 10px; background: #fff; }
+.campoNomina__persona.is-fuera { opacity: .58; background: #f8fafc; }
+.campoNomina__persona.is-error { border-color: #f59e0b; background: #fffbeb; }
+.campoNomina__personaCheck { margin: 0; display: grid; place-items: center; }
+.campoNomina__personaCheck input { width: 18px; height: 18px; margin: 0; }
+.campoNomina__identidad { min-width: 0; display: grid; gap: 1px; }
+.campoNomina__identidad strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.campoNomina__identidad small { color: #64748b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.campoNomina__monto { display: grid; gap: 2px; text-align: right; font-variant-numeric: tabular-nums; }
+.campoNomina__monto span, .campoNomina__adicional span { color: #64748b; font-size: 10.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.campoNomina__monto b { font-size: 14px; }
+.campoNomina__adicional { display: grid; gap: 3px; margin: 0; }
+.campoNomina__adicional input { min-width: 0; width: 100%; padding: 7px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.campoNomina__descuento b { color: #b91c1c; }
+.campoNomina__neto b { color: #047857; font-size: 16px; }
+.campoNomina__error { grid-column: 2 / -1; }
+@media (max-width: 980px) {
+  .campoNomina__persona { grid-template-columns: 28px minmax(180px, 1fr) repeat(2, minmax(110px, .7fr)); }
+  .campoNomina__persona > .campoNomina__monto:nth-of-type(2), .campoNomina__persona > button { grid-column: auto; }
+}
+@media (max-width: 660px) {
+  .campoNomina__semanaControles, .campoNomina__semanaControles label, .campoNomina__semanaControles select { width: 100%; }
+  .campoNomina__persona { grid-template-columns: 24px minmax(0, 1fr) minmax(92px, .55fr); align-items: start; }
+  .campoNomina__identidad { grid-column: 2 / -1; }
+  .campoNomina__personaCheck { grid-row: 1 / 3; }
+  .campoNomina__persona > button { grid-column: 2 / -1; width: 100%; }
+  .campoNomina__error { grid-column: 2 / -1; }
+}
 /* Transporte y Cosechadora · Nuevo egreso (máquina primero, desgaste, intervención, pago). */
 .egresoCampo__familia { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; color: #0f766e; }
 .egresoCampo__fila { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
