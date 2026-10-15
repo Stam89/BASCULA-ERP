@@ -2687,6 +2687,27 @@ export function App() {
   const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
   // Lista de movimientos: por defecto solo lo registrado en Caja; los de otros módulos, con un botón.
   const [cajaVerOtros, setCajaVerOtros] = useState(false);
+  // «Salió dinero» / «Entró dinero» (y «Repetir»): abre Nuevo movimiento ya del tipo, con todo limpio.
+  function abrirMovimientoCaja(tipo: "EXPENSE" | "INCOME") {
+    setMovType(tipo); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId("");
+    setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false);
+    setCajaMenu(null);
+    setCajaSubTab("movimiento");
+    reloadCashCategories();
+  }
+  // 🔁 Repetir un movimiento hecho en Caja: misma categoría, subcategoría, detalle y monto (se pueden cambiar).
+  function repetirMovimientoCaja(m: CashMovement) {
+    abrirMovimientoCaja(m.movement);
+    setMovCategory(m.category);
+    setMovSubcategoria(m.subcategoria ?? "");
+    setTimeout(() => {
+      const f = document.querySelector("form.cj-form") as HTMLFormElement | null;
+      const d = f?.querySelector("input[name='description']") as HTMLInputElement | null;
+      const a = f?.querySelector("input[name='amount']") as HTMLInputElement | null;
+      if (d) d.value = m.description ?? "";
+      if (a) { a.value = String(Number(m.amount)); a.focus(); a.select(); }
+    }, 120);
+  }
   useEffect(() => {
     if (!cajaMenu) return;
     const cerrar = (e: MouseEvent) => {
@@ -18462,96 +18483,28 @@ Motivo (obligatorio):`, "");
                   };
                   return (
                     <>
-                      {/* Encabezado */}
-                      <div className="cj-head">
-                        <div>
-                          <h2 className="cj-title">💰 {caja.name}</h2>
-                          <p className="cj-sub"><span className="cj-live" /> Sesión activa · {(() => {
+                      {/* Saldo compacto: cuánto hay, dónde y lo de hoy. Lo poco usado va en «Más». */}
+                      <div className="cjx-hero">
+                        <div style={{ minWidth: 0 }}>
+                          <p className="cjx-sub"><span className="cj-live" /> {caja.name} · {(() => {
                             const ab = caja.opened_at ? new Date(caja.opened_at) : null;
                             const dias = ab ? Math.floor((Date.now() - ab.getTime()) / 86400000) : 0;
                             return ab ? `abierta el ${ab.toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}${dias >= 1 ? ` (hace ${dias} día${dias === 1 ? "" : "s"})` : ""}` : new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
                           })()}</p>
+                          <div className="cjx-saldo">{money(saldoActual)}</div>
+                          <p className="cjx-sub">
+                            {caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined
+                              ? <>💵 Gaveta <b>{money(Number(cashSummary.saldo_efectivo))}</b> · 🏦 Banco <b>{money(Number(cashSummary.saldo_banco ?? 0))}</b> · </>
+                              : <>💵 En la gaveta <b>{money(saldoActual)}</b> · </>}
+                            entró <b className="cj-pos">+{money(cashSummary?.total_income ?? 0)}</b> · salió <b className="cj-neg">−{money(cashSummary?.total_expense ?? 0)}</b>
+                            <span className="cjx-ini"> · inicial {money(Number(caja.opening_balance))}</span>
+                          </p>
                         </div>
-                      </div>
-
-                      {/* Tarjetas KPI */}
-                      <div className="cj-kpis">
-                        <div className="cj-kpi cj-kpi--hero">
-                          <div className="cj-kpi-label">Saldo actual</div>
-                          <div className="cj-kpi-value">{money(saldoActual)}</div>
-                          {caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined ? (
-                            <div className="cj-kpi-split">
-                              <span>💵 En la gaveta <b>{money(Number(cashSummary.saldo_efectivo))}</b></span>
-                              <span>🏦 En el banco <b>{money(Number(cashSummary.saldo_banco ?? 0))}</b></span>
-                            </div>
-                          ) : <div className="cj-kpi-hint">Inicial + ingresos − egresos de la sesión</div>}
-                        </div>
-                        <div className="cj-kpi">
-                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--in">⬆</span>Ingresos</div>
-                          <div className="cj-kpi-value cj-pos">+{money(cashSummary?.total_income ?? 0)}</div>
-                          <div className="cj-kpi-hint">Entradas de la sesión</div>
-                        </div>
-                        <div className="cj-kpi">
-                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--out">⬇</span>Egresos</div>
-                          <div className="cj-kpi-value cj-neg">-{money(cashSummary?.total_expense ?? 0)}</div>
-                          <div className="cj-kpi-hint">Salidas de la sesión</div>
-                        </div>
-                        <div className="cj-kpi">
-                          <div className="cj-kpi-label"><span className="cj-ico cj-ico--base">◎</span>Saldos iniciales</div>
-                          <div className="cj-kpi-value">{money(Number(caja.opening_balance))}</div>
-                          <div className="cj-kpi-split">
-                            <span>💵 Efectivo <b>{money(Number(caja.opening_balance_cash ?? 0))}</b></span>
-                            <span>🏦 Banco <b>{money(Number(caja.opening_balance_bank ?? 0))}</b></span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {editOpeningBalance && (
-                        <div className="cj-card cj-edit-saldo">
-                          <div className="cj-card-title">✏️ Editar saldo inicial</div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
-                            <Input name="edit_cash" label="Efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
-                            <Input name="edit_bank" label="Banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
-                          </div>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <button type="button" className="primary" onClick={() => updateOpeningBalance().catch((e) => addToast(e.message, "error"))}>Guardar</button>
-                            <button type="button" onClick={() => setEditOpeningBalance(false)}>Cancelar</button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Barra de herramientas */}
-                      <div className="cj-toolbar">
-                        <div className="cj-toolbar-group">
-                          <button type="button" className={`cj-btn cj-btn--primary ${cajaSubTab === "movimiento" ? "is-on" : ""}`} onClick={() => abrir("movimiento")}>
-                            ➕ Nuevo movimiento
+                        <div className="cj-dd">
+                          <button type="button" className={`cj-btn ${cajaMenu === "opciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "opciones"}
+                            onClick={() => setCajaMenu(cajaMenu === "opciones" ? null : "opciones")}>
+                            Más <span className="cj-caret">▾</span>
                           </button>
-                          <div className="cj-dd">
-                            <button type="button" className={`cj-btn ${cajaMenu === "acciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "acciones"}
-                              onClick={() => setCajaMenu(cajaMenu === "acciones" ? null : "acciones")}>
-                              ⚡ Acciones rápidas <span className="cj-caret">▾</span>
-                            </button>
-                            {cajaMenu === "acciones" && (
-                              <div className="cj-menu" role="menu">
-                                {acciones.filter((x) => visibles.includes(x.key)).map((x) => (
-                                  <button key={x.key} type="button" role="menuitem" className={`cj-menu-item ${cajaSubTab === x.key ? "is-current" : ""}`} onClick={() => abrir(x.key)}>
-                                    <span className="cj-menu-ico">{x.icon}</span>
-                                    <span><span className="cj-menu-label">{x.label}</span><span className="cj-menu-hint">{x.hint}</span></span>
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                          {cajaSubTab !== "resumen" && (
-                            <button type="button" className="cj-btn cj-btn--ghost" onClick={() => abrir("resumen")}>📋 Ver movimientos</button>
-                          )}
-                        </div>
-                        <div className="cj-toolbar-group">
-                          <div className="cj-dd">
-                            <button type="button" className={`cj-btn ${cajaMenu === "opciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "opciones"}
-                              onClick={() => setCajaMenu(cajaMenu === "opciones" ? null : "opciones")}>
-                              ⚙️ Opciones <span className="cj-caret">▾</span>
-                            </button>
                             {cajaMenu === "opciones" && (
                               <div className="cj-menu cj-menu--right" role="menu">
                                 {isAdmin && (
@@ -18562,11 +18515,6 @@ Motivo (obligatorio):`, "");
                                     setEditOpeningBalance(true);
                                   }}>
                                     <span className="cj-menu-ico">✏️</span><span className="cj-menu-label">Editar saldo inicial</span>
-                                  </button>
-                                )}
-                                {visibles.includes("historial") && esMatrizActiva && (
-                                  <button type="button" role="menuitem" className={`cj-menu-item ${cajaSubTab === "historial" ? "is-current" : ""}`} onClick={() => abrir("historial")}>
-                                    <span className="cj-menu-ico">🔎</span><span className="cj-menu-label">¿Cuándo se hizo?</span>
                                   </button>
                                 )}
                                 {caja.tipo === "MIXTO" && (
@@ -18586,7 +18534,58 @@ Motivo (obligatorio):`, "");
                                 </button>
                               </div>
                             )}
+                        </div>
+                      </div>
+
+                      {editOpeningBalance && (
+                        <div className="cj-card cj-edit-saldo">
+                          <div className="cj-card-title">✏️ Editar saldo inicial</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                            <Input name="edit_cash" label="Efectivo $" type="number" value={newCajaCash} onChange={(e) => setNewCajaCash(e.target.value)} />
+                            <Input name="edit_bank" label="Banco $" type="number" value={newCajaBank} onChange={(e) => setNewCajaBank(e.target.value)} />
                           </div>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button type="button" className="primary" onClick={() => updateOpeningBalance().catch((e) => addToast(e.message, "error"))}>Guardar</button>
+                            <button type="button" onClick={() => setEditOpeningBalance(false)}>Cancelar</button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Lo de todos los días: dos botones grandes. */}
+                      <div className="cjx-big">
+                        <button type="button" className={`cjx-big__btn is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("EXPENSE")}>
+                          <span aria-hidden="true">↓</span> Salió dinero
+                        </button>
+                        <button type="button" className={`cjx-big__btn is-in ${cajaSubTab === "movimiento" && movType === "INCOME" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("INCOME")}>
+                          <span aria-hidden="true">↑</span> Entró dinero
+                        </button>
+                      </div>
+
+                      {/* Accesos a la vista (antes escondidos en «Acciones rápidas» y «Opciones»). */}
+                      <div className="cjx-accesos">
+                        {esMatrizActiva && (visibles.includes("movimiento") || visibles.includes("historial") || visibles.includes("mantenimiento")) && (
+                          <div className="cjx-grupo">
+                            <span className="cjx-grupo__t">Equipos</span>
+                            {visibles.includes("movimiento") && (
+                              <button type="button" className={cajaSubTab === "movimiento" && movCategory === "MANTENIMIENTO_EQUIPO" ? "is-on" : ""}
+                                onClick={() => { abrirMovimientoCaja("EXPENSE"); setMovCategory("MANTENIMIENTO_EQUIPO"); }}>🔧 Registrar trabajo o repuesto</button>
+                            )}
+                            {visibles.includes("historial") && (
+                              <button type="button" className={cajaSubTab === "historial" ? "is-on" : ""} onClick={() => abrir("historial")}>🔎 ¿Cuándo se hizo?</button>
+                            )}
+                            {visibles.includes("mantenimiento") && (
+                              <button type="button" className={cajaSubTab === "mantenimiento" ? "is-on" : ""} onClick={() => abrir("mantenimiento")}>📋 Hoja de vida y repuestos</button>
+                            )}
+                          </div>
+                        )}
+                        <div className="cjx-grupo">
+                          <span className="cjx-grupo__t">Otros registros</span>
+                          {acciones.filter((x) => visibles.includes(x.key) && x.key !== "mantenimiento").map((x) => (
+                            <button key={x.key} type="button" className={cajaSubTab === x.key ? "is-on" : ""} title={x.hint} onClick={() => abrir(x.key)}>{x.icon} {x.label}</button>
+                          ))}
+                          {cajaSubTab !== "resumen" && (
+                            <button type="button" onClick={() => abrir("resumen")}>📋 Movimientos</button>
+                          )}
                         </div>
                       </div>
 
@@ -18811,6 +18810,9 @@ Motivo (obligatorio):`, "");
                                 </td>
                                 <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a", textDecoration: isReversed ? "line-through" : "none" }}>
                                   {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
+                                  {!m.reference_type && !isReversed && !isReversal && !m.es_fondo && (
+                                    <div><button type="button" className="cjx-repetir" title="Registrar otra vez este movimiento (se puede cambiar)" onClick={() => repetirMovimientoCaja(m)}>🔁 Repetir</button></div>
+                                  )}
                                 </td>
                                 {canAnular && (
                                   <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
