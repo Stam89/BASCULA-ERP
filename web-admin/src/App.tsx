@@ -2083,6 +2083,23 @@ function conceptoPayable(p: AccountPayable): string {
 // "100 LB" -> 100. Sirve para guardar el peso del saco como número.
 // Valor del <select> de presentación para un peso personalizado (p. ej. 98 LB).
 const PRES_OTRO_PESO = "__otro_peso__";
+
+// Movimientos de caja que se registran DESDE OTRO MÓDULO (Ventas, Por Cobrar, Por Pagar, Nómina…): en la lista de
+// Caja se esconden tras un botón para que no se alargue. Devuelve el módulo de origen, o null si es de Caja
+// (manual, mantenimiento, fondos, anticipos, fomentos, sacos, venta al detalle, depósitos/retiros, arqueo).
+const ORIGEN_EXTERNO_CAJA: Record<string, string> = {
+  sales: "Ventas", accounts_receivable: "Por Cobrar", accounts_payable: "Por Pagar",
+  worker_payments: "Nómina", worker_advances: "Nómina", admin_salary_payments: "Nómina",
+  cuadrilla_entries: "Cuadrilla", cuadrilla_advances: "Cuadrilla",
+  prestamo_cuota: "Préstamos", prestamo_bancario: "Préstamos", mobile_synced_tickets: "Báscula",
+  purchase: "Compras", repuesto_compra: "Repuestos"
+};
+function origenExternoCaja(m: { reference_type: string | null; description: string | null }): string | null {
+  const t = m.reference_type ?? "";
+  // La venta al detalle se registra en Caja (pestaña Venta al detalle).
+  if (t === "sales" && /^Venta detalle/i.test(m.description ?? "")) return null;
+  return ORIGEN_EXTERNO_CAJA[t] ?? null;
+}
 // Arroz Envejecido: la presentación es el saco (propio del socio que vende o del proveedor).
 const PRES_SACO_PROPIO = "__saco_propio__:";
 const PRES_SACO_PROVEEDOR = "__saco_proveedor__:";
@@ -2668,6 +2685,8 @@ export function App() {
   const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   // Caja: menú desplegable abierto de la barra de herramientas (solo UI).
   const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
+  // Lista de movimientos: por defecto solo lo registrado en Caja; los de otros módulos, con un botón.
+  const [cajaVerOtros, setCajaVerOtros] = useState(false);
   useEffect(() => {
     if (!cajaMenu) return;
     const cerrar = (e: MouseEvent) => {
@@ -18651,17 +18670,34 @@ Motivo (obligatorio):`, "");
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
                       <span>📋 Movimientos de la sesión</span>
-                      <span className="cj-count">{cashMovements.length + cajaCreditos.length}</span>
+                      <span className="cj-count">{cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).length + cajaCreditos.length}</span>
                     </div>
+                    {(() => {
+                      const otros = cashMovements.filter((m) => origenExternoCaja(m));
+                      if (otros.length === 0) return null;
+                      const porModulo = new Map<string, number>();
+                      for (const m of otros) { const k = origenExternoCaja(m) as string; porModulo.set(k, (porModulo.get(k) ?? 0) + 1); }
+                      return (
+                        <div className="cajaOtros">
+                          <span>
+                            {cajaVerOtros ? "Se ven también" : "Escondidos"} {otros.length} movimiento{otros.length === 1 ? "" : "s"} hecho{otros.length === 1 ? "" : "s"} desde otros módulos
+                            <small> ({[...porModulo.entries()].map(([k, n]) => `${k}: ${n}`).join(" · ")}). El saldo de la caja los incluye igual.</small>
+                          </span>
+                          <button type="button" className="btnSecondary" onClick={() => setCajaVerOtros((v) => !v)}>
+                            {cajaVerOtros ? "Ocultarlos" : `Ver también los otros (${otros.length})`}
+                          </button>
+                        </div>
+                      );
+                    })()}
                     {cajaCreditos.some((c) => c.status !== "CANCELLED") && (
                       <div style={{ padding: "8px 16px", background: "#f5f3ff", borderBottom: "1px solid #ede9fe", fontSize: 12.5, color: "#5b21b6" }}>
                         💳 A crédito en esta sesión: <strong>{money(cajaCreditos.filter((c) => c.status !== "CANCELLED").reduce((s, c) => s + Number(c.amount), 0))}</strong> en Cuentas por Pagar · no afecta el saldo de la caja
                       </div>
                     )}
-                    {cashMovements.length + cajaCreditos.length === 0 ? (
+                    {cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).length + cajaCreditos.length === 0 ? (
                       <div className="emptyState">
                         <div className="emptyIcon">📭</div>
-                        <p>Sin movimientos registrados aún</p>
+                        <p>{cashMovements.length ? "Sin movimientos registrados en Caja (los de otros módulos están escondidos)" : "Sin movimientos registrados aún"}</p>
                       </div>
                     ) : (
                       <div style={{ maxHeight: "600px", overflowY: "auto" }}>
@@ -18678,7 +18714,7 @@ Motivo (obligatorio):`, "");
                           </thead>
                           <tbody>
                             {[
-                              ...cashMovements.map((m) => ({ k: "mov" as const, t: m.created_at, m })),
+                              ...cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).map((m) => ({ k: "mov" as const, t: m.created_at, m })),
                               ...cajaCreditos.map((c) => ({ k: "cred" as const, t: c.created_at, c }))
                             ].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0)).map((fila, idx) => {
                               if (fila.k === "cred") {
@@ -18733,6 +18769,7 @@ Motivo (obligatorio):`, "");
                                   {isReversed && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
                                   {isReversal && <span className="chip info" style={{ marginLeft: 6 }}>Anulación</span>}
                                   {m.medio === "BANCO" && dashboard.current_cash_register?.tipo === "MIXTO" && <span className="chip" style={{ marginLeft: 6 }}>🏦 Banco</span>}
+                                  {origenExternoCaja(m) && <span className="chip" style={{ marginLeft: 6 }} title="Registrado desde otro módulo">↪ {origenExternoCaja(m)}</span>}
                                 </td>
                                 <td style={{ padding: "12px 16px", color: "#6b7280" }}>
                                   {categoryLabel(m.category)}
