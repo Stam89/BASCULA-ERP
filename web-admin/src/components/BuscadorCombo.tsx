@@ -4,7 +4,7 @@
 // vacío y con el foco para seguir agregando.
 import { useState } from "react";
 
-export type OpcionCombo = { key: string; titulo: string; detalle?: string; etiqueta?: string };
+export type OpcionCombo = { key: string; titulo: string; detalle?: string; etiqueta?: string; /** Palabras extra para encontrarla (no se muestran). */ buscar?: string };
 
 const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
 
@@ -26,7 +26,7 @@ export function BuscadorCombo({ id, placeholder, opciones, onElegir, crear, onCr
   const [idx, setIdx] = useState(0);
   const tokens = sinTildes(texto.trim()).split(/\s+/).filter(Boolean);
   const lista = (tokens.length
-    ? opciones.filter((o) => { const t = sinTildes(`${o.titulo} ${o.detalle ?? ""} ${o.etiqueta ?? ""}`); return tokens.every((k) => t.includes(k)); })
+    ? opciones.filter((o) => { const t = sinTildes(`${o.titulo} ${o.detalle ?? ""} ${o.etiqueta ?? ""} ${o.buscar ?? ""}`); return tokens.every((k) => t.includes(k)); })
     : opciones).slice(0, max);
   const textoCrear = crear && onCrear && texto.trim().length >= 2 ? crear(texto.trim()) : null;
   const total = lista.length + (textoCrear ? 1 : 0);

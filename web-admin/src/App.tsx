@@ -18908,8 +18908,25 @@ Motivo (obligatorio):`, "");
                         const cxcPendientes = movType === "INCOME"
                           ? accountsReceivable.filter((ar) => Number(ar.balance) > 0.001 && !["PAID", "CANCELLED"].includes(String(ar.status ?? "")))
                           : [];
+                        // Palabras con que se busca cada categoría además de su nombre (p. ej. «piladora» → Mantenimiento).
+                        const areasMant = maintAreas.map((a) => a.toLowerCase()).join(", ");
+                        const PALABRAS: Record<string, string> = {
+                          MANTENIMIENTO_EQUIPO: `reparación arreglo ${areasMant}`,
+                          REPUESTOS: `repuesto pieza ${areasMant}`,
+                          [CATEGORIA_MATERIALES]: `soldadura pernos materiales ${areasMant}`,
+                          GASOLINA_MONTACARGA: "montacargas combustible gasolina",
+                          DIESEL: "combustible",
+                          SERVICIOS_BASICOS: "luz agua internet teléfono",
+                          ALIMENTACION: "comida almuerzo desayuno"
+                        };
+                        const mantVisible = movType === "EXPENSE" && codigosVisibles.has("MANTENIMIENTO_EQUIPO");
                         const opciones: OpcionCombo[] = [
-                          ...visibles.map((c) => ({ key: `CAT:${c.codigo}`, titulo: c.nombre, etiqueta: esGuiada(c.codigo) ? "proceso" : undefined })),
+                          ...visibles.map((c) => ({ key: `CAT:${c.codigo}`, titulo: c.nombre, buscar: PALABRAS[c.codigo], etiqueta: esGuiada(c.codigo) ? "proceso" : undefined })),
+                          // Equipos del catálogo de mantenimiento: «piladora» muestra todo lo de la piladora.
+                          ...(mantVisible ? maintAreas.flatMap((a) => [
+                            { key: `MANT:${a}|`, titulo: `${a} · mantenimiento`, detalle: "toda el área", etiqueta: /montacarga/i.test(a) ? "rubro Montacarga" : "mantenimiento" },
+                            ...maintSectionsFor(a).map((sec) => ({ key: `MANT:${a}|${sec}`, titulo: `${a} · ${sec}`, detalle: "mantenimiento", etiqueta: /montacarga/i.test(a) ? "rubro Montacarga" : undefined }))
+                          ]) : []),
                           ...subcatsConCategoria.filter((s) => s.categoria && codigosVisibles.has(s.categoria))
                             .map((s) => ({ key: `SUB:${s.categoria}|${s.nombre}`, titulo: s.nombre, detalle: visibles.find((c) => c.codigo === s.categoria)?.nombre })),
                           ...cxcPendientes.map((ar) => ({ key: `CXC:${ar.id}`, titulo: `Cobro: ${ar.customer_name || ar.description || "Cliente"}`, detalle: `${ar.customer_name && ar.description ? `${String(ar.description).slice(0, 60)} · ` : ""}saldo ${money(Number(ar.balance))}`, etiqueta: "por cobrar" }))
@@ -18931,11 +18948,16 @@ Motivo (obligatorio):`, "");
                               </div>
                             ) : (
                               <>
-                                <BuscadorCombo id="cajaCat" autoFocus max={10}
+                                <BuscadorCombo id="cajaCat" autoFocus max={16}
                                   placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: diésel, almuerzo, llanta, repuesto…" : "🔍 Escribe qué entró o el cliente que pagó…"}
                                   opciones={opciones} vacio="Nada coincide: prueba con otra palabra o crea la categoría en Configuración"
                                   onElegir={(key) => {
                                     if (key.startsWith("CAT:")) elegirCategoria(key.slice(4));
+                                    else if (key.startsWith("MANT:")) {
+                                      const [area, section] = key.slice(5).split("|");
+                                      elegirCategoria("MANTENIMIENTO_EQUIPO");
+                                      setMaintenanceForm((f) => ({ ...f, area, section: section ?? "", maintenance_type: section ? "CORRECTIVO" : f.maintenance_type }));
+                                    }
                                     else if (key.startsWith("SUB:")) { const [cat, ...rest] = key.slice(4).split("|"); elegirCategoria(cat, rest.join("|")); }
                                     else if (key.startsWith("CXC:")) {
                                       setMovReceivableId(key.slice(4)); setMovCategory(""); setMovSubcategoria("");
