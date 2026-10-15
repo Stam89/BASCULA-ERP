@@ -3697,6 +3697,10 @@ export function App() {
   // Ubicación/lote de picking que el bodeguero escribe por pedido (borrador local
   // hasta confirmar la preparación). Sin entrada usa la ubicación ya guardada.
   const [orderPickLocation, setOrderPickLocation] = useState<Record<string, string>>({});
+  // Pedido que toma arroz de «allá»: ¿lo retira el transportista allá o YA lo trajeron a la piladora (sin registrar
+  // el viaje)? En el 2º caso se registra el viaje de regreso (con su flete opcional) y la cuadrilla lo embarca.
+  type AllaLlego = { llego: boolean; flete_tipo: "" | "propia" | "tercero"; activo_id: string; prestador: string; monto: string };
+  const [orderAllaLlego, setOrderAllaLlego] = useState<Record<string, AllaLlego>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
   // 🚫 Anular una venta YA despachada (solo administrador).
@@ -12135,10 +12139,29 @@ Motivo (obligatorio):`, "");
   // inventario ni plata; solo habilita el despacho. `prepared:false` lo revierte.
   async function prepararPedido(order: SalesOrder, prepared: boolean) {
     const location = (orderPickLocation[order.id] ?? order.picking_location ?? "").trim() || ubicacionSugerida;
+    // «🏭 Ya está en la piladora»: viaje de regreso no registrado (+ flete opcional).
+    const al = prepared ? orderAllaLlego[order.id] : undefined;
+    let allaYaLlego: { flete?: { tipo: "propia" | "tercero"; monto: number; activo_id?: string; prestador?: string } } | undefined;
+    if (al?.llego) {
+      allaYaLlego = {};
+      if (al.flete_tipo) {
+        const monto = Number(al.monto);
+        if (!(monto > 0)) throw new Error("Escribe el valor del flete de regreso (o elige «Sin flete»).");
+        if (al.flete_tipo === "propia") {
+          if (!al.activo_id) throw new Error("Elige el carro de Transporte y Cosechadora que lo trajo.");
+          allaYaLlego.flete = { tipo: "propia", monto, activo_id: al.activo_id };
+        } else {
+          if (al.prestador.trim().length < 2) throw new Error("Escribe el nombre del transportista externo.");
+          allaYaLlego.flete = { tipo: "tercero", monto, prestador: al.prestador.trim() };
+        }
+      }
+    }
     const prep = await apiPatch<SalesOrder & {
       sacos?: { descontados: Array<{ tipo: string; sacos: number; nuevo_stock: number }>; sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }> };
       retiros_alla?: Array<{ producto: string; bodega: string; qq: number }>;
+      traidos_alla?: Array<{ producto: string; bodega: string; qq: number }>;
     }>(`/orders/${order.id}/prepare`, {
+      alla_ya_llego: allaYaLlego,
       prepared,
       picking_location: location || undefined,
       prepared_by: authUser?.id,
@@ -12155,6 +12178,10 @@ Motivo (obligatorio):`, "");
         : `Pedido ${order.order_number} devuelto a Pendiente por cargar · Stock y sacos restaurados`,
       "success"
     );
+    if (prepared && prep.traidos_alla?.length) {
+      addToast(`🏭 Se registró el viaje de regreso: ${prep.traidos_alla.map((r) => `${r.qq.enReal()} QQ de ${r.producto} desde ${r.bodega.replace(/^Allá: /, "")}`).join(", ")}${allaYaLlego?.flete ? ` · flete ${money(allaYaLlego.flete.monto)}` : ""}. Sale de la piladora (la cuadrilla lo embarca).`, "success");
+      setOrderAllaLlego((cur) => { const n = { ...cur }; delete n[order.id]; return n; });
+    }
     if (prepared && prep.retiros_alla?.length) {
       addToast(`🚚 El transportista retira allá: ${prep.retiros_alla.map((r) => `${r.qq.enReal()} QQ de ${r.producto} en ${r.bodega.replace(/^Allá: /, "")}`).join(", ")}. Ya se descontó de lo que quedó allá.`, "warn");
     }
@@ -17357,13 +17384,61 @@ Motivo (obligatorio):`, "");
                         )}
                       </div>
 
-                      {retiroAlla.length > 0 && (
-                        <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, padding: "8px 12px", color: "#1e3a8a", fontSize: 12.5, fontWeight: 700 }}>
-                          🚚 {o.prepared_at ? "El transportista retira allá" : "Al preparar, esto se retira allá"}:{" "}
-                          {retiroAlla.map((x) => `${x.qq.enReal()} QQ de ${x.producto} en ${x.bodega.replace(/^Allá: /, "")}`).join(" · ")}
-                          <div style={{ fontWeight: 500, fontSize: 11.5, marginTop: 2 }}>Ya tiene el informe de selección: se vende desde allá y baja lo que quedó allá.</div>
-                        </div>
-                      )}
+                      {retiroAlla.length > 0 && (() => {
+                        const al: AllaLlego = orderAllaLlego[o.id] ?? { llego: false, flete_tipo: "", activo_id: "", prestador: "", monto: "" };
+                        const setAl = (p: Partial<AllaLlego>) => setOrderAllaLlego((cur) => ({ ...cur, [o.id]: { ...al, ...p } }));
+                        const detalle = retiroAlla.map((x) => `${x.qq.enReal()} QQ de ${x.producto} en ${x.bodega.replace(/^Allá: /, "")}`).join(" · ");
+                        if (o.prepared_at) {
+                          return (
+                            <div className="allaPedido">
+                              🚚 El transportista retira allá: {detalle}
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="allaPedido">
+                            <div>📍 Parte de este pedido estaba allá: {detalle}</div>
+                            <div className="allaPedido__seg" role="group" aria-label="¿Dónde está ese arroz?">
+                              <button type="button" className={!al.llego ? "on" : ""} onClick={() => setAl({ llego: false })}>🚚 Lo retira el transportista allá</button>
+                              <button type="button" className={al.llego ? "on" : ""} onClick={() => setAl({ llego: true })}>🏭 Ya está en la piladora</button>
+                            </div>
+                            {!al.llego ? (
+                              <small>Baja de lo que quedó allá. La cuadrilla no lo embarca (no se le paga).</small>
+                            ) : (
+                              <>
+                                <small>Se registra el viaje de regreso que faltaba y sale de la piladora: la cuadrilla lo embarca (se le paga).</small>
+                                <div className="allaPedido__flete">
+                                  <label><span>¿Quién lo trajo?</span>
+                                    <select value={al.flete_tipo} onChange={(e) => setAl({ flete_tipo: e.target.value as AllaLlego["flete_tipo"], activo_id: "", prestador: "" })}>
+                                      <option value="">Sin flete</option>
+                                      <option value="propia">Carro de Transporte y Cosechadora</option>
+                                      <option value="tercero">Carro externo</option>
+                                    </select>
+                                  </label>
+                                  {al.flete_tipo === "propia" && (
+                                    <label><span>Carro</span>
+                                      <select value={al.activo_id} onChange={(e) => setAl({ activo_id: e.target.value })}>
+                                        <option value="">Elige el carro…</option>
+                                        {fletaActivos.filter((a) => String(a.tipo ?? "").toLowerCase() !== "cosechadora").map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                                      </select>
+                                    </label>
+                                  )}
+                                  {al.flete_tipo === "tercero" && (
+                                    <label><span>Transportista</span>
+                                      <input type="text" value={al.prestador} placeholder="Nombre" onChange={(e) => setAl({ prestador: e.target.value })} />
+                                    </label>
+                                  )}
+                                  {al.flete_tipo !== "" && (
+                                    <label><span>Valor ($)</span>
+                                      <input type="number" min="0" step="0.01" inputMode="decimal" value={al.monto} placeholder="0.00" onChange={(e) => setAl({ monto: e.target.value })} />
+                                    </label>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {!listo && !listoParaPreparar && (
                         <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", color: "#92400e", fontSize: 12.5, fontWeight: 700 }}>

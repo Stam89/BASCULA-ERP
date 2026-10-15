@@ -10,6 +10,7 @@ import { nextCode } from "../../utils/codes.js";
 import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import type { PoolClient } from "pg";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
+import { traerDesdeAlla } from "../../services/traer-alla.js";
 
 export const selectionRouter = Router();
 
@@ -594,49 +595,10 @@ selectionRouter.post("/traer", asyncRoute(async (req, res) => {
   const ids = body.items.map((i) => i.product_id);
   if (new Set(ids).size !== ids.length) throw new ApiError(400, "Hay un producto repetido; súmalo en una sola línea.");
 
-  const result = await inTransaction(async (tx) => {
-    const alla = await tx.query("SELECT id, name FROM warehouses WHERE external_provider_id = $1", [body.provider_id]);
-    if (!alla.rowCount) throw new ApiError(404, "No hay nada registrado allá con ese proveedor.");
-    const planta = await tx.query("SELECT id FROM warehouses WHERE type = 'FINISHED_GOODS' AND is_active = true ORDER BY name LIMIT 1");
-    if (!planta.rowCount) throw new ApiError(400, "No existe la bodega de producto terminado de la piladora.");
-    const traida = await tx.query(
-      `INSERT INTO selection_traidas (accionista_id, provider_id, fecha, items, total_qq, notes, created_by)
-       VALUES ($1, $2, COALESCE($3::date, CURRENT_DATE), $4::jsonb, $5, $6, $7) RETURNING id`,
-      [accionistaId, body.provider_id, body.fecha ?? null, JSON.stringify(body.items.map((i) => ({ product_id: i.product_id, quantity: round3(i.quantity) }))),
-       round3(body.items.reduce((s, i) => s + i.quantity, 0)), body.notes ?? null, body.created_by ?? null]
-    );
-    const traidaId = traida.rows[0].id;
-    for (const it of body.items) {
-      const qty = round3(it.quantity);
-      // Sale de «Allá» (valida que haya: no se trae más de lo que quedó)…
-      await consumeInventoryFIFO(tx, {
-        productId: it.product_id, warehouseId: alla.rows[0].id, accionistaId, quantity: qty,
-        referenceType: "selection_traida", referenceId: traidaId,
-        notes: `Traído a la piladora desde ${alla.rows[0].name}`, createdBy: body.created_by ?? null
-      });
-      // …y entra a la piladora.
-      await tx.query(
-        `INSERT INTO inventory_movements
-         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-         VALUES ($1, $2, 'IN', $3, 'selection_traida', $4, 'OWNED', $5, $6, $7)`,
-        [it.product_id, planta.rows[0].id, qty, traidaId, `Llegó a la piladora desde ${alla.rows[0].name}`, body.created_by ?? null, accionistaId]
-      );
-    }
-    let flete: Awaited<ReturnType<typeof registrarFleteEnvejecido>> | null = null;
-    if (body.flete) {
-      const fecha = body.fecha ?? new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
-      flete = await registrarFleteEnvejecido(tx, {
-        batchId: traidaId, batchNumber: `regreso desde ${alla.rows[0].name.replace(/^Allá: /, "")} ${fecha}`, accionistaId, fecha,
-        qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)), flete: body.flete as FleteEnvejecido,
-        createdBy: body.created_by ?? null, origen: "envejecido_regreso"
-      });
-      await tx.query(
-        `UPDATE selection_traidas SET flete_tipo = $2, flete_monto = $3, flete_activo_id = $4, flete_prestador = $5, flete_payable_id = $6 WHERE id = $1`,
-        [traidaId, flete.tipo, flete.monto, flete.activo_id, flete.prestador, flete.payable_id]
-      );
-    }
-    return { id: traidaId, total_qq: round3(body.items.reduce((s, i) => s + i.quantity, 0)), flete };
-  });
+  const result = await inTransaction((tx) => traerDesdeAlla(tx, {
+    accionistaId, providerId: body.provider_id, items: body.items, fecha: body.fecha ?? null, notes: body.notes ?? null,
+    createdBy: body.created_by ?? null, flete: (body.flete as FleteEnvejecido | undefined) ?? null
+  }));
   res.status(201).json(result);
 }));
 

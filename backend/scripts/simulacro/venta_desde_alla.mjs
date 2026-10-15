@@ -15,6 +15,8 @@ try {
   const saldo = async (externo) => Number((await q(
     `SELECT COALESCE(SUM(m.quantity),0)::float s FROM inventory_movements m JOIN warehouses w ON w.id=m.warehouse_id
       WHERE m.accionista_id=$1 AND m.product_id=$2 AND m.ownership='OWNED' AND (w.type='EXTERNO') = $3`, [rov, p011, externo]))[0].s);
+  // En la COPIA se apartan los pedidos pendientes reales de ROVINSON (sin preparar) para partir limpio.
+  await q("UPDATE sales_orders SET status = 'CANCELLED' WHERE accionista_id = $1 AND status = 'PENDING' AND prepared_at IS NULL", [rov]);
   const alla0 = await saldo(true), pil0 = await saldo(false);
   check(alla0 > 40, `0. ROVINSON tiene ${alla0} QQ de 0.11 allá (informe de selección) y ${pil0} en la piladora`);
   // 5 QQ en la piladora para probar la mezcla (primero la piladora, luego allá)
@@ -52,6 +54,25 @@ try {
   check(d.sale && d.sale.total_amount, "D3. la venta queda registrada", d.sale?.sale_number);
   const ub = exigir(await api("GET", "/selection/ubicacion", undefined, rov), "D4. Selección → dónde está");
   console.log("   ubicacion:", JSON.stringify(ub).slice(0, 300));
+
+  // ── E. «🏭 Ya está en la piladora»: lo trajeron y nadie registró el viaje ──
+  const resto = await saldo(true);
+  const carro = (await q("SELECT id, nombre FROM campo_activos WHERE activo AND lower(coalesce(tipo,'')) <> 'cosechadora' ORDER BY nombre LIMIT 1"))[0];
+  const ped2 = exigir(await api("POST", "/orders", { customer_id: cli.id, items: [{ ...item, quantity: resto }] }, rov), `E1. pedido de ${resto} QQ (todo lo que queda allá)`);
+  const pil1 = await saldo(false);
+  const body = { prepared: true, warehouse_id: wh, alla_ya_llego: carro ? { flete: { tipo: "propia", monto: 12, activo_id: carro.id } } : {} };
+  const p2 = exigir(await api("PATCH", `/orders/${ped2.id}/prepare`, body, rov), "E2. preparar marcando «Ya está en la piladora»" + (carro ? ` con flete de ${carro.nombre}` : ""));
+  check((p2.retiros_alla ?? []).length === 0 && (p2.traidos_alla ?? []).length === 1 && Math.abs(p2.traidos_alla[0].qq - resto) < 0.01, "E3. no se retira allá: se registró el viaje de regreso", p2);
+  check(Math.abs(await saldo(true)) < 0.01 && Math.abs((await saldo(false)) - pil1) < 0.01, "E4. allá queda en 0 y la piladora entra y sale lo mismo");
+  const tr = await q("SELECT id, total_qq::float t, flete_tipo, flete_monto::float m, notes FROM selection_traidas WHERE accionista_id=$1 ORDER BY created_at DESC LIMIT 1", [rov]);
+  check(tr[0] && Math.abs(tr[0].t - resto) < 0.01 && /pedido/.test(tr[0].notes), "E5. el viaje queda en Selección (se puede anular si fue error)", tr[0]);
+  if (carro) {
+    const sv = await q("SELECT s.valor::float v, (SELECT balance::float FROM accounts_payable p WHERE p.reference_type='campo_servicio' AND p.reference_id=s.id) cxp FROM campo_servicios s WHERE s.origen_tipo='envejecido_regreso' AND s.origen_id=$1", [tr[0].id]);
+    check(sv.length === 1 && sv[0].v === 12 && sv[0].cxp === 12, "E6. el flete de regreso va a Transporte (CxC) y a la Por Pagar de ROVINSON", sv);
+  }
+  exigir(await api("POST", `/orders/${ped2.id}/deliver`, { payment_method: "CREDIT", warehouse_id: wh }, rov), "E7. despachar");
+  const cu2 = await q("SELECT quantity::float q FROM cuadrilla_entries WHERE notes LIKE $1", [`%${ped2.order_number}%`]);
+  check(cu2.length === 1 && Math.abs(cu2[0].q - resto) < 0.01, "E8. la cuadrilla cobra todo el embarque (salió de la piladora)", cu2);
 
   const h = (await revisar((sql) => q(sql))).filter((x) => !/báscula cambió|cambio de la báscula/i.test(x.regla));
   check(h.length === 0, "Z. controles de integridad", h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));

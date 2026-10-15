@@ -14,6 +14,8 @@ import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from "../../services/sacos.js";
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
+import { traerDesdeAlla } from "../../services/traer-alla.js";
+import { validarFleteRegreso, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
 import { notificar } from "../../services/notificaciones.js";
@@ -345,14 +347,23 @@ type RetiroAlla = { producto: string; bodega: string; qq: number };
 
 async function descontarInventarioPreparacion(
   client: PoolClient,
-  opts: { orderId: string; accionistaId: string | undefined; warehouseId: string; createdBy?: string | null }
-): Promise<RetiroAlla[]> {
+  opts: {
+    orderId: string; accionistaId: string | undefined; warehouseId: string; createdBy?: string | null;
+    // «🏭 Ya está en la piladora»: lo que iba a salir de allá YA llegó (nadie registró el viaje). Se registra el
+    // viaje de regreso (allá → piladora, con su flete si lo hubo) y todo sale de la piladora (la cuadrilla lo embarca).
+    allaYaLlego?: { flete?: FleteEnvejecido | null; orderNumber?: string } | null;
+  }
+): Promise<{ retiros: RetiroAlla[]; traidos: RetiroAlla[] }> {
   const ya = await client.query(
     "SELECT 1 FROM inventory_movements WHERE reference_type = 'sales_order' AND reference_id = $1 AND movement = 'OUT' LIMIT 1",
     [opts.orderId]
   );
-  if (ya.rowCount) return []; // ya descontado en una preparación previa
+  if (ya.rowCount) return { retiros: [], traidos: [] }; // ya descontado en una preparación previa
   const retiros: RetiroAlla[] = [];
+  const traidos: RetiroAlla[] = [];
+  // Viajes por proveedor (si «ya llegó»): bodega «Allá» → productos y QQ.
+  const viajes = new Map<string, { bodega: string; items: Array<{ product_id: string; quantity: number; producto: string }> }>();
+  const salidasPlan: Array<{ productId: string; nombre: string; warehouseId: string; qq: number; bodega?: string }> = [];
 
   const items = await client.query(
     "SELECT inventory_product_id, product_id, quantity FROM sales_order_items WHERE order_id = $1",
@@ -396,21 +407,49 @@ async function descontarInventarioPreparacion(
       ? [...(dePiladora > 0.001 ? [{ warehouseId: opts.warehouseId, qq: dePiladora }] : []), ...tramos]
       : [{ warehouseId: opts.warehouseId, qq }];
     const nombre = usarAlla ? (await client.query("SELECT name FROM products WHERE id = $1", [productId])).rows[0]?.name ?? "producto" : "";
-    for (const s of salidas) {
-      await consumeInventoryFIFO(client, {
-        productId,
-        warehouseId: s.warehouseId,
-        accionistaId: opts.accionistaId,
-        quantity: s.qq,
-        referenceType: "sales_order",
-        referenceId: opts.orderId,
-        createdBy: opts.createdBy ?? null,
-        notes: s.bodega ? `Retirado allá (${s.bodega.replace(/^Allá: /, "")}) por el transportista para el pedido` : null
-      });
-      if (s.bodega) retiros.push({ producto: nombre, bodega: s.bodega, qq: s.qq });
+    if (usarAlla && opts.allaYaLlego) {
+      // Ya llegó: se trae (viaje) y todo sale de la piladora.
+      for (const t of tramos) {
+        const v = viajes.get(t.warehouseId) ?? { bodega: t.bodega ?? "Allá", items: [] };
+        v.items.push({ product_id: productId, quantity: t.qq, producto: nombre });
+        viajes.set(t.warehouseId, v);
+      }
+      salidasPlan.push({ productId, nombre, warehouseId: opts.warehouseId, qq });
+    } else {
+      for (const s of salidas) salidasPlan.push({ productId, nombre, warehouseId: s.warehouseId, qq: s.qq, bodega: s.bodega });
     }
   }
-  return retiros;
+
+  // 1) Los viajes de regreso que nadie registró (el flete, si lo hubo, va en el primero).
+  let fletePendiente = opts.allaYaLlego?.flete ?? null;
+  for (const [warehouseId, v] of viajes) {
+    const prov = (await client.query("SELECT external_provider_id FROM warehouses WHERE id = $1", [warehouseId])).rows[0]?.external_provider_id;
+    if (!prov || !opts.accionistaId) throw new ApiError(409, `No se encontró el proveedor de ${v.bodega}.`);
+    await traerDesdeAlla(client, {
+      accionistaId: opts.accionistaId, providerId: prov, plantaId: opts.warehouseId, createdBy: opts.createdBy ?? null,
+      items: v.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity })),
+      notes: `Ya estaba en la piladora al preparar el pedido${opts.allaYaLlego?.orderNumber ? ` ${opts.allaYaLlego.orderNumber}` : ""} (no se había registrado el viaje)`,
+      flete: fletePendiente
+    });
+    fletePendiente = null;
+    for (const i of v.items) traidos.push({ producto: i.producto, bodega: v.bodega, qq: i.quantity });
+  }
+
+  // 2) La salida por venta.
+  for (const s of salidasPlan) {
+    await consumeInventoryFIFO(client, {
+      productId: s.productId,
+      warehouseId: s.warehouseId,
+      accionistaId: opts.accionistaId,
+      quantity: s.qq,
+      referenceType: "sales_order",
+      referenceId: opts.orderId,
+      createdBy: opts.createdBy ?? null,
+      notes: s.bodega ? `Retirado allá (${s.bodega.replace(/^Allá: /, "")}) por el transportista para el pedido` : null
+    });
+    if (s.bodega) retiros.push({ producto: s.nombre, bodega: s.bodega, qq: s.qq });
+  }
+  return { retiros, traidos };
 }
 
 // Restaura el inventario descontado en la preparación (al revertir la preparación
@@ -534,14 +573,25 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     picking_location: z.string().max(200).optional(),
     prepared_by: z.string().uuid().optional(),
     // Bodega de la que sale el producto (por defecto la de producto terminado).
-    warehouse_id: z.string().uuid().optional()
+    warehouse_id: z.string().uuid().optional(),
+    // Lo que iba a retirarse allá YA está en la piladora (lo trajeron y no se registró el viaje).
+    alla_ya_llego: z.object({
+      flete: z.object({
+        tipo: z.enum(["propia", "tercero"]),
+        monto: z.number().positive(),
+        activo_id: z.string().uuid().optional(),
+        prestador: z.string().trim().max(120).optional()
+      }).optional()
+    }).optional()
   }).parse(req.body);
+  if (body.alla_ya_llego?.flete) validarFleteRegreso(body.alla_ya_llego.flete as FleteEnvejecido);
 
   let sacos: ResultadoSacos | null = null;
   let retirosAlla: RetiroAlla[] = [];
+  let traidosAlla: RetiroAlla[] = [];
   const result = await inTransaction(async (client) => {
     const order = await client.query(
-      "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
+      "SELECT id, status, order_number FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
       [req.params.id, accionistaId]
     );
     if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
@@ -560,12 +610,15 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
         warehouseId = wh.rows[0]?.id ?? null;
       }
       if (!warehouseId) throw new ApiError(400, "No se encontró la bodega de producto terminado para descontar el inventario.");
-      retirosAlla = await descontarInventarioPreparacion(client, {
+      ({ retiros: retirosAlla, traidos: traidosAlla } = await descontarInventarioPreparacion(client, {
         orderId: req.params.id as string,
         accionistaId,
         warehouseId,
-        createdBy: body.prepared_by ?? null
-      });
+        createdBy: body.prepared_by ?? null,
+        allaYaLlego: body.alla_ya_llego
+          ? { flete: (body.alla_ya_llego.flete as FleteEnvejecido | undefined) ?? null, orderNumber: order.rows[0].order_number }
+          : null
+      }));
       // Los SACOS (marca + peso vendidos) salen de la bodega de la matriz en este
       // mismo momento. Idempotente; si falta stock no bloquea (queda negativo).
       sacos = await descontarSacosPedido(client, req.params.id as string);
@@ -586,7 +639,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     );
     return updated.rows[0];
   });
-  res.json({ ...result, ...(sacos ? { sacos } : {}), retiros_alla: retirosAlla });
+  res.json({ ...result, ...(sacos ? { sacos } : {}), retiros_alla: retirosAlla, traidos_alla: traidosAlla });
 }));
 
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
