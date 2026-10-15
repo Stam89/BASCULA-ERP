@@ -1313,7 +1313,7 @@ const NUM_TICKET = numeroTicketSql("t");
 const CORTE_BAJADA = `(CASE WHEN c.desde_numero IS NOT NULL THEN COALESCE(${NUM_TICKET} >= c.desde_numero, true)
   ELSE ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE) END)`;
 const TICKET_ELEGIBLE = `lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-  AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0`;
+  AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0 AND t.quitado_at IS NULL`;
 // Sábado que abre la semana de pago de una fecha (getUTCDay: dom=0 … sáb=6).
 const inicioSemana = (iso: string) => {
   const d = new Date(`${iso}T12:00:00Z`);

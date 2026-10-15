@@ -316,7 +316,8 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
   // "Pendiente" = todavía por procesar: ni ingresado como materia prima
   // (weighing_ticket_id) ni liquidado (liquidated_at). Así la lista de pendientes
   // solo muestra lo accionable; los ingresados/liquidados quedan en "Todos".
-  const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL"
+  // Un ticket QUITADO (se borró en la app o era de prueba) no es pendiente; sí sale en «Todos».
+  const statusFilter = q.status === "pending" ? "t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL AND t.quitado_at IS NULL"
     : q.status === "liquidated" ? "t.liquidated_at IS NOT NULL" : "";
   const conditions = [
     // Solo pesajes del modo PRINCIPAL: los "particular" no se usan en el ERP.
@@ -329,6 +330,7 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
   if (q.status === "pending") conditions.push(dentroDelCorteSql("t", "$1", "$2"));
   const result = await pool.query(
     `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.weighing_ticket_id, t.en_espera,
+            t.quitado_at, t.quitado_motivo,
             NOT ${dentroDelCorteSql("t", "$1", "$2")} AS antes_del_corte,
             t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
@@ -372,7 +374,7 @@ mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
   const r = (await pool.query<{ ocultos: number; fecha_numero: string | null; ultimo: string | null }>(
     `SELECT
        (SELECT count(*)::int FROM mobile_synced_tickets t
-         WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
+         WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL AND t.quitado_at IS NULL
            AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
            AND NOT ${dentroDelCorteSql("t", "$1", "$2")}) AS ocultos,
        (SELECT (${fechaTicketSql("t")})::text FROM mobile_synced_tickets t
@@ -394,7 +396,7 @@ mobileTicketsRouter.get("/por-ingresar", requireAuth, asyncRoute(async (_req, re
   const corte = await leerCorteBascula();
   const r = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n FROM mobile_synced_tickets t
-      WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL
+      WHERE t.liquidated_at IS NULL AND t.weighing_ticket_id IS NULL AND t.quitado_at IS NULL
         AND lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
         AND ${dentroDelCorteSql("t", "$1", "$2")}`,
     [corte.numero, corte.desde]
@@ -419,6 +421,58 @@ mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (r
   );
   res.json({ ok: true, desde, numero });
 }));
+
+// 🗑️ Quitar un ticket de los pendientes (se borró en la app de báscula, era de prueba o está repetido) y ↩️ restaurarlo.
+// No se borra: deja de contar como pendiente y sigue en «Todos». Solo si no se ingresó ni liquidó.
+mobileTicketsRouter.post("/:id/quitar", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+  const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const r = await pool.query(
+    `UPDATE mobile_synced_tickets SET quitado_at = now(), quitado_motivo = $2, quitado_por = $3
+      WHERE id = $1 AND weighing_ticket_id IS NULL AND liquidated_at IS NULL AND quitado_at IS NULL
+      RETURNING raw_payload->>'numeroTicket' AS numero`,
+    [req.params.id, motivo, user?.id ?? null]
+  );
+  if (!r.rowCount) throw new ApiError(409, "Ese ticket ya se ingresó, se liquidó o ya estaba quitado.");
+  res.json({ ok: true, numero: r.rows[0].numero });
+}));
+mobileTicketsRouter.post("/:id/restaurar", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+  const r = await pool.query(
+    "UPDATE mobile_synced_tickets SET quitado_at = NULL, quitado_motivo = NULL, quitado_por = NULL WHERE id = $1 AND quitado_at IS NOT NULL RETURNING id",
+    [req.params.id]
+  );
+  if (!r.rowCount) throw new ApiError(409, "Ese ticket no estaba quitado.");
+  res.json({ ok: true });
+}));
+
+/**
+ * Tickets EN ESPERA que ya no existen en la báscula: si un pesaje esperaba el 2º pesaje y ya no está en
+ * «ticketsEnEspera» ni en «tickets», se borró en la app → se quita de pendientes (no se borra).
+ * `numerosEnFirebase` = números (sin ceros) de esos pesajes que SÍ siguen en Firebase (en espera o completos).
+ */
+/** Números (como los escribe la báscula) de los pesajes EN ESPERA que siguen pendientes en el ERP. */
+export async function enEsperaPendientes(negocioScope: string): Promise<string[]> {
+  const r = await pool.query<{ numero: string }>(
+    `SELECT t.raw_payload->>'numeroTicket' AS numero FROM mobile_synced_tickets t
+      WHERE t.en_espera AND t.weighing_ticket_id IS NULL AND t.liquidated_at IS NULL AND t.quitado_at IS NULL
+        AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
+        AND t.raw_payload->>'numeroTicket' IS NOT NULL`,
+    [negocioScope]
+  );
+  return r.rows.map((x) => x.numero);
+}
+export async function quitarEnEsperaBorrados(negocioScope: string, numerosEnFirebase: Set<string>): Promise<number> {
+  const r = await pool.query(
+    `UPDATE mobile_synced_tickets t
+        SET quitado_at = now(), quitado_motivo = 'Se borró en la app de báscula (estaba en espera del 2º pesaje)'
+      WHERE t.en_espera AND t.weighing_ticket_id IS NULL AND t.liquidated_at IS NULL AND t.quitado_at IS NULL
+        AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
+        AND NOT (COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') = ANY($2::text[]))
+      RETURNING t.id`,
+    [negocioScope, [...numerosEnFirebase]]
+  );
+  return r.rowCount ?? 0;
+}
 
 // Vincula un ticket a un agricultor del directorio global. El vínculo no cambia
 // el socio del ticket: el dueño operativo se elige al crear el lote.
@@ -863,7 +917,10 @@ export async function importBasculaTickets(
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
         raw_payload = EXCLUDED.raw_payload,
-        en_espera = EXCLUDED.en_espera
+        en_espera = EXCLUDED.en_espera,
+        -- Quitado de pendientes: si la báscula lo MODIFICA después (p. ej. completa el 2º pesaje), vuelve solo.
+        quitado_at = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at THEN NULL ELSE mobile_synced_tickets.quitado_at END,
+        quitado_motivo = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at THEN NULL ELSE mobile_synced_tickets.quitado_motivo END
       WHERE mobile_synced_tickets.mobile_updated_at <= EXCLUDED.mobile_updated_at
         AND mobile_synced_tickets.weighing_ticket_id IS NULL
         AND mobile_synced_tickets.liquidated_at IS NULL

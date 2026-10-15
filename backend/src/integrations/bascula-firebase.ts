@@ -1,7 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { importBasculaTickets } from "../routes/modules/mobile-tickets.js";
+import { enEsperaPendientes, importBasculaTickets, quitarEnEsperaBorrados } from "../routes/modules/mobile-tickets.js";
 import { pool } from "../db/pool.js";
 
 // Importación automática de tickets desde Firebase (lo que sube la app de
@@ -257,6 +257,26 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
       if (tickets.length > 0) {
         const r = await importBasculaTickets(tickets, `firebase-auto:${negocioId}`, { enEspera: false, idScope });
         count += r.count; skipped += r.skipped;
+      }
+      // Pesajes EN ESPERA que se borraron en la app: ya no están ni en espera ni completos → se quitan de pendientes.
+      // Para no gastar lecturas de Firebase: solo si hay pesajes en espera pendientes, y solo se buscan ESOS números.
+      // Ante cualquier error no se toca nada.
+      try {
+        const locales = await enEsperaPendientes(idScope ?? "principal");
+        if (locales.length > 0) {
+          const norm = (v: unknown) => String(v ?? "").replace(/\D/g, "").replace(/^0+/, "");
+          const numeros = new Set<string>();
+          for (const d of (await negocio.collection(WAITING_COLLECTION).get()).docs) numeros.add(norm(d.get("numeroTicket")));
+          const faltan = locales.filter((l) => !numeros.has(norm(l)));
+          for (let i = 0; i < faltan.length; i += 10) {
+            const snap = await negocio.collection(COLLECTION).where("numeroTicket", "in", faltan.slice(i, i + 10)).get();
+            for (const d of snap.docs) numeros.add(norm(d.get("numeroTicket")));
+          }
+          const quitados = await quitarEnEsperaBorrados(idScope ?? "principal", numeros);
+          if (quitados) console.log(`[bascula-firebase] ${quitados} ticket(s) en espera ya no están en la báscula: se quitaron de pendientes.`);
+        }
+      } catch (e) {
+        console.warn("[bascula-firebase] no se revisaron los tickets en espera borrados:", (e as Error).message);
       }
     }
 

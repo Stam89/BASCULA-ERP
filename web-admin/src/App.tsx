@@ -311,6 +311,9 @@ type BasculaTicket = {
   en_espera?: boolean;
   /** Anterior a «Contar tickets desde»: no cuenta como pendiente. */
   antes_del_corte?: boolean;
+  /** Quitado de pendientes (se borró en la app de báscula, era de prueba…): no se borra, se puede restaurar. */
+  quitado_at?: string | null;
+  quitado_motivo?: string | null;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -7603,6 +7606,24 @@ export function App() {
     }
   }
 
+  // 🗑️ Quitar un ticket de los pendientes (no lo borra) / ↩️ restaurarlo.
+  async function quitarTicketBascula(t: BasculaTicket) {
+    const motivo = window.prompt(`Quitar el ticket #${t.numero ?? ""} de ${t.farmer_name ?? "—"} de los pendientes.\n(No se borra: queda en «Todos» y se puede restaurar.)\n\n¿Por qué?`, "Se borró en la app de báscula");
+    if (!motivo || motivo.trim().length < 3) return;
+    try {
+      await apiPost(`/tickets/${t.id}/quitar`, { motivo: motivo.trim() });
+      addToast(`Ticket #${t.numero ?? ""} quitado de pendientes`, "success");
+      await refreshBasculaTickets();
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
+  }
+  async function restaurarTicketBascula(t: BasculaTicket) {
+    try {
+      await apiPost(`/tickets/${t.id}/restaurar`, {});
+      addToast(`Ticket #${t.numero ?? ""} vuelve a pendientes`, "success");
+      await refreshBasculaTickets();
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo restaurar", "error"); }
+  }
+
   async function refreshBasculaTickets() {
     const qs = ticketFilter === "all" ? "" : `?status=${ticketFilter}`;
     const [data, materia, corte] = await Promise.all([
@@ -14090,8 +14111,9 @@ Motivo (obligatorio):`, "");
                       const desconocido = !linked && !liquidated;
                       // Anterior al corte y sin procesar: historial que no cuenta como pendiente.
                       const antesCorte = !!t.antes_del_corte && !t.weighing_ticket_id && !liquidated;
+                      const quitado = !!t.quitado_at && !t.weighing_ticket_id && !liquidated;
                       return (
-                        <tr key={t.id} style={antesCorte ? { opacity: 0.6 } : desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
+                        <tr key={t.id} style={quitado || antesCorte ? { opacity: 0.6 } : desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
                           <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
                           <td style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
                           <td>
@@ -14117,7 +14139,8 @@ Motivo (obligatorio):`, "");
                           <td>{t.calidad || "—"}</td>
                           <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).enReal()}</td>
                           <td>
-                            {t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
+                            {quitado ? <span className="chip" title={t.quitado_motivo ?? ""}>🗑️ Quitado{t.quitado_motivo ? <small style={{ display: "block", fontWeight: 400 }}>{t.quitado_motivo}</small> : null}</span>
+                              : t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
                               : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
                               : liquidated ? <span className="chip ok">Liquidado</span>
                               : antesCorte ? <span className="chip" title="Anterior a «Contar tickets desde»: no cuenta como pendiente">Anterior al corte</span>
@@ -14125,12 +14148,20 @@ Motivo (obligatorio):`, "");
                               : <span className="chip info">Pendiente</span>}
                           </td>
                           <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                            {quitado ? (
+                              <button type="button" className="btnSecondary" onClick={() => restaurarTicketBascula(t)}>↩️ Restaurar</button>
+                            ) : <>
                             {!t.weighing_ticket_id && !liquidated && !linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); setLinkFarmerFilter(t.farmer_name || ""); }}>Vincular cliente</button>
                             )}
                             {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", operation_type: "COMPRA", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
+                            {!t.weighing_ticket_id && !liquidated && (
+                              <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} title="Se borró en la app de báscula, era de prueba o está repetido: deja de ser pendiente (no se borra)"
+                                onClick={() => quitarTicketBascula(t)}>🗑️ Quitar</button>
+                            )}
+                            </>}
                           </td>
                         </tr>
                       );
