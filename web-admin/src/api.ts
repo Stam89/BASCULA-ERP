@@ -107,7 +107,32 @@ export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
 // «SOBREGIRO»), no escribió nada y solo pide confirmación: caja que quedaría en negativo, quintales de más en una
 // liquidación… Aquí se le pregunta a la persona y, si acepta, se reenvía la misma petición con
 // «X-Confirmar: CODIGO». Si hay varios avisos seguidos se preguntan uno a uno (máximo 4).
+// UN ENVÍO A LA VEZ: el mismo envío (método + ruta + datos) mientras el primero sigue en camino se rechaza.
+// En el celular un segundo toque (o el doble toque de una pantalla lenta) duplicaba pagos, secados, ingresos…
+const enCamino = new Set<string>();
+export const YA_SE_ESTA_GUARDANDO = "Ya se está guardando… espera la respuesta (no toques otra vez).";
+
+/** Avisa a la pantalla de un envío que falló (para mostrarlo en rojo aunque esa pantalla no lo muestre). */
+function avisarFallo(mensaje: string) {
+  try { window.dispatchEvent(new CustomEvent("erp:envio-fallido", { detail: mensaje })); } catch { /* sin ventana */ }
+}
+
 async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+  const clave = `${method} ${path} ${opts?.accionistaId ?? ""} ${JSON.stringify(body ?? null)}`;
+  if (enCamino.has(clave)) throw new Error(YA_SE_ESTA_GUARDANDO);
+  enCamino.add(clave);
+  try {
+    return await enviarJsonUnaVez<T>(method, path, body, opts);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg !== "No se registró: cancelaste el aviso.") avisarFallo(msg);
+    throw e;
+  } finally {
+    enCamino.delete(clave);
+  }
+}
+
+async function enviarJsonUnaVez<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
   const confirmados: string[] = [];
   const enviar = () => {
     const extra: Record<string, string> = {};

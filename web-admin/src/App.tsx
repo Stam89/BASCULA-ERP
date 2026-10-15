@@ -2330,7 +2330,9 @@ export function App() {
   const [apiOnline, setApiOnline] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("Listo");
+  const [mensajeEstado, setMensajeEstado] = useState<{ texto: string; n: number }>({ texto: "Listo", n: 0 });
+  const message = mensajeEstado.texto;
+  const setMessage = useCallback((texto: string) => setMensajeEstado((m) => ({ texto, n: m.n + 1 })), []);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
   const [panelData, setPanelData] = useState<PanelData | null>(null);
   const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -3916,17 +3918,65 @@ export function App() {
     unit_price: string;
   }>>([{ item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
 
+  const toastSeq = useRef(0);
   const addToast = useCallback((text: string, type?: "success" | "error" | "warn") => {
-    const id = Date.now();
-    setToasts((prev) => [...prev.slice(-4), { id, text, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4500);
+    const id = Date.now() * 1000 + (toastSeq.current++ % 1000);
+    setToasts((prev) => {
+      // El mismo aviso que ya está en pantalla no se repite (p. ej. el error que avisa el envío y la pantalla).
+      if (prev.some((t) => t.text === text)) return prev;
+      return [...prev.slice(-4), { id, text, type }];
+    });
+    // Los errores quedan más tiempo: en el celular se leían a medias.
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), type === "error" ? 8000 : 4500);
   }, []);
 
   useEffect(() => {
     if (!message || message === "Listo") return;
-    const isError = /error|falla|falt[ao]|no se pudo|inv[aá]lido|seleccione|ingrese/i.test(message);
+    const isError = /error|falla|falt[ao]|no se pudo|no hubo|inv[aá]lido|seleccione|ingrese|elige|escribe|marca los|no puede|no hay /i.test(message);
     addToast(message, isError ? "error" : "success");
-  }, [message]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mensajeEstado]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Todo envío que falla (guardar, pagar, anular…) se muestra en ROJO, aunque la pantalla no lo avisara.
+  useEffect(() => {
+    const alFallar = (e: Event) => { const m = (e as CustomEvent<string>).detail; if (m) addToast(m, "error"); };
+    window.addEventListener("erp:envio-fallido", alFallar);
+    return () => window.removeEventListener("erp:envio-fallido", alFallar);
+  }, [addToast]);
+
+  // Campo obligatorio vacío: en el celular el globo del navegador a veces no se ve y «no pasa nada» al guardar.
+  // Se avisa con el nombre del campo y se lleva la pantalla hasta él.
+  useEffect(() => {
+    let ultimo = 0;
+    const alInvalido = (e: Event) => {
+      const el = e.target as HTMLInputElement | null;
+      if (!el || Date.now() - ultimo < 1200) return;
+      ultimo = Date.now();
+      const etiqueta = (el.closest("label")?.querySelector("span")?.textContent || el.getAttribute("aria-label") || el.placeholder || el.name || "un campo")
+        .replace(/\s+/g, " ").replace(/[*:]\s*$/, "").trim().slice(0, 60);
+      addToast(`Falta llenar o corregir: ${etiqueta}${el.validationMessage ? ` (${el.validationMessage})` : ""}`, "error");
+      try { el.scrollIntoView({ behavior: "smooth", block: "center" }); } catch { /* viejo */ }
+    };
+    document.addEventListener("invalid", alInvalido, true);
+    return () => document.removeEventListener("invalid", alInvalido, true);
+  }, [addToast]);
+
+  // VERSIÓN NUEVA: el celular deja la página abierta días; tras publicar un arreglo seguía con la versión vieja.
+  // Al volver a la página (o cada 10 min) se compara el programa publicado con el que está corriendo.
+  const [hayVersionNueva, setHayVersionNueva] = useState(false);
+  useEffect(() => {
+    const actual = [...document.querySelectorAll<HTMLScriptElement>("script[src]")].map((s) => s.getAttribute("src")).find((s) => s && /\/assets\/.*\.js/.test(s));
+    if (!actual) return;
+    const revisar = async () => {
+      try {
+        const html = await (await fetch("/", { cache: "no-store" })).text();
+        if (html.includes("/assets/") && !html.includes(actual)) setHayVersionNueva(true);
+      } catch { /* sin conexión: se revisa después */ }
+    };
+    const alVolver = () => { if (document.visibilityState === "visible") revisar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    const t = window.setInterval(revisar, 10 * 60 * 1000);
+    return () => { document.removeEventListener("visibilitychange", alVolver); window.clearInterval(t); };
+  }, []);
 
   const rawProduct = useMemo(
     () => products.find((product) => product.code === "CASCARA-011") ?? products.find((product) => product.code === "ARROZ-CASCARA") ?? products[0],
@@ -26705,6 +26755,11 @@ Motivo (obligatorio):`, "");
       </div>
     )}
 
+    {hayVersionNueva && (
+      <button type="button" className="versionNueva" onClick={() => window.location.reload()}>
+        🔄 Hay una versión nueva del sistema. Toca aquí para actualizar.
+      </button>
+    )}
     {toasts.length > 0 && (
       <div className="toastBar">
         {toasts.map((t) => (
