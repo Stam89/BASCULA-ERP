@@ -3804,7 +3804,8 @@ export function App() {
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   // Forma de pago que se escoge al TOMAR el pedido (la Cola de Despachos la trae puesta).
-  const [pedidoFormaPago, setPedidoFormaPago] = useState("CASH");
+  // Forma de pago del pedido: EN BLANCO hasta que se elija (pedido del dueño: se enviaban de contado los que eran a crédito).
+  const [pedidoFormaPago, setPedidoFormaPago] = useState("");
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
     presentation_id: "",
@@ -12255,6 +12256,11 @@ Motivo (obligatorio):`, "");
       };
     });
 
+    if (!pedidoFormaPago) {
+      addToast("Elige la forma de pago del pedido (efectivo, banco o crédito) antes de enviarlo.", "error");
+      document.querySelector<HTMLSelectElement>(".pedidoFormaPago select")?.focus();
+      return;
+    }
     if (pedidoGuardandoRef.current) return;
     pedidoGuardandoRef.current = true;
     setPedidoGuardando(true);
@@ -12268,7 +12274,7 @@ Motivo (obligatorio):`, "");
         payment_method: pedidoFormaPago,
         items
       }, ventaOpts);
-      setPedidoFormaPago("CASH");
+      setPedidoFormaPago("");
     } finally {
       pedidoGuardandoRef.current = false;
       setPedidoGuardando(false);
@@ -12408,7 +12414,11 @@ Motivo (obligatorio):`, "");
       addToast("Primero confirma la preparación del pedido (📦 Confirmar Preparación).", "error");
       return;
     }
-    const metodo = orderPayMethod[order.id] ?? order.payment_method ?? "CASH";
+    const metodo = orderPayMethod[order.id] ?? order.payment_method ?? "";
+    if (!metodo) {
+      addToast("Elige la forma de pago (efectivo, banco o crédito) antes de despachar.", "error");
+      return;
+    }
     // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
     const esDelActivo = !order.accionista_id || order.accionista_id === activeAccionistaId;
     const registerId = esDelActivo
@@ -12827,7 +12837,7 @@ Motivo (obligatorio):`, "");
    */
   async function editarPedido(order: SalesOrder) {
     const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null; sack_id?: string | null }>; delivery_date: string | null; notes: string | null; customer_id: string; payment_method?: string | null }>(`/orders/${order.id}`, optsPedido(order));
-    setPedidoFormaPago(detalle.payment_method ?? "CASH");
+    setPedidoFormaPago(detalle.payment_method ?? "");
     // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
     const dueno = order.accionista_id || activeAccionistaId || "";
     if (dueno && dueno !== ventaSocioId) { setVentaSocioId(dueno); await cargarSesionVenta(dueno).catch(() => undefined); }
@@ -12868,8 +12878,12 @@ Motivo (obligatorio):`, "");
         sack_id: line.sack_id ?? null
       };
     });
+    if (!pedidoFormaPago) {
+      addToast("Elige la forma de pago del pedido antes de guardarlo.", "error");
+      return;
+    }
     const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items, payment_method: pedidoFormaPago }, ventaOpts);
-    setPedidoFormaPago("CASH");
+    setPedidoFormaPago("");
     addToast(`Pedido ${r.order_number} actualizado: ${money(Number(r.total_amount))}`, "success");
     cancelarEdicionPedido();
     await refreshCustomersAndSales();
@@ -17421,8 +17435,10 @@ Motivo (obligatorio):`, "");
               )}
 
               <label className="pedidoFormaPago">
-                <span>Forma de pago</span>
-                <select value={pedidoFormaPago} onChange={(e) => setPedidoFormaPago(e.target.value)}>
+                <span>Forma de pago *</span>
+                <select value={pedidoFormaPago} required onChange={(e) => setPedidoFormaPago(e.target.value)}
+                  style={!pedidoFormaPago ? { borderColor: "#dc2626", background: "#fef2f2" } : undefined}>
+                  <option value="" disabled>— Elige: ¿efectivo, banco o crédito? —</option>
                   <option value="CASH">💵 Efectivo</option>
                   <option value="TRANSFER">🏦 Banco · transferencia</option>
                   <option value="CARD">🏦 Banco · tarjeta</option>
@@ -17492,7 +17508,7 @@ Motivo (obligatorio):`, "");
                     // "Listo para cargar" = ya se confirmó la preparación (picking).
                     const listo = Boolean(o.prepared_at);
                     // Condición de pago elegida (por defecto contado). CREDIT = a crédito.
-                    const metodoPago = orderPayMethod[o.id] ?? o.payment_method ?? "CASH";
+                    const metodoPago = orderPayMethod[o.id] ?? o.payment_method ?? "";
                     const esCredito = metodoPago === "CREDIT";
                     // Stock disponible (QQ) en bodega de los productos del pedido: pista de
                     // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
@@ -17695,8 +17711,9 @@ Motivo (obligatorio):`, "");
                           <select
                             value={metodoPago}
                             onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
-                            style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
+                            style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${metodoPago ? "var(--c-border)" : "#dc2626"}`, fontSize: 13 }}
                           >
+                            {!metodoPago && <option value="" disabled>— Forma de pago —</option>}
                             <option value="CASH">💵 Efectivo</option>
                             <option value="TRANSFER">🏦 Banco · transferencia</option>
                             <option value="CARD">🏦 Banco · tarjeta</option>
