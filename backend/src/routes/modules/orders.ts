@@ -173,6 +173,8 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     delivery_date: z.string().optional(),
     notes: z.string().optional(),
     created_by: z.string().uuid().optional(),
+    // Forma de pago acordada al tomar el pedido (la Cola la trae puesta al despachar).
+    payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).optional(),
     items: z.array(orderItemSchema).min(1)
   }).parse(req.body);
 
@@ -180,10 +182,10 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     await validarRespaldoDelPedido(client, accionistaId, body.items);
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const order = await client.query(
-      `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by, payment_method)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [nextCode("PED"), body.customer_id, accionistaId, body.delivery_date ?? null, body.notes ?? null, total, body.created_by ?? null]
+      [nextCode("PED"), body.customer_id, accionistaId, body.delivery_date ?? null, body.notes ?? null, total, body.created_by ?? null, body.payment_method ?? null]
     );
     for (const item of body.items) {
       await client.query(
@@ -495,6 +497,7 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
   const body = z.object({
     delivery_date: z.string().optional(),
     notes: z.string().optional(),
+    payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).optional(),
     items: z.array(orderItemSchema).min(1)
   }).parse(req.body);
 
@@ -513,6 +516,9 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     }
 
     await validarRespaldoDelPedido(client, accionistaId, body.items, req.params.id as string);
+    if (body.payment_method) {
+      await client.query("UPDATE sales_orders SET payment_method = $2 WHERE id = $1", [req.params.id, body.payment_method]);
+    }
 
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     await client.query("DELETE FROM sales_order_items WHERE order_id = $1", [req.params.id]);

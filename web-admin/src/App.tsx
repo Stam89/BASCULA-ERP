@@ -1298,6 +1298,8 @@ type SalesOrder = {
   status: "PENDING" | "DELIVERED" | "CANCELLED";
   delivery_date: string | null;
   notes: string | null;
+  // Forma de pago acordada al tomar el pedido (CASH/TRANSFER/CARD/CHECK/CREDIT). null = pedido viejo.
+  payment_method?: string | null;
   total_amount: string | number;
   sale_id: string | null;
   sale_number: string | null;
@@ -3712,6 +3714,8 @@ export function App() {
   } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
+  // Forma de pago que se escoge al TOMAR el pedido (la Cola de Despachos la trae puesta).
+  const [pedidoFormaPago, setPedidoFormaPago] = useState("CASH");
   const [saleLineForm, setSaleLineForm] = useState({
     product_id: "",
     presentation_id: "",
@@ -12063,8 +12067,10 @@ Motivo (obligatorio):`, "");
         delivery_date: (form.get("delivery_date") as string) || undefined,
         notes: (form.get("order_notes") as string) || undefined,
         created_by: authUser?.id,
+        payment_method: pedidoFormaPago,
         items
       }, ventaOpts);
+      setPedidoFormaPago("CASH");
     } finally {
       pedidoGuardandoRef.current = false;
       setPedidoGuardando(false);
@@ -12204,7 +12210,7 @@ Motivo (obligatorio):`, "");
       addToast("Primero confirma la preparación del pedido (📦 Confirmar Preparación).", "error");
       return;
     }
-    const metodo = orderPayMethod[order.id] ?? "CASH";
+    const metodo = orderPayMethod[order.id] ?? order.payment_method ?? "CASH";
     // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
     const esDelActivo = !order.accionista_id || order.accionista_id === activeAccionistaId;
     const registerId = esDelActivo
@@ -12622,7 +12628,8 @@ Motivo (obligatorio):`, "");
    * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
    */
   async function editarPedido(order: SalesOrder) {
-    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string }>(`/orders/${order.id}`, optsPedido(order));
+    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string; payment_method?: string | null }>(`/orders/${order.id}`, optsPedido(order));
+    setPedidoFormaPago(detalle.payment_method ?? "CASH");
     // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
     const dueno = order.accionista_id || activeAccionistaId || "";
     if (dueno && dueno !== ventaSocioId) { setVentaSocioId(dueno); await cargarSesionVenta(dueno).catch(() => undefined); }
@@ -12661,7 +12668,8 @@ Motivo (obligatorio):`, "");
         sobrante_saco_lb: line.sobrante_saco_lb ?? null
       };
     });
-    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items }, ventaOpts);
+    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items, payment_method: pedidoFormaPago }, ventaOpts);
+    setPedidoFormaPago("CASH");
     addToast(`Pedido ${r.order_number} actualizado: ${money(Number(r.total_amount))}`, "success");
     cancelarEdicionPedido();
     await refreshCustomersAndSales();
@@ -17200,6 +17208,16 @@ Motivo (obligatorio):`, "");
                 </p>
               )}
 
+              <label className="pedidoFormaPago">
+                <span>Forma de pago</span>
+                <select value={pedidoFormaPago} onChange={(e) => setPedidoFormaPago(e.target.value)}>
+                  <option value="CASH">💵 Efectivo</option>
+                  <option value="TRANSFER">🏦 Banco · transferencia</option>
+                  <option value="CARD">🏦 Banco · tarjeta</option>
+                  <option value="CHECK">🏦 Banco · cheque</option>
+                  <option value="CREDIT">📋 Crédito</option>
+                </select>
+              </label>
               <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
               <Input name="order_notes" label="Nota (opcional)" required={false} />
 
@@ -17262,7 +17280,7 @@ Motivo (obligatorio):`, "");
                     // "Listo para cargar" = ya se confirmó la preparación (picking).
                     const listo = Boolean(o.prepared_at);
                     // Condición de pago elegida (por defecto contado). CREDIT = a crédito.
-                    const metodoPago = orderPayMethod[o.id] ?? "CASH";
+                    const metodoPago = orderPayMethod[o.id] ?? o.payment_method ?? "CASH";
                     const esCredito = metodoPago === "CREDIT";
                     // Stock disponible (QQ) en bodega de los productos del pedido: pista de
                     // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
@@ -17327,7 +17345,9 @@ Motivo (obligatorio):`, "");
                           <span style={{ background: "#ede9fe", color: "#6d28d9", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>💳 Crédito (a convenir)</span>
                         ) : (
                           <>
-                            <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>💵 Contado / Contra Entrega</span>
+                            <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>
+                              {({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque" } as Record<string, string>)[metodoPago] ?? "💵 Contado"} · Contra Entrega
+                            </span>
                             <div style={{ marginTop: 4, fontSize: 11.5, color: "#b45309", fontWeight: 600 }}>⚠ Verificar cobro en caja antes de autorizar salida.</div>
                           </>
                         )}
@@ -17461,7 +17481,7 @@ Motivo (obligatorio):`, "");
                         // PASO 2: ya está listo → elegir método de pago y despachar.
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
                           <select
-                            value={orderPayMethod[o.id] ?? "CASH"}
+                            value={metodoPago}
                             onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
                             style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid var(--c-border)", fontSize: 13 }}
                           >
