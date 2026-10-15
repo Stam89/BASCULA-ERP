@@ -4068,6 +4068,7 @@ export function App() {
   }, [materiaPrimaEntries, materiaPrimaSearch]);
   // ── Selección de ingresos POR SECADORA (cada una arma su propio lote) ──────
   const seleccionDe = (secadora: string) => dryingSelections[secadora] ?? [];
+  const [motorGuardando, setMotorGuardando] = useState(false);
   // Candado contra error humano de la báscula: si un mismo secado junta ingresos
   // 0.11 y CORRIENTE se pide confirmar, mostrando los tickets del tipo minoritario
   // (lo normal es que todo el túnel sea de un solo tipo).
@@ -10517,9 +10518,19 @@ export function App() {
   // combustible del motor repartiéndolo entre los secados. Un solo botón.
   async function guardarInformeMotor(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    // Un toque a la vez: en el celular un segundo toque mientras guarda duplicaba el secado.
+    if (motorGuardando) return;
+    setMotorGuardando(true);
+    try { await guardarInformeMotorInterno(event.currentTarget); } finally { setMotorGuardando(false); }
+  }
+  async function guardarInformeMotorInterno(formEl: HTMLFormElement) {
+    const form = new FormData(formEl);
     const secadoras = MOTOR_SECADORAS[motorActivo];
-    const conIngresos = secadoras.filter((s) => seleccionDe(s).length > 0);
+    // Los tickets MARCADOS en la lista también cuentan aunque no se haya tocado «➕ Agregar al lote»
+    // (en el celular se marcaban y al guardar no pasaba nada).
+    const libres = new Set(entradasLibres.map((e) => e.id));
+    const seleccionFinal = (s: string) => [...new Set([...seleccionDe(s), ...(dryingEntryMultiPick[s] ?? []).filter((id) => libres.has(id))])];
+    const conIngresos = secadoras.filter((s) => seleccionFinal(s).length > 0);
     const hayCombustible = combustibleTotal > 0;
 
     // Fecha de llenado y hora de inicio ÚNICAS de la corrida del motor: se toman
@@ -10542,7 +10553,7 @@ export function App() {
     const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)]);
     if (bloqueada) {
       const t = tunelDeSecadora(bloqueada);
-      setMessage(`El túnel ${t} está en uso por ${occupiedTunnels[t]}. Quita esos ingresos y usa otro túnel.`);
+      addToast(`El túnel ${t} está en uso por ${occupiedTunnels[t]}. Quita esos ingresos y usa otro túnel.`, "error");
       return;
     }
 
@@ -10550,7 +10561,7 @@ export function App() {
     // corregir la fecha/hora/secador (sin ingresos ni combustible nuevos).
     const hayCorridaActiva = motorActiveReports.length > 0;
     if (conIngresos.length === 0 && !hayCombustible && !hayCorridaActiva) {
-      setMessage("Agrega ingresos a alguna secadora o registra el combustible del motor");
+      addToast("Marca los tickets (ingresos de materia prima) de alguna secadora antes de guardar.", "error");
       return;
     }
 
@@ -10562,14 +10573,14 @@ export function App() {
       setSecadorSemana(secadorMotor.toUpperCase());
     }
     for (const secadora of conIngresos) {
-      if (!confirmarMezclaTipos(seleccionDe(secadora), secadora)) return;
+      if (!confirmarMezclaTipos(seleccionFinal(secadora), secadora)) return;
     }
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
       const operatorName = secadorMotor;
       const saved = await apiPost<{ reports: DryingTunnelReport[]; separated: boolean }>("/process-flow/drying/batch", {
-        entry_ids: seleccionDe(secadora),
+        entry_ids: seleccionFinal(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
         tunnel_number: t,
         rice_type: form.get(`rice_type_${t}`) || "0.11",
@@ -10650,7 +10661,7 @@ export function App() {
       }
     }
 
-    safeResetForm(event.currentTarget);
+    safeResetForm(formEl);
     setEditingDryingReport(null);
     await refresh();
     await loadMotorActive();
@@ -14681,7 +14692,7 @@ Motivo (obligatorio):`, "");
                 key={`motor-form-${motorActivo}-${motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at ?? ""}`}
                 className="formPanel"
                 style={{ gridColumn: "1 / -1" }}
-                onSubmit={(event) => guardarInformeMotor(event).catch((error) => setMessage(error.message))}
+                onSubmit={(event) => guardarInformeMotor(event).catch((error) => addToast(error instanceof Error ? error.message : "No se pudo guardar el informe", "error"))}
               >
                 {/* Datos ÚNICOS de la corrida del motor: fecha de llenado, hora de
                     inicio y secador se aplican por igual a TODAS las secadoras del
@@ -14825,9 +14836,10 @@ Motivo (obligatorio):`, "");
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 18 }}>
                   <button
                     className="btnSecondary"
+                    disabled={motorGuardando}
                     style={{ flex: "1 1 240px", maxWidth: 320, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}
                   >
-                    💾 Guardar informe completo
+                    {motorGuardando ? "⏳ Guardando…" : "💾 Guardar informe completo"}
                   </button>
                   <span className="muted" style={{ flex: "1 1 240px", alignSelf: "center", textAlign: "center" }}>
                     Después de guardar, abre el túnel en proceso para finalizarlo.

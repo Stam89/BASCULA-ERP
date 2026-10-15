@@ -42,6 +42,10 @@ function authHeaders(opts?: OpcionesApi): Record<string, string> {
   return headers;
 }
 
+/** Sin internet o el servidor se estaba reiniciando (502/503/504 del túnel): no se guardó nada. */
+export const SIN_CONEXION = "No hubo conexión con el servidor (sin internet o se estaba reiniciando). No se guardó: vuelve a intentar en un momento.";
+const conConexion = (p: Promise<Response>) => p.catch(() => { throw new Error(SIN_CONEXION); });
+
 function handleUnauthorized(response: Response) {
   // Solo cerramos sesión si había una sesión guardada (un 401 en /auth/login
   // por clave incorrecta no debe recargar la página).
@@ -55,6 +59,7 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     handleUnauthorized(response);
     const text = await response.text();
+    if ([502, 503, 504].includes(response.status) || /^\s*</.test(text)) throw new Error(SIN_CONEXION);
     let message = text || `API error ${response.status}`;
     try {
       const parsed = JSON.parse(text) as { error?: string; message?: string };
@@ -94,7 +99,7 @@ export async function apiOk(path: string, init: RequestInit = {}, opts?: Opcione
 }
 
 export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
-  const response = await fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders(opts) });
+  const response = await conConexion(fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders(opts) }));
   return parseResponse<T>(response);
 }
 
@@ -108,11 +113,11 @@ async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, bod
     const extra: Record<string, string> = {};
     if (confirmados.length) extra["X-Confirmar"] = confirmados.join(",");
     if (confirmados.includes("SOBREGIRO")) extra["X-Confirmar-Sobregiro"] = "1";
-    return fetch(`${API_URL}/api/v1${path}`, {
+    return conConexion(fetch(`${API_URL}/api/v1${path}`, {
       method,
       headers: { "Content-Type": "application/json", ...authHeaders(opts), ...extra },
       body: JSON.stringify(body)
-    });
+    }));
   };
   let response = await enviar();
   for (let intento = 0; intento < 4 && response.status === 409; intento++) {
