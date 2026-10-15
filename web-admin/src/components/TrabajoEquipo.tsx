@@ -7,12 +7,14 @@
 //  5) ¿Quién compró y cómo se pagó? caja · lo compró el técnico (un solo pago) · fondo a rendir · a crédito
 //  6) Resumen: cuánto sale de caja y qué queda en la hoja de vida del equipo.
 // Guarda con /equipment/maintenance (hoja de vida + caja o Por Pagar); «sin equipo» con /repuestos/compra.
-import { useMemo, useState } from "react";
-import { apiPost } from "../api";
+// 🚜 Máquinas de Transporte y Cosechadora: la plata sale de esta caja (Matriz) pero el gasto es de Transporte;
+// se descuenta de lo que la Matriz le debe y el resto queda por cobrarle (/equipment/transporte/gasto).
+import { useEffect, useMemo, useState } from "react";
+import { apiGet, apiPost } from "../api";
 import { money } from "../format";
 import type { Repuesto } from "./RepuestosModule";
 
-type Equipo = { area: string; section: string };
+type Equipo = { area: string; section: string; activoId?: string };
 type Tipo = "REPARACION" | "MANTENIMIENTO" | "COMPRA";
 type Quien = "PROPIO" | "EXTERNO";
 type Pago = "CAJA" | "TECNICO" | "FONDO" | "CREDITO";
@@ -23,8 +25,10 @@ const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[̀-�
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const num = (v: string) => Number(v) || 0;
 
-export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedores, registerId, inicial, fondosPorLiquidar, onGuardado, onError }: {
+export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tecnicos, personal, proveedores, registerId, inicial, fondosPorLiquidar, onGuardado, onError }: {
   equipos: Equipo[];
+  /** Máquinas de Transporte y Cosechadora (cosechadoras, plataforma, Toyota…): su gasto es de Transporte. */
+  maquinasTransporte?: Array<{ id: string; nombre: string; tipo?: string }>;
   repuestos: Repuesto[];
   /** Técnicos o talleres usados antes (más recientes primero). */
   tecnicos: string[];
@@ -57,6 +61,13 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
   const [busy, setBusy] = useState(false);
 
   const esBodega = eq === "BODEGA";
+  const esTransporte = !!(eq && eq !== "BODEGA" && eq.activoId);
+  // Cuánto le debe hoy la Matriz a Transporte (se descuenta del gasto) — solo con una máquina de Transporte.
+  const [cuentasT, setCuentasT] = useState<{ debe: number; le_deben: number } | null>(null);
+  useEffect(() => {
+    if (!esTransporte) { setCuentasT(null); return; }
+    apiGet<{ debe: number; le_deben: number }>("/equipment/transporte/cuentas-matriz").then(setCuentasT).catch(() => setCuentasT(null));
+  }, [esTransporte]);
   const esCompra = tipo === "COMPRA";
   const comprados = items.filter((i) => i.k !== "BODEGA");
   const totComprados = r2(comprados.reduce((s, i) => s + num(i.cant) * num(i.costo), 0));
@@ -67,10 +78,15 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
   const equipoTxt = esBodega ? "la bodega de repuestos" : eq ? `${eq.area} · ${eq.section}` : "";
 
   // ── 1) Equipos que coinciden con lo escrito ──
+  const todosEquipos = useMemo<Equipo[]>(() => [
+    ...equipos,
+    ...maquinasTransporte.map((m) => ({ area: "TRANSPORTE", section: m.nombre, activoId: m.id }))
+  ], [equipos, maquinasTransporte]);
   const equiposVisibles = useMemo(() => {
     const tk = sinTildes(qEq.trim()).split(/\s+/).filter(Boolean);
-    return equipos.filter((e) => tk.every((k) => sinTildes(`${e.area} ${e.section}`).includes(k))).slice(0, tk.length ? 24 : 12);
-  }, [equipos, qEq]);
+    const extra = (e: Equipo) => e.activoId ? `transporte cosechadora ${maquinasTransporte.find((m) => m.id === e.activoId)?.tipo ?? ""}` : "";
+    return todosEquipos.filter((e) => tk.every((k) => sinTildes(`${e.area} ${e.section} ${extra(e)}`).includes(k))).slice(0, tk.length ? 24 : 16);
+  }, [todosEquipos, qEq, maquinasTransporte]);
 
   // ── 4) Lo que se puede agregar según lo escrito ──
   const sugerencias = useMemo(() => {
@@ -79,7 +95,7 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
     const coincide = (n: string) => tk.every((k) => sinTildes(n).includes(k));
     const out: Array<{ key: string; titulo: string; detalle: string; item: Omit<Item, "key" | "cant"> & { cant?: string } }> = [];
     const activos = repuestos.filter((r) => r.activo !== false && coincide(`${r.nombre} ${r.referencia ?? ""} ${r.equipo ?? ""}`));
-    if (!esCompra && !esBodega) {
+    if (!esCompra && !esBodega && !esTransporte) {
       for (const r of activos.filter((x) => Number(x.stock) > 0).slice(0, 6)) {
         out.push({ key: `b-${r.id}`, titulo: r.nombre, detalle: `de la bodega · hay ${Number(r.stock)}`, item: { nombre: r.nombre, k: "BODEGA", repuesto_id: r.id, costo: String(Number(r.costo_unitario) || 0), stock: Number(r.stock) } });
       }
@@ -98,7 +114,7 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
       if (!esCompra && !esBodega && !INSUMOS_SUGERIDOS.some((x) => sinTildes(x) === t)) out.push({ key: "nuevo-i", titulo: `➕ «${txt}»`, detalle: "insumo comprado", item: { nombre: txt, k: "INSUMO", costo: "" } });
     }
     return out.slice(0, 14);
-  }, [qItem, repuestos, esCompra, esBodega]);
+  }, [qItem, repuestos, esCompra, esBodega, esTransporte]);
 
   const agregar = (it: Omit<Item, "key" | "cant"> & { cant?: string }) => {
     setErr("");
@@ -149,6 +165,24 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
     const descripcion = det.trim() || `${tipoTxt}${items.length ? `: ${items.map((i) => i.nombre).join(", ")}` : ""}`;
     setBusy(true);
     try {
+      if (esTransporte) {
+        const r = await apiPost<{ total: number; descontado: number; por_cobrar: number; maquina: string }>("/equipment/transporte/gasto", {
+          cash_register_id: registerId,
+          activo_id: (eq as Equipo).activoId,
+          maintenance_type: tipo === "REPARACION" ? "CORRECTIVO" : tipo === "MANTENIMIENTO" ? "PREVENTIVO" : "REPUESTO",
+          description: descripcion,
+          provider: pasoQuien ? nom.trim() || undefined : undefined,
+          hecho_por_tipo: pasoQuien ? quien ?? undefined : undefined,
+          comprado_por: (pago === "TECNICO" ? nom.trim() : comprador.trim()) || undefined,
+          invoice_number: factura.trim() || undefined,
+          mano_obra: manoObra,
+          items: comprados.map((i) => ({ nombre: i.nombre, cantidad: r2(num(i.cant)), costo_unitario: r2(num(i.costo)), tipo: i.k === "INSUMO" ? "INSUMO" : "REPUESTO" }))
+        });
+        await onGuardado(`🚜 ${tipoTxt} en ${r.maquina} (Transporte): salió ${money(r.total)} de caja` +
+          (r.descontado > 0 ? ` · se descontaron ${money(r.descontado)} de lo que se le debía a Transporte` : "") +
+          (r.por_cobrar > 0 ? ` · quedan ${money(r.por_cobrar)} por cobrar a Transporte` : ""));
+        return;
+      }
       if (esBodega) {
         const r = await apiPost<{ total: number; credito: boolean }>("/repuestos/compra", {
           cash_register_id: registerId,
@@ -216,7 +250,8 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
         {eq ? (
           <div className="teq-sel">
             <span>🔧 <b>{esBodega ? "Sin equipo · va a la bodega" : `${(eq as Equipo).area} · ${(eq as Equipo).section}`}</b>
-              {!esBodega && /montacarga/i.test((eq as Equipo).area) && <small> · rubro Montacarga</small>}</span>
+              {!esBodega && /montacarga/i.test((eq as Equipo).area) && <small> · rubro Montacarga</small>}
+              {esTransporte && <small> · 🚜 es de Transporte y Cosechadora</small>}</span>
             <button type="button" className="btnGhost" onClick={() => { setEq(null); setErr(""); }}>Cambiar</button>
           </div>
         ) : (
@@ -226,7 +261,7 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
               onKeyDown={(e) => { if (e.key === "Enter" && equiposVisibles[0]) { e.preventDefault(); elegirEquipo(equiposVisibles[0]); } }} />
             <div className="teq-chips">
               {equiposVisibles.map((e) => (
-                <button key={`${e.area}|${e.section}`} type="button" onClick={() => elegirEquipo(e)}>{e.area} · {e.section}</button>
+                <button key={`${e.area}|${e.section}|${e.activoId ?? ""}`} type="button" className={e.activoId ? "teq-chip--tr" : ""} onClick={() => elegirEquipo(e)}>{e.activoId ? "🚜 " : ""}{e.area} · {e.section}</button>
               ))}
               <button type="button" className="teq-chip--alt" onClick={() => elegirEquipo("BODEGA")}>📦 Sin equipo · va a la bodega</button>
             </div>
@@ -308,7 +343,7 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
               </button>
             ))}
           </div>
-          {esCompra && !esBodega && comprados.length > 0 && (
+          {esCompra && !esBodega && !esTransporte && comprados.length > 0 && (
             <div className="teq-opts">
               {opt(destino === "USO", () => setDestino("USO"), "✅ Ya se instaló", `En ${equipoTxt}`)}
               {opt(destino === "INVENTARIO", () => setDestino("INVENTARIO"), "📦 Se guarda en bodega", "Queda para cuando se necesite")}
@@ -332,8 +367,8 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
           <div className="teq-opts">
             {opt(pago === "CAJA", () => setPago("CAJA"), "💵 De la caja ahora", "Sale hoy de la gaveta")}
             {quien === "EXTERNO" && comprados.length > 0 && !esCompra && opt(pago === "TECNICO", () => setPago("TECNICO"), "🧑‍🔧 Lo compró el técnico", "Se le paga todo junto con su mano de obra")}
-            {!esBodega && !(esCompra && destino === "INVENTARIO") && opt(pago === "FONDO", () => setPago("FONDO"), "👛 Se le da plata y luego rinde cuentas", "Fondo a rendir: después registra el vuelto")}
-            {opt(pago === "CREDITO", () => setPago("CREDITO"), "🧾 A crédito", "Queda en Por Pagar al proveedor")}
+            {!esBodega && !esTransporte && !(esCompra && destino === "INVENTARIO") && opt(pago === "FONDO", () => setPago("FONDO"), "👛 Se le da plata y luego rinde cuentas", "Fondo a rendir: después registra el vuelto")}
+            {!esTransporte && opt(pago === "CREDITO", () => setPago("CREDITO"), "🧾 A crédito", "Queda en Por Pagar al proveedor")}
           </div>
           {pago === "CREDITO" && (
             <div className="teq-fila">
@@ -363,7 +398,24 @@ export function TrabajoEquipo({ equipos, repuestos, tecnicos, personal, proveedo
             {pago === "CREDITO" && totalPagar > 0 && <div className="teq-res__f"><span>Queda en Por Pagar a {proveedor.trim() || "el proveedor"}</span><b>{money(totalPagar)}</b></div>}
             {totBodega > 0 && <div className="teq-res__f"><span>Repuestos de bodega (no mueve caja)</span><b>{money(totBodega)}</b></div>}
             {!esBodega && <div className="teq-res__f teq-res__t"><span>Costo del trabajo en {equipoTxt}</span><b>{money(totalPagar + totBodega)}</b></div>}
-            <small className="muted">{esBodega ? "Los repuestos entran a la bodega con su precio." : `Queda en la hoja de vida de ${equipoTxt}${nom.trim() && pasoQuien ? `, hecho por ${nom.trim()}` : ""}.`}</small>
+            {esTransporte && totalPagar > 0 && (() => {
+              const debe = cuentasT?.debe ?? 0;
+              const desc = r2(Math.min(debe, totalPagar));
+              const porCobrar = r2(totalPagar - desc);
+              return (
+                <div className="teq-tr">
+                  <b>🚜 Es gasto de Transporte y Cosechadora</b>
+                  <span>La plata sale de esta caja, pero no es costo de la piladora.</span>
+                  {cuentasT === null ? <span className="muted">Revisando cuánto se le debe a Transporte…</span> : (
+                    <>
+                      {debe > 0 ? <span>Hoy se le debe a Transporte {money(debe)} → se descuentan <b>{money(desc)}</b>.</span> : <span>Hoy no se le debe nada a Transporte.</span>}
+                      {porCobrar > 0 && <span>Quedan <b>{money(porCobrar)}</b> por cobrar a Transporte (Por Cobrar).</span>}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+            <small className="muted">{esBodega ? "Los repuestos entran a la bodega con su precio." : `Queda en la hoja de vida de ${equipoTxt}${esTransporte ? " en Transporte" : ""}${nom.trim() && pasoQuien ? `, hecho por ${nom.trim()}` : ""}.`}</small>
           </div>
           {err && <div className="teq-err">{err}</div>}
           <button type="button" className="primary teq-guardar" disabled={busy} onClick={() => guardar()}>

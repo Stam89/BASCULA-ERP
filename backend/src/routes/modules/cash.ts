@@ -9,6 +9,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devolverRepuestosDeMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
+import { anularGastoTransporte } from "../../services/gasto-transporte.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -718,6 +719,10 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
     // Si pagó una compra de REPUESTOS, se retira del stock lo que entró.
     const repuestosRevertidos = await reversarEntradaRepuestosDeCaja(client, m.id);
+    // Gasto de Transporte pagado por la Matriz: se deshace el cruce, la Por Cobrar y el gasto en Transporte.
+    if (m.reference_type === "campo_cxp" && m.reference_id) {
+      await anularGastoTransporte(client, String(m.reference_id), body.reason);
+    }
     // Si pagó un MANTENIMIENTO que usó repuestos del inventario, vuelven al stock.
     if (m.reference_type === "equipment_maintenance" && m.reference_id) {
       await devolverRepuestosDeMantenimiento(client, String(m.reference_id));

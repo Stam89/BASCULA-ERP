@@ -140,6 +140,8 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   "PAGO_PRESTAMO",
   // Pago de una deuda de OTRO socio (p. ej. sus cosechadores): no es gasto de quien pagó; queda como deuda entre socios.
   "PAGO_POR_SOCIO",
+  // Gasto de una máquina de Transporte pagado con la caja de la Matriz: es de Transporte (queda por cobrarle).
+  "GASTO_DE_TRANSPORTE",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA",
   // Devolución del dinero de una venta anulada (no es gasto: deshace un ingreso; la venta ya no cuenta).
   "DEVOLUCION_VENTA",

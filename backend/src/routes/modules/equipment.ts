@@ -12,6 +12,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { resolverProveedor } from "../../services/proveedores.js";
+import { cuentasMatrizTransporte, registrarGastoTransporte } from "../../services/gasto-transporte.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
@@ -412,6 +413,40 @@ equipmentRouter.post("/:id/maintenance", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json(withSignedPhoto(result));
+}));
+
+// 🚜 Máquinas de Transporte y Cosechadora pagadas con la caja de la Matriz (flujo «Trabajo en un equipo»).
+// GET: cuánto le debe hoy la Matriz a Transporte (se descontará del gasto) y cuánto le debe Transporte.
+equipmentRouter.get("/transporte/cuentas-matriz", asyncRoute(async (req, res) => {
+  await exigirMatriz(req);
+  res.json(await cuentasMatrizTransporte(pool, (req as AuthenticatedRequest).accionistaId!));
+}));
+equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
+  await exigirMatriz(req);
+  const body = z.object({
+    cash_register_id: z.string().uuid(),
+    activo_id: z.string().uuid(),
+    maintenance_type: z.enum(["CORRECTIVO", "PREVENTIVO", "REPUESTO"]),
+    description: z.string().trim().min(1).max(500),
+    provider: z.string().trim().max(160).optional(),
+    hecho_por_tipo: z.enum(["PROPIO", "EXTERNO"]).optional(),
+    comprado_por: z.string().trim().max(120).optional(),
+    invoice_number: z.string().trim().max(80).optional(),
+    mano_obra: z.number().nonnegative().max(1_000_000).default(0),
+    items: z.array(z.object({
+      nombre: z.string().trim().min(1).max(120),
+      cantidad: z.number().positive(),
+      costo_unitario: z.number().nonnegative(),
+      tipo: z.enum(["REPUESTO", "INSUMO"]).optional()
+    })).max(40).default([])
+  }).parse(req.body);
+  const auth = req as AuthenticatedRequest;
+  const out = await inTransaction((client) => registrarGastoTransporte(client, {
+    matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id, tipo: body.maintenance_type,
+    descripcion: body.description, provider: body.provider, hechoPorTipo: body.hecho_por_tipo ?? null, compradoPor: body.comprado_por,
+    manoObra: body.mano_obra, items: body.items, factura: body.invoice_number, userId: auth.user?.id ?? null
+  }));
+  res.status(201).json(out);
 }));
 
 // POST registrar mantenimiento por AREA/SECCION (sin equipo del catalogo)

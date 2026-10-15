@@ -84,6 +84,12 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Transporte", nombre: "Espejo de Transporte: la Por Pagar del socio = saldo pendiente del servicio en Campo", sql: `
     SELECT p.id, p.balance::float b, v.saldo_pendiente::float s FROM accounts_payable p JOIN campo_servicios_saldo v ON v.id = p.reference_id
      WHERE p.reference_type = 'campo_servicio' AND p.status <> 'CANCELLED' AND abs(p.balance - GREATEST(0, v.saldo_pendiente)) > 0.01` },
+  { modulo: "Transporte", nombre: "Gastos de Transporte pagados por la Matriz: su Por Cobrar = saldo de la deuda en Transporte", sql: `
+    SELECT a.id, a.balance::float b,
+           (c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0))::float s
+      FROM accounts_receivable a JOIN campo_cxp c ON c.id = a.reference_id
+     WHERE a.reference_type = 'campo_cxp' AND a.status <> 'CANCELLED'
+       AND abs(a.balance - GREATEST(0, c.monto - COALESCE((SELECT SUM(m.monto) FROM campo_movimientos m WHERE m.cxp_id = c.id AND m.signo = 'salida'), 0))) > 0.01` },
   { modulo: "Transporte", nombre: "Servicios de Campo huérfanos de su Por Pagar espejo (flete/cosecha de liquidación, envejecido o venta)", sql: `
     SELECT s.id FROM campo_servicios s WHERE s.origen_tipo IN ('liquidacion_flete','liquidacion_cosechadora','envejecido_flete','envejecido_regreso','venta_flete')
        AND NOT EXISTS (SELECT 1 FROM accounts_payable p WHERE p.reference_type = 'campo_servicio' AND p.reference_id = s.id)` },

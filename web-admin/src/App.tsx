@@ -19037,6 +19037,7 @@ Motivo (obligatorio):`, "");
                       <TrabajoEquipo
                         key={`teq-${teqKey}-${maintenanceForm.area}-${maintenanceForm.section}`}
                         equipos={maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })))}
+                        maquinasTransporte={fletaActivos}
                         repuestos={repCatalogo}
                         tecnicos={[...new Set(maintenanceHistory.filter((m) => m.hecho_por_tipo !== "PROPIO").map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 12)}
                         personal={[...new Set([...maintenanceHistory.filter((m) => m.hecho_por_tipo === "PROPIO").map((m) => String(m.provider ?? "").trim()).filter(Boolean), "Pilador", "Cuadrilla"])].slice(0, 8)}

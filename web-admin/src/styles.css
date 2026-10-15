@@ -6128,3 +6128,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .si-arranque { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .si-arranque button { padding: 7px 12px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; color: #334155; }
 .si-arranque button.is-on { background: #0f766e; border-color: #0f766e; color: #fff; }
+
+/* Trabajo en un equipo: máquinas de Transporte y el cruce con lo que se le debe */
+.teq-chips button.teq-chip--tr { border-color: #fcd34d; background: #fffbeb; }
+.teq-tr { display: grid; gap: 3px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; font-size: 13px; }

@@ -319,6 +319,9 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
       [req.params.id, accionistaId]
     );
     if (!ar.rows[0]) throw new ApiError(404, "Cuenta no encontrada para el accionista seleccionado");
+    if (ar.rows[0].reference_type === "campo_cxp") {
+      throw new ApiError(409, "Esta cuenta la paga Transporte y Cosechadora: regístralo allá (pago de su Por Pagar) o se descuenta sola con los fletes.");
+    }
     // Un abono SIEMPRE entra a una caja abierta: sin caja bajaba la deuda y el dinero no aparecía en ningún lado.
     if (!body.cash_register_id) throw new ApiError(400, "Abre una caja para registrar el abono: el dinero tiene que entrar a una caja.");
     await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
@@ -416,7 +419,7 @@ export async function cobrarCuentasEnGrupo(client: PoolClient, auth: Authenticat
       cajaId = body.cash_register_id;
     }
     const cuentas = (await client.query(
-      `SELECT ar.id, ar.balance, ar.status, ar.description, COALESCE(c.full_name, f.full_name) AS nombre
+      `SELECT ar.id, ar.balance, ar.status, ar.description, ar.reference_type, COALESCE(c.full_name, f.full_name) AS nombre
          FROM accounts_receivable ar
          LEFT JOIN customers c ON c.id = ar.customer_id
          LEFT JOIN farmers f ON f.id = ar.farmer_id
@@ -427,6 +430,9 @@ export async function cobrarCuentasEnGrupo(client: PoolClient, auth: Authenticat
     )).rows as Array<{ id: string; balance: string; status: string; description: string | null; nombre: string | null }>;
     if (cuentas.length !== new Set(body.receivable_ids).size) {
       throw new ApiError(404, "Alguna cuenta no existe o es de otro accionista. Refresca la pantalla.");
+    }
+    if (cuentas.some((c) => (c as { reference_type?: string | null }).reference_type === "campo_cxp")) {
+      throw new ApiError(409, "Lo que debe Transporte y Cosechadora se registra allá (pago de su Por Pagar) o se descuenta solo con los fletes.");
     }
     const vivas = cuentas.filter((c) => c.status !== "CANCELLED" && Number(c.balance) > 0.005);
     const pendiente = round2(vivas.reduce((s, c) => s + Number(c.balance), 0));
