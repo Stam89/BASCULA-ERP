@@ -11,6 +11,7 @@ import { avisarSobregiro } from "../../services/caja.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
+import { resolverProveedor } from "../../services/proveedores.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
@@ -449,8 +450,22 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
       costo_unitario: z.number().nonnegative(),
       destino: z.enum(["USO", "INVENTARIO"]),
       area: z.string().trim().max(80).optional(),
-      section: z.string().trim().max(80).optional()
+      section: z.string().trim().max(80).optional(),
+      // INSUMO = consumible (soldadura, pernos, grasa…): se gasta en este trabajo, nunca entra a bodega.
+      tipo: z.enum(["REPUESTO", "INSUMO"]).optional()
     })).max(40).optional(),
+    // ── Flujo único «Trabajo en un equipo» (Caja) ──
+    // Quién hizo el trabajo: nuestro personal (sin mano de obra; puede haber un pago aparte) o de afuera.
+    hecho_por_tipo: z.enum(["PROPIO", "EXTERNO"]).optional(),
+    // Quién fue a comprar lo que se compró (informativo, para la hoja de vida).
+    comprado_por: z.string().trim().max(120).optional(),
+    // Registro del flujo nuevo: se puede guardar con $0 (lo hizo nuestro personal sin comprar nada).
+    registro_equipo: z.boolean().optional(),
+    // Cómo se pagó: de la caja (por defecto) o a crédito con el proveedor (queda en Por Pagar).
+    pago: z.enum(["CAJA", "CREDITO"]).optional(),
+    supplier_id: z.string().uuid().optional(),
+    proveedor_nombre: z.string().trim().max(160).optional(),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     // Desglose opcional de lo pagado: amount = mano de obra + materiales /
     // consumibles comprados para este trabajo. Queda en la hoja de vida.
     labor_cost: z.number().nonnegative().optional(),
@@ -486,7 +501,14 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
   if (esFondo && !(montoMant > 0)) throw new ApiError(400, "Un fondo a rendir cuentas necesita el monto entregado.");
   if (esFondo && (body.responsable ?? "").trim().length < 2) throw new ApiError(400, "Indica quién recibe el dinero a rendir cuentas.");
   const conRepuestos = (body.repuestos_usados?.length ?? 0) > 0;
-  if (!(montoMant > 0) && !conRepuestos) {
+  const aCredito = body.pago === "CREDITO";
+  if (aCredito && esFondo) throw new ApiError(400, "Un fondo a rendir cuentas no puede ser a crédito.");
+  if (aCredito && !(body.supplier_id || (body.proveedor_nombre ?? "").trim().length >= 2)) {
+    throw new ApiError(400, "Para dejarlo a crédito escribe o elige el proveedor.");
+  }
+  // Los insumos se gastan en el trabajo: nunca van a bodega.
+  if (comprados.some((l) => l.tipo === "INSUMO" && l.destino === "INVENTARIO")) throw new ApiError(400, "Los insumos se usan en el trabajo: no van a bodega.");
+  if (!(montoMant > 0) && !conRepuestos && !(body.registro_equipo && (body.hecho_por_tipo || compradosInv.length))) {
     throw new ApiError(400, compradosInv.length
       ? "Si solo compraste repuestos para guardar (sin reparación), regístralos con la categoría «Repuestos»."
       : "El total a descontar de caja no puede ser $0.00.");
@@ -545,6 +567,8 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     // (parts_cost = los usados ya en ESTA máquina; labor_cost = mano de obra).
     const detalle = (ls: typeof comprados) => ls
       .map((l) => `${Number.isInteger(l.cantidad) ? l.cantidad : l.cantidad.toFixed(2)} ${l.nombre.toUpperCase()} $${round2(l.cantidad * l.costo_unitario).toFixed(2)}`).join(", ");
+    const usoRepuestos = usoGeneral.filter((l) => l.tipo !== "INSUMO");
+    const usoInsumos = usoGeneral.filter((l) => l.tipo === "INSUMO");
     // Usados ya en otras máquinas, agrupados por máquina (área/sección).
     const porMaquina = new Map<string, { area: string; section: string; lineas: typeof comprados }>();
     for (const l of usoOtras) {
@@ -555,13 +579,21 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
     }
     if (comprados.length) {
       const texto = [
-        usoGeneral.length ? `Usados ya: ${detalle(usoGeneral)}` : "",
+        usoRepuestos.length ? `Usados ya: ${detalle(usoRepuestos)}` : "",
+        usoInsumos.length ? `Insumos: ${detalle(usoInsumos)}` : "",
         ...[...porMaquina.values()].map((g) => `Para ${g.area}/${g.section}: ${detalle(g.lineas)}`),
         compradosInv.length ? `A bodega: ${detalle(compradosInv)}` : ""
       ].filter(Boolean).join(" · ");
       const upd = await client.query(
         "UPDATE equipment_maintenance SET repuestos_comprados = $2, parts_cost = $3, labor_cost = $4 WHERE id = $1 RETURNING *",
         [maintenance.rows[0].id, texto, subtotal(usoGeneral), round2(Math.max(0, montoMant - totalUso))]
+      );
+      maintenance.rows[0] = upd.rows[0];
+    }
+    if (body.hecho_por_tipo || body.comprado_por) {
+      const upd = await client.query(
+        "UPDATE equipment_maintenance SET hecho_por_tipo = $2, comprado_por = $3 WHERE id = $1 RETURNING *",
+        [maintenance.rows[0].id, body.hecho_por_tipo ?? null, body.comprado_por?.trim() || null]
       );
       maintenance.rows[0] = upd.rows[0];
     }
@@ -589,10 +621,24 @@ equipmentRouter.post("/maintenance", asyncRoute(async (req, res) => {
           ? { repuesto_id: l.repuesto_id, cantidad: l.cantidad, costo_unitario: l.costo_unitario }
           : { nuevo: { nombre: l.nombre, referencia: null, unidad: "UNIDAD", stock_minimo: 0 }, cantidad: l.cantidad, costo_unitario: l.costo_unitario })),
         cashRegisterId: body.cash_register_id!, accionistaId, userId: (req as AuthenticatedRequest).user?.id ?? body.created_by ?? null,
-        proveedor: null, aCredito: false, descripcion: `para bodega · mant. ${body.area}/${body.section}`
+        proveedor: aCredito ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null,
+        aCredito, dueDate: aCredito ? body.due_date ?? null : null, descripcion: `para bodega · mant. ${body.area}/${body.section}`
       });
     }
-    if (body.cash_register_id && montoMant > 0) {
+    if (body.cash_register_id && montoMant > 0 && aCredito) {
+      const proveedor = await resolverProveedor(client, body.supplier_id, body.proveedor_nombre);
+      if (!proveedor) throw new ApiError(400, "Para dejarlo a crédito escribe o elige el proveedor.");
+      const ap = await client.query(
+        `INSERT INTO accounts_payable
+           (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description,
+            supplier_id, categoria, subcategoria, origen_cash_register_id, created_by)
+         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'gasto_credito', NULL, $4, $5, 'MANTENIMIENTO_EQUIPO', NULL, $6, $7) RETURNING id`,
+        [accionistaId, montoMant, body.due_date ?? null,
+         `${proveedor.name} — Mantenimiento ${body.area}/${body.section}: ${body.description}`.slice(0, 500), proveedor.id,
+         body.cash_register_id, (req as AuthenticatedRequest).user?.id ?? body.created_by ?? null]
+      );
+      await client.query("UPDATE equipment_maintenance SET payable_id = $2 WHERE id = $1 OR parent_id = $1", [maintenance.rows[0].id, ap.rows[0].id]);
+    } else if (body.cash_register_id && montoMant > 0) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, es_fondo, fondo_estado, responsable)

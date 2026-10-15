@@ -19,6 +19,7 @@ import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
+import { TrabajoEquipo } from "./components/TrabajoEquipo";
 import { CruceSocios } from "./components/CruceSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
@@ -2687,10 +2688,15 @@ export function App() {
   const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
   // Lista de movimientos: por defecto solo lo registrado en Caja; los de otros módulos, con un botón.
   const [cajaVerOtros, setCajaVerOtros] = useState(false);
+  // Flujo único «Trabajo en un equipo»: tipo con que se abre (desde el buscador) y llave para reiniciarlo.
+  const [teqTipoInicial, setTeqTipoInicial] = useState<"COMPRA" | undefined>(undefined);
+  const [teqKey, setTeqKey] = useState(0);
   // «Salió dinero» / «Entró dinero» (y «Repetir»): abre Nuevo movimiento ya del tipo, con todo limpio.
   function abrirMovimientoCaja(tipo: "EXPENSE" | "INCOME") {
     setMovType(tipo); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId("");
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false);
+    setMaintenanceForm((f) => ({ ...f, area: "", section: "" }));
+    setTeqTipoInicial(undefined); setTeqKey((k) => k + 1);
     setCajaMenu(null);
     setCajaSubTab("movimiento");
     reloadCashCategories();
@@ -9798,11 +9804,7 @@ export function App() {
     //    de vida) Y el egreso en cash_movements. El "Monto $" del egreso = monto
     //    del mantenimiento. Un solo asiento; mismas tablas.
     if (category === "MANTENIMIENTO_EQUIPO") {
-      const fileInput = formElement.querySelector('input[type="file"]') as HTMLInputElement | null;
-      await submitEquipmentMaintenance(fileInput?.files?.[0]);
-      // submitEquipmentMaintenance limpia su form, refresca caja e historial.
-      setMovCategory("");
-      setMovOpcionesOpen(false);
+      // El flujo «Trabajo en un equipo» guarda con su propio botón (un Enter en sus campos no envía nada).
       return;
     }
     // ── Categoría COMPRA DE SACOS: usa el widget COMPLETO embebido (lista con
@@ -18954,7 +18956,12 @@ Motivo (obligatorio):`, "");
                                   placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: diésel, almuerzo, llanta, repuesto…" : "🔍 Escribe qué entró o el cliente que pagó…"}
                                   opciones={opciones} vacio="Nada coincide: prueba con otra palabra o crea la categoría en Configuración"
                                   onElegir={(key) => {
-                                    if (key.startsWith("CAT:")) elegirCategoria(key.slice(4));
+                                    if (key === "CAT:REPUESTOS" || key === `CAT:${CATEGORIA_MATERIALES}`) {
+                                      // Repuestos e insumos van en el flujo único por equipo.
+                                      elegirCategoria("MANTENIMIENTO_EQUIPO");
+                                      setTeqTipoInicial(key === "CAT:REPUESTOS" ? "COMPRA" : undefined); setTeqKey((k) => k + 1);
+                                    }
+                                    else if (key.startsWith("CAT:")) elegirCategoria(key.slice(4));
                                     else if (key.startsWith("MANT:")) {
                                       const [area, section] = key.slice(5).split("|");
                                       elegirCategoria("MANTENIMIENTO_EQUIPO");
@@ -19025,197 +19032,30 @@ Motivo (obligatorio):`, "");
                         de caja vía /equipment/maintenance. El Monto del egreso = este
                         "Monto $" del mantenimiento (por eso abajo se ocultan los
                         campos genéricos de Descripción/Monto). */}
-                    {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (() => {
-                      const inp = { display: "block", width: "100%", padding: "8px 10px", borderRadius: 8, border: "1px solid #d1d5db", marginTop: 4, fontSize: 13 } as const;
-                      // ── Buscador único: equipos = Área · Sección del catálogo de mantenimiento ──
-                      const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-                      const equipos = maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })));
-                      const soloArea = maintenanceForm.area && !maintenanceForm.section ? maintenanceForm.area : "";
-                      const recientes: string[] = [];
-                      for (const m of maintenanceHistory) {
-                        const k = `${m.area}||${m.section}`;
-                        if (m.area && m.section && !m.parent_id && !recientes.includes(k)) recientes.push(k);
-                        if (recientes.length >= 5) break;
-                      }
-                      const tokens = sinTildes(mantBuscar.trim()).split(/\s+/).filter(Boolean);
-                      const candidatos = equipos.filter((e) => !soloArea || e.area === soloArea);
-                      const sugerencias = tokens.length
-                        ? candidatos
-                          .filter((e) => { const t = sinTildes(`${e.area} ${e.section}`); return tokens.every((tk) => t.includes(tk)); })
-                          .sort((x, y) => Number(!sinTildes(y.section).startsWith(tokens[0])) - Number(!sinTildes(x.section).startsWith(tokens[0])))
-                          .slice(0, 8)
-                        : [...recientes.map((k) => candidatos.find((e) => `${e.area}||${e.section}` === k)).filter((e): e is { area: string; section: string } => !!e),
-                           ...candidatos.filter((e) => !recientes.includes(`${e.area}||${e.section}`))].slice(0, 8);
-                      const conRecientes = !tokens.length && sugerencias.some((e) => recientes.includes(`${e.area}||${e.section}`));
-                      const idx = Math.min(mantBuscarIdx, Math.max(sugerencias.length - 1, 0));
-                      const elegirEquipo = (e: { area: string; section: string }) => {
-                        // Al elegir el equipo, el trabajo pasa a «Correctivo» (se puede cambiar).
-                        setMaintenanceForm({ ...maintenanceForm, area: e.area, section: e.section, maintenance_type: "CORRECTIVO" });
-                        setMantBuscar(""); setMantBuscarAbierto(false); setMantBuscarIdx(0);
-                      };
-                      // Técnicos usados antes (más recientes primero).
-                      const tecnicos = [...new Set(maintenanceHistory.map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 30);
-                      const tecnicoTxt = sinTildes(maintenanceForm.provider.trim());
-                      const tecnicosChips = tecnicos.filter((t) => sinTildes(t) !== tecnicoTxt && (!tecnicoTxt || sinTildes(t).startsWith(tecnicoTxt))).slice(0, 3);
-                      return (
-                        <div className="mantCard">
-                          {/* ── Equipo y trabajo ── */}
-                          <section className="mantSec">
-                            <div className="mantSec__head">Equipo y trabajo</div>
-                            {/montacarga/i.test(maintenanceForm.area) && (
-                              <div className="mantAvisoRubro">🚜 Lo del montacarga se carga a su propio rubro <b>Montacarga</b> en Costos operativos (no a Mantenimiento de la piladora).</div>
-                            )}
-                            {maintenanceForm.area && maintenanceForm.section ? (
-                              <div className="mantEquipoSel">
-                                <span className="mantEquipoSel__ico" aria-hidden="true">🔧</span>
-                                <span className="mantEquipoSel__txt"><strong>{maintenanceForm.section}</strong><small>{maintenanceForm.area}</small></span>
-                                <button type="button" className="mantLink" onClick={() => {
-                                  setMaintenanceForm({ ...maintenanceForm, area: "", section: "" });
-                                  setMantBuscarAbierto(true);
-                                  setTimeout(() => mantBuscarRef.current?.focus(), 0);
-                                }}>Cambiar</button>
-                              </div>
-                            ) : (
-                              <div className="mantBuscador">
-                                <input ref={mantBuscarRef} type="search" value={mantBuscar} autoComplete="off"
-                                  placeholder={soloArea ? `🔍 Buscar la sección de ${soloArea}...` : "🔍 Buscar equipo, área o máquina a reparar..."}
-                                  role="combobox" aria-expanded={mantBuscarAbierto} aria-controls="mantSugerencias" aria-autocomplete="list"
-                                  aria-activedescendant={mantBuscarAbierto && sugerencias[idx] ? `mantSug-${idx}` : undefined}
-                                  onFocus={() => setMantBuscarAbierto(true)}
-                                  onBlur={() => setTimeout(() => setMantBuscarAbierto(false), 120)}
-                                  onChange={(e) => { setMantBuscar(e.target.value); setMantBuscarAbierto(true); setMantBuscarIdx(0); }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === "ArrowDown") { e.preventDefault(); setMantBuscarAbierto(true); setMantBuscarIdx(Math.min(idx + 1, sugerencias.length - 1)); }
-                                    else if (e.key === "ArrowUp") { e.preventDefault(); setMantBuscarIdx(Math.max(idx - 1, 0)); }
-                                    else if (e.key === "Enter") { e.preventDefault(); if (sugerencias[idx]) elegirEquipo(sugerencias[idx]); }
-                                    else if (e.key === "Escape") setMantBuscarAbierto(false);
-                                  }} />
-                                {mantBuscarAbierto && (
-                                  <ul id="mantSugerencias" role="listbox" className="combo__lista">
-                                    {conRecientes && <li className="combo__grupo" role="presentation">Recientes</li>}
-                                    {sugerencias.map((e, i) => (
-                                      <li key={`${e.area}||${e.section}`} id={`mantSug-${i}`} role="option" aria-selected={i === idx}
-                                        className={i === idx ? "is-activa" : ""}
-                                        onMouseEnter={() => setMantBuscarIdx(i)}
-                                        onMouseDown={(ev) => { ev.preventDefault(); elegirEquipo(e); }}>
-                                        <span className="combo__titulo">{e.section}</span>
-                                        <span className="combo__detalle">{e.area}</span>
-                                      </li>
-                                    ))}
-                                    {sugerencias.length === 0 && <li className="combo__vacio" role="presentation">Sin coincidencias</li>}
-                                  </ul>
-                                )}
-                                <div className="mantBuscador__extra">
-                                  {soloArea ? (
-                                    <>Área: <strong>{soloArea}</strong> · <button type="button" className="mantLink" onClick={() => setMaintCatModal({ kind: "SECTION", nombre: "" })}>＋ Nueva sección</button>
-                                      {" · "}<button type="button" className="mantLink" onClick={() => setMaintenanceForm({ ...maintenanceForm, area: "" })}>Quitar área</button></>
-                                  ) : (
-                                    <>¿No está? <button type="button" className="mantLink" onClick={() => setMaintCatModal({ kind: "AREA", nombre: "" })}>＋ Nueva área</button></>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                            <label className="mantCampo">Detalle del trabajo *
-                              <textarea placeholder={getDescriptionPlaceholder()} value={maintenanceForm.description} required rows={2}
-                                onChange={(e) => setMaintenanceForm({ ...maintenanceForm, description: e.target.value })}
-                                style={{ ...inp, minHeight: 52 }} />
-                            </label>
-                            <div className="mantFila2">
-                              <label className="mantCampo">Técnico / Taller
-                                <input list="mantTecnicos" value={maintenanceForm.provider} placeholder="Quién hizo el trabajo" autoComplete="off"
-                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, provider: e.target.value })} style={inp} />
-                                <datalist id="mantTecnicos">{tecnicos.map((t) => <option key={t} value={t} />)}</datalist>
-                                {tecnicosChips.length > 0 && (
-                                  <span className="mantChips">
-                                    {tecnicosChips.map((t) => (
-                                      <button key={t} type="button" className="mantChip" onClick={() => setMaintenanceForm({ ...maintenanceForm, provider: t })}>{t}</button>
-                                    ))}
-                                  </span>
-                                )}
-                              </label>
-                              <label className="mantCampo">Tipo de trabajo
-                                <span style={{ display: "flex", gap: 6, marginTop: 4 }}>
-                                  <select value={maintenanceForm.maintenance_type} style={{ ...inp, marginTop: 0, flex: 1 }}
-                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, maintenance_type: e.target.value })}>
-                                    {maintenanceForm.maintenance_type && !maintTypes.includes(maintenanceForm.maintenance_type) && (
-                                      <option value={maintenanceForm.maintenance_type}>{maintTypeLabel(maintenanceForm.maintenance_type)}</option>
-                                    )}
-                                    {maintTypes.map((t) => <option key={t} value={t}>{maintTypeLabel(t)}</option>)}
-                                  </select>
-                                  <button type="button" className="mantMini" title="Agregar nuevo tipo" onClick={() => setMaintCatModal({ kind: "TYPE", nombre: "" })}>＋</button>
-                                </span>
-                              </label>
-                            </div>
-                          </section>
+                    {/* 🔧 Trabajo en un equipo (flujo único): equipo → qué se hizo → quién → lo usado → cómo se pagó. */}
+                    {movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && (
+                      <TrabajoEquipo
+                        key={`teq-${teqKey}-${maintenanceForm.area}-${maintenanceForm.section}`}
+                        equipos={maintAreas.flatMap((a) => maintSectionsFor(a).map((sec) => ({ area: a, section: sec })))}
+                        repuestos={repCatalogo}
+                        tecnicos={[...new Set(maintenanceHistory.filter((m) => m.hecho_por_tipo !== "PROPIO").map((m) => String(m.provider ?? "").trim()).filter(Boolean))].slice(0, 12)}
+                        personal={[...new Set([...maintenanceHistory.filter((m) => m.hecho_por_tipo === "PROPIO").map((m) => String(m.provider ?? "").trim()).filter(Boolean), "Pilador", "Cuadrilla"])].slice(0, 8)}
+                        proveedores={proveedoresCaja}
+                        registerId={dashboard.current_cash_register?.id ?? null}
+                        inicial={{ area: maintenanceForm.area || undefined, section: maintenanceForm.section || undefined, tipo: teqTipoInicial }}
+                        fondosPorLiquidar={Number(cashSummary?.fondos_por_liquidar?.n ?? 0)}
+                        onGuardado={async (msg) => {
+                          addToast(msg, "success");
+                          const rid = dashboard.current_cash_register?.id;
+                          setMovCategory(""); setMaintenanceForm((f) => ({ ...f, area: "", section: "" })); setTeqTipoInicial(undefined); setTeqKey((k) => k + 1);
+                          setCajaSubTab("resumen");
+                          cargarRepCatalogo();
+                          refreshMaintenanceHistory();
+                          if (rid) await refreshCaja(rid);
+                        }}
+                        onError={(m) => addToast(m, "error")} />
+                    )}
 
-                          {/* ── Costos ── */}
-                          <section className="mantSec">
-                            <div className="mantSec__head">Costos</div>
-                            {movEsFondo ? (
-                              <label className="mantCampo">Monto entregado $ * <span className="mantCampo__nota">dinero que lleva el responsable</span>
-                                <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
-                                  onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                  style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                              </label>
-                            ) : (
-                              <div className="mantFila2">
-                                <label className="mantCampo">Mano de Obra / Servicios $ <span className="mantCampo__nota">lo que cobra el técnico o taller</span>
-                                  <input type="number" step="0.01" min="0" value={maintenanceForm.amount} placeholder="0.00"
-                                    onChange={(e) => setMaintenanceForm({ ...maintenanceForm, amount: e.target.value })}
-                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                                </label>
-                                <label className="mantCampo">Materiales / Consumibles $ <span className="mantCampo__nota">pernos, soldadura, silicón…</span>
-                                  <input type="number" step="0.01" min="0" value={mantMateriales} placeholder="0.00"
-                                    onChange={(e) => setMantMateriales(e.target.value)}
-                                    style={{ ...inp, fontWeight: 700, fontSize: 15 }} />
-                                </label>
-                              </div>
-                            )}
-                            <div className={`mantTotal ${mantTotalCaja > 0 ? "" : "is-cero"}`} aria-live="polite">
-                              <span>TOTAL A DESCONTAR DE CAJA</span>
-                              <strong>{money(mantTotalCaja)}</strong>
-                            </div>
-                            <div className="mantFila2">
-                              <label className="mantCampo">Nº de factura
-                                <input value={maintenanceForm.invoice_number} placeholder="Opcional" onChange={(e) => setMaintenanceForm({ ...maintenanceForm, invoice_number: e.target.value })} style={inp} />
-                              </label>
-                              <label className="mantCampo">Comprobante
-                                <input type="file" accept="image/jpeg,image/png,image/jpg" style={{ display: "block", marginTop: 6, fontSize: 12 }} />
-                              </label>
-                            </div>
-                            <div className={`mantFondo ${movEsFondo ? "is-on" : ""}`}>
-                              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", margin: 0 }}>
-                                <input type="checkbox" checked={movEsFondo} onChange={(e) => {
-                                  setMovEsFondo(e.target.checked);
-                                  // Con fondo hay un solo monto (lo entregado): los materiales se suman a él.
-                                  if (e.target.checked && mantMaterialesN > 0) {
-                                    setMaintenanceForm({ ...maintenanceForm, amount: String(round2(mantManoObra + mantMaterialesN)) });
-                                    setMantMateriales("");
-                                  }
-                                }} style={{ width: "auto" }} />
-                                Rendir cuentas (fondo provisional)
-                              </label>
-                              {movEsFondo && (
-                                <label style={{ display: "block", marginTop: 10, fontSize: 13, fontWeight: 600 }}>
-                                  <span style={{ display: "block", marginBottom: 4 }}>Empleado / Responsable que recibe</span>
-                                  <input list="responsablesList" value={movResponsable} onChange={(e) => setMovResponsable(e.target.value)} required
-                                    placeholder="Nombre del responsable" style={{ ...inp, marginTop: 0 }} />
-                                  <datalist id="responsablesList">
-                                    {adminStaff.map((s2) => <option key={s2.id} value={s2.worker_name} />)}
-                                  </datalist>
-                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>Queda ⏳ Por Liquidar. Al volver, usa 💸 Liquidar para el gasto real y el vuelto.</small>
-                                </label>
-                              )}
-                            </div>
-                          </section>
-                        </div>
-                      );
-                    })()}
-
-                    {/* 🏭 COMPRA DE ACTIVO FIJO: solo con la categoría «Compra de activo
-                        fijo». Al guardar, el activo entra a Activos fijos con el monto de
-                        este egreso y la fecha de hoy; la VIDA ÚTIL la asigna el sistema
-                        según el tipo (tabla SRI). Si se anula el egreso, se retira. */}
                     {movType === "EXPENSE" && movCategory === "COMPRA_ACTIVO_FIJO" && (() => {
                       const vida = vidaUtilSugerida(movActivo.tipo);
                       return (
@@ -19591,7 +19431,7 @@ Motivo (obligatorio):`, "");
                         ) : <Input name="amount" label="Monto $" type="number" />}
                       </div>
                     )}
-                    {(movCategory || (movType === "INCOME" && movReceivableId)) && dashboard.current_cash_register?.tipo === "MIXTO"
+                    {(movCategory || (movType === "INCOME" && movReceivableId)) && movCategory !== "MANTENIMIENTO_EQUIPO" && dashboard.current_cash_register?.tipo === "MIXTO"
                       && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME") && (
                       <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
                         <span><i>3</i> ¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
@@ -19599,7 +19439,7 @@ Motivo (obligatorio):`, "");
                         <label className={movMedio === "BANCO" ? "is-on" : ""}><input type="radio" checked={movMedio === "BANCO"} onChange={() => setMovMedio("BANCO")} /> 🏦 Banco / transferencia</label>
                       </div>
                     )}
-                    <button className="primary"
+                    {movCategory !== "MANTENIMIENTO_EQUIPO" && <button className="primary"
                       disabled={(!movCategory && !(movType === "INCOME" && movReceivableId)) || CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento" || (CASH_REUSE[movCategory] === "agricultor" && !movPayableId)
                         || (movType === "EXPENSE" && movCategory === "MANTENIMIENTO_EQUIPO" && !mantPuedeGuardar)
                         || (movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId)}
@@ -19608,7 +19448,7 @@ Motivo (obligatorio):`, "");
                         : movType === "EXPENSE" && movCategory === CATEGORIA_MATERIALES && !movMaquinaId ? "Elige el equipo / máquina" : undefined}
                       style={{ width: "100%", padding: "10px 0", marginTop: 8 }}>
                       {movType === "INCOME" ? "Registrar ingreso" : movModalidad === "CREDITO" ? "Guardar en Por Pagar" : movEsFondo ? "Entregar fondo" : "Registrar egreso"}
-                    </button>
+                    </button>}
                   </form>
                 )}
 
