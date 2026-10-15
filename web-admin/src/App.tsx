@@ -4965,6 +4965,21 @@ export function App() {
     return vis;
   }, [authUser, isAdmin, esMatrizActiva, accionistas, activeAccionistaId]);
 
+  // 🔔 Al tocar la notificación del celular (pedido nuevo): el ERP abre la Cola de Despachos.
+  //  · App cerrada → se abre con /?abrir=cola-despachos · App abierta → el service worker manda un mensaje.
+  useEffect(() => {
+    if (!authUser) return;
+    const abrir = (url: string) => {
+      if (url.includes("abrir=cola-despachos") && visibleTabs.includes("Ventas")) { setVentasView("despachos"); setActiveTab("Ventas"); }
+    };
+    const q = window.location.search;
+    if (q.includes("abrir=")) { abrir(q); window.history.replaceState(null, "", window.location.pathname); }
+    const alMensaje = (e: MessageEvent) => { if (e.data?.tipo === "abrir-aviso") abrir(String(e.data.url ?? "")); };
+    navigator.serviceWorker?.addEventListener("message", alMensaje);
+    return () => navigator.serviceWorker?.removeEventListener("message", alMensaje);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, visibleTabs]);
+
   // Puede ver el Panel Integral (vista del NEGOCIO COMPLETO: todos los
   // accionistas)? Solo admin, o un operador con el permiso "Dashboard" en el
   // accionista activo (se concede a proposito por ser vista global).
@@ -13453,7 +13468,8 @@ Motivo (obligatorio):`, "");
               🔎 <span className="busq-btn-txt">Buscar</span> <kbd className="busq-btn-kbd">Ctrl K</kbd>
             </button>
             {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
-            <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null} />
+            <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null}
+              onAbrir={(n) => { if (n.referencia_tipo === "sales_orders" && visibleTabs.includes("Ventas")) { setVentasView("despachos"); irATab("Ventas"); } }} />
             <span className={apiOnline ? "pill online" : "pill offline"}>
               API {apiOnline ? "conectada" : "sin conexión"}
             </span>

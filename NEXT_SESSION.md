@@ -121,6 +121,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### 🔔 Pedido nuevo avisa a bodega (2026-10-14, pedido del dueño)
+
+- `avisarPedidoNuevo` (orders.ts): cada pedido crea una notificación tipo PEDIDO (referencia sales_orders) para la MATRIZ («🧾 Pedido nuevo PED-… · N QQ», cliente, marcas, entrega; «STALYN vendió a …» si es de un socio). Campanita (`components/Notificaciones.tsx`): consulta cada 20 s y al volver; avisos NUEVOS suenan, vibran y salen como notificación del sistema si se activó «🔔 Activar avisos en este equipo» (`public/sw-avisos.js`: SW mínimo, sin caché ni fetch). Tocar el aviso abre Ventas → Cola de Despachos (`/?abrir=cola-despachos` o mensaje del SW). Con la app cerrada del todo no llega (eso sería Web Push). Simulacro `pedido_aviso.mjs` OK.
+
 ### 💸 Cobro recibido por otro socio + pagos con esa plata, en un paso (2026-10-14, pedido del dueño)
 
 - Caso real: el cliente del socio que VENDIÓ le transfiere a OTRO socio (casi siempre CEYRO) y ese otro, con esa plata, paga deudas del que vendió (cáscara, cosecha/transporte, proveedores). Lo registra el que vendió desde su Por Cobrar.

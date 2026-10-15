@@ -16,6 +16,8 @@ import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } 
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
+import { notificar } from "../../services/notificaciones.js";
+import { getMatrizId } from "../../services/matriz.js";
 
 export const ordersRouter = Router();
 
@@ -174,11 +176,42 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
       );
     }
     await crearCobroDelPedido(client, order.rows[0], accionistaId);
+    await avisarPedidoNuevo(client, order.rows[0], accionistaId);
     return order.rows[0];
   });
 
   res.status(201).json(result);
 }));
+
+// 🔔 Pedido nuevo → aviso en la campanita de la MATRIZ (ahí está la Cola de Despachos y el encargado de
+// bodega que lo prepara y despacha), venga de la Matriz o de un socio. Al tocarlo abre la Cola.
+async function avisarPedidoNuevo(
+  client: PoolClient,
+  order: { id: string; order_number: string; customer_id: string; delivery_date: string | Date | null; total_amount: string | number },
+  accionistaId: string | null | undefined
+): Promise<void> {
+  const matrizId = await getMatrizId(client);
+  const cliente = (await client.query("SELECT full_name FROM customers WHERE id = $1", [order.customer_id])).rows[0]?.full_name ?? "cliente";
+  const vendedor = accionistaId ? (await client.query("SELECT name, tipo FROM accionistas WHERE id = $1", [accionistaId])).rows[0] : null;
+  const lineas = (await client.query(
+    `SELECT p.name, i.quantity::float AS qq, i.presentation_name
+       FROM sales_order_items i JOIN products p ON p.id = i.product_id WHERE i.order_id = $1 ORDER BY i.id`,
+    [order.id]
+  )).rows as Array<{ name: string; qq: number; presentation_name: string | null }>;
+  const totalQq = Math.round(lineas.reduce((s, l) => s + Number(l.qq), 0) * 100) / 100;
+  const detalle = lineas.slice(0, 3).map((l) => `${Number(l.qq).toFixed(2)} QQ ${l.name}${l.presentation_name ? ` ${l.presentation_name}` : ""}`).join(", ")
+    + (lineas.length > 3 ? ` y ${lineas.length - 3} más` : "");
+  const entrega = order.delivery_date ? ` · entrega ${String(order.delivery_date instanceof Date ? order.delivery_date.toISOString() : order.delivery_date).slice(0, 10).split("-").reverse().join("/")}` : "";
+  await notificar(client, {
+    accionistaId: matrizId,
+    tipo: "PEDIDO",
+    titulo: `🧾 Pedido nuevo ${order.order_number} · ${totalQq.toFixed(2)} QQ`,
+    mensaje: `${vendedor && vendedor.tipo !== "MATRIZ" ? `${vendedor.name} vendió a` : "Para"} ${cliente}: ${detalle}${entrega}. Está en la Cola de Despachos.`,
+    monto: Number(order.total_amount),
+    referenciaTipo: "sales_orders",
+    referenciaId: order.id
+  });
+}
 
 /**
  * Permite tomar pedidos sin producto terminado solamente cuando el mismo socio

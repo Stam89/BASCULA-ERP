@@ -4,9 +4,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPost } from "../api";
 
-type Notificacion = {
+export type Notificacion = {
   id: string;
   tipo: string;
+  referencia_tipo?: string | null;
+  referencia_id?: string | null;
   titulo: string;
   mensaje: string;
   monto: number | null;
@@ -23,11 +25,56 @@ function hace(fecha: string): string {
   return new Date(fecha).toLocaleDateString("es-EC", { day: "numeric", month: "short" });
 }
 
-export function CampanitaNotificaciones({ accionistaKey }: { accionistaKey: string | null }) {
+// ── Aviso en el equipo (celular / PC) cuando llega una notificación nueva ──────────────────────────
+// Sonido corto + vibración + notificación del sistema (si se dio permiso). En Android la notificación
+// necesita un service worker (public/sw-avisos.js, solo muestra avisos: no cachea ni intercepta nada).
+const soportaAvisos = () => typeof window !== "undefined" && "Notification" in window;
+async function registroAvisos(): Promise<ServiceWorkerRegistration | null> {
+  if (!("serviceWorker" in navigator)) return null;
+  try { return (await navigator.serviceWorker.getRegistration("/sw-avisos.js")) ?? await navigator.serviceWorker.register("/sw-avisos.js"); }
+  catch { return null; }
+}
+function sonar() {
+  try {
+    const Ctx = (window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext);
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    [0, 0.22].forEach((t) => {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.frequency.value = 880; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + t + 0.18);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.2);
+    });
+    window.setTimeout(() => { void ctx.close(); }, 800);
+  } catch { /* sin sonido */ }
+}
+export function urlDeAviso(n: Pick<Notificacion, "referencia_tipo">): string {
+  return n.referencia_tipo === "sales_orders" ? "/?abrir=cola-despachos" : "/";
+}
+async function avisarEnEquipo(n: Notificacion) {
+  sonar();
+  try { navigator.vibrate?.([200, 100, 200]); } catch { /* sin vibración */ }
+  if (!soportaAvisos() || Notification.permission !== "granted") return;
+  const opciones: NotificationOptions = { body: n.mensaje, icon: "/icon-192.png", badge: "/icon-192.png", tag: n.id, data: { url: urlDeAviso(n) } };
+  const reg = await registroAvisos();
+  if (reg) { try { await reg.showNotification(n.titulo, opciones); return; } catch { /* cae al de abajo */ } }
+  try { new Notification(n.titulo, opciones); } catch { /* el navegador no lo permite */ }
+}
+
+export function CampanitaNotificaciones({ accionistaKey, onAbrir }: {
+  accionistaKey: string | null;
+  /** Al tocar un aviso (p. ej. un pedido nuevo → abre la Cola de Despachos). */
+  onAbrir?: (n: Notificacion) => void;
+}) {
   const [items, setItems] = useState<Notificacion[]>([]);
   const [noLeidas, setNoLeidas] = useState(0);
   const [abierta, setAbierta] = useState(false);
+  const [permiso, setPermiso] = useState<NotificationPermission | "no">(() => (soportaAvisos() ? Notification.permission : "no"));
   const caja = useRef<HTMLDivElement>(null);
+  // Avisos ya vistos en este equipo: solo los NUEVOS suenan / vibran / se muestran en el celular.
+  const vistos = useRef<Set<string> | null>(null);
 
   const cargar = useCallback(async () => {
     if (!accionistaKey) return;
@@ -35,15 +82,34 @@ export function CampanitaNotificaciones({ accionistaKey }: { accionistaKey: stri
       const r = await apiGet<{ items: Notificacion[]; no_leidas: number }>("/notificaciones");
       setItems(r.items);
       setNoLeidas(r.no_leidas);
+      if (vistos.current) {
+        const nuevos = r.items.filter((n) => !n.leida_at && !vistos.current!.has(n.id));
+        for (const n of nuevos.slice(0, 3)) void avisarEnEquipo(n);
+      }
+      vistos.current = new Set(r.items.map((n) => n.id));
     } catch { /* la campanita es informativa: si falla no interrumpe */ }
   }, [accionistaKey]);
 
   useEffect(() => {
-    setItems([]); setNoLeidas(0);
+    setItems([]); setNoLeidas(0); vistos.current = null;
     cargar();
-    const t = window.setInterval(cargar, 60000);
-    return () => window.clearInterval(t);
+    // Cada 20 s (un pedido nuevo se entera rápido) y al volver a la app.
+    const t = window.setInterval(cargar, 20000);
+    const alVolver = () => { if (document.visibilityState === "visible") void cargar(); };
+    document.addEventListener("visibilitychange", alVolver);
+    return () => { window.clearInterval(t); document.removeEventListener("visibilitychange", alVolver); };
   }, [cargar]);
+
+  async function activarAvisos() {
+    if (!soportaAvisos()) return;
+    const p = await Notification.requestPermission();
+    setPermiso(p);
+    if (p === "granted") {
+      await registroAvisos();
+      sonar();
+      void avisarEnEquipo({ id: `prueba-${Date.now()}`, tipo: "INFO", titulo: "🔔 Avisos activados", mensaje: "Así te llegará un pedido nuevo o un cobro.", monto: null, leida_at: null, created_at: new Date().toISOString() });
+    }
+  }
 
   // Cerrar al hacer clic fuera.
   useEffect(() => {
@@ -54,6 +120,7 @@ export function CampanitaNotificaciones({ accionistaKey }: { accionistaKey: stri
   }, [abierta]);
 
   async function leer(n: Notificacion) {
+    if (onAbrir && n.referencia_tipo === "sales_orders") { setAbierta(false); onAbrir(n); }
     if (n.leida_at) return;
     setItems((cur) => cur.map((x) => (x.id === n.id ? { ...x, leida_at: new Date().toISOString() } : x)));
     setNoLeidas((c) => Math.max(0, c - 1));
@@ -85,6 +152,14 @@ export function CampanitaNotificaciones({ accionistaKey }: { accionistaKey: stri
             <strong style={{ fontSize: 14 }}>🔔 Notificaciones</strong>
             {noLeidas > 0 && <button type="button" className="btnSecondary" style={{ fontSize: 11.5, padding: "3px 8px" }} onClick={leerTodas}>Marcar todas como leídas</button>}
           </div>
+          {permiso !== "no" && permiso !== "granted" && (
+            <div style={{ padding: "8px 14px", borderBottom: "1px solid #f1f5f9", background: "#fffbeb", fontSize: 12.5 }}>
+              {permiso === "denied"
+                ? "Los avisos están bloqueados en este equipo: actívalos en la configuración del navegador (permiso de notificaciones de este sitio)."
+                : <>Activa los avisos para que este equipo <strong>suene y te avise</strong> cuando entre un pedido nuevo o un cobro.{" "}
+                  <button type="button" className="primary" style={{ fontSize: 12, padding: "4px 10px", marginTop: 6 }} onClick={() => void activarAvisos()}>🔔 Activar avisos en este equipo</button></>}
+            </div>
+          )}
           {items.length === 0 ? (
             <p className="muted" style={{ padding: 16, margin: 0, textAlign: "center", fontSize: 13 }}>Sin avisos por ahora.</p>
           ) : items.map((n) => (
