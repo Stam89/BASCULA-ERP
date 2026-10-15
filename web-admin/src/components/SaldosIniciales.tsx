@@ -379,6 +379,9 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
   const [registros, setRegistros] = useState<Registro[]>([]);
   const [cp, setCp] = useState<Contrapartes | null>(null);
   const [mes, setMes] = useState("");
+  // Día del ARRANQUE con datos reales (cargas a esa fecha, fuera de fin de mes) y si se está usando.
+  const [arranque, setArranque] = useState<string | null>(null);
+  const [usarArranque, setUsarArranque] = useState(false);
   const [vista, setVista] = useState<Vista>("CXC");
   const [error, setError] = useState("");
   const maxMes = mesMaximo();
@@ -386,13 +389,19 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
   const cargar = useCallback(async (inicial = false) => {
     try {
       const [lista, contra] = await Promise.all([
-        apiGet<{ corte_sugerido: string; registros: Registro[] }>("/saldos-iniciales"),
+        apiGet<{ corte_sugerido: string; corte_arranque?: string; registros: Registro[] }>("/saldos-iniciales"),
         apiGet<Contrapartes>("/saldos-iniciales/contrapartes")
       ]);
       setRegistros(lista.registros);
       setCp(contra);
-      // Mes por defecto: el del último corte cargado, o el mes anterior.
-      if (inicial) setMes((lista.registros.find((r) => !r.anulado_at)?.corte ?? lista.corte_sugerido).slice(0, 7));
+      // Por defecto: el último corte cargado; sin cargas, el ARRANQUE (si hay) o el mes anterior.
+      const arr = lista.corte_arranque ?? null;
+      setArranque(arr);
+      if (inicial) {
+        const ultimo = lista.registros.find((r) => !r.anulado_at)?.corte;
+        setMes((ultimo && ultimo !== arr ? ultimo : lista.corte_sugerido).slice(0, 7));
+        setUsarArranque(!!arr && (ultimo ? ultimo === arr : true));
+      }
       setError("");
     } catch (err) {
       setError((err as Error).message);
@@ -401,7 +410,7 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
   useEffect(() => { cargar(true); }, [cargar]);
   const guardado = () => { cargar(); onCambio?.(); };
 
-  const corte = mes ? finDeMes(mes) : "";
+  const corte = usarArranque && arranque ? arranque : mes ? finDeMes(mes) : "";
   const activos = registros.filter((r) => !r.anulado_at && r.corte === corte);
   const suma = (t: Tipo) => activos.filter((r) => r.tipo === t);
   const otrosCortes = new Set(registros.filter((r) => !r.anulado_at && r.corte !== corte).map((r) => r.corte)).size;
@@ -419,10 +428,18 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
   return (
     <div className="si">
       <div className="si-head">
-        <label className="si-mes">Mes de cierre (corte)
-          <input type="month" value={mes} max={maxMes} onChange={(e) => e.target.value && setMes(e.target.value)} />
-        </label>
-        <div className="si-corte">Saldos al <strong>{fechaTxt(corte)}</strong> · cierre de {mesTxt(mes)}</div>
+        {arranque && (
+          <div className="si-arranque" role="group" aria-label="Fecha de corte">
+            <button type="button" className={usarArranque ? "is-on" : ""} onClick={() => setUsarArranque(true)}>🚀 Arranque · {fechaTxt(arranque)}</button>
+            <button type="button" className={!usarArranque ? "is-on" : ""} onClick={() => setUsarArranque(false)}>📅 Fin de mes</button>
+          </div>
+        )}
+        {!usarArranque && (
+          <label className="si-mes">Mes de cierre (corte)
+            <input type="month" value={mes} max={maxMes} onChange={(e) => e.target.value && setMes(e.target.value)} />
+          </label>
+        )}
+        <div className="si-corte">Saldos al <strong>{fechaTxt(corte)}</strong> · {usarArranque ? "cierre del día anterior al arranque con datos reales" : `cierre de ${mesTxt(mes)}`}</div>
         <p className="si-nota">
           Se cargan a <strong>{accionistaNombre}</strong> (accionista activo). No mueven la caja: quedan en Por Cobrar,
           Por Pagar, Inventario y Anticipos como deudas y existencias de ese día.

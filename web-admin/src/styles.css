@@ -6123,3 +6123,8 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .teq button.teq-opt { background: #fff; color: #334155; }
 .teq button.teq-opt.is-on { background: #0f766e !important; border-color: #0f766e !important; color: #fff !important; }
 .teq button.teq-opt.is-on small { color: #d1fae5 !important; }
+
+/* Saldos iniciales: elegir el corte del ARRANQUE o un fin de mes */
+.si-arranque { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.si-arranque button { padding: 7px 12px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; color: #334155; }
+.si-arranque button.is-on { background: #0f766e; border-color: #0f766e; color: #fff; }

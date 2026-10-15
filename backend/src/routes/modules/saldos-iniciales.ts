@@ -24,7 +24,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { nextCode } from "../../utils/codes.js";
-import { esFinDeMes } from "../../utils/corte-mes.js";
+import { CORTE_ARRANQUE, esCorteValido } from "../../utils/corte-mes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 
 export const saldosInicialesRouter = Router();
@@ -37,7 +37,9 @@ const fechaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (AA
 const fechaTexto = (f: string) => f.split("-").reverse().join("/");
 
 function validarCorte(corte: string): void {
-  if (!esFinDeMes(corte)) throw new ApiError(400, "El corte debe ser el último día del mes (los cortes son a fin de mes).");
+  if (!esCorteValido(corte)) {
+    throw new ApiError(400, `El corte debe ser el último día del mes o el día del arranque (${fechaTexto(CORTE_ARRANQUE)}).`);
+  }
   const hoy = new Date().toLocaleDateString("en-CA", { timeZone: ZONA });
   if (corte > hoy) throw new ApiError(400, "El corte no puede ser una fecha futura.");
 }
@@ -122,7 +124,7 @@ saldosInicialesRouter.get("/", asyncRoute(async (req, res) => {
     // Corte sugerido: el último día del mes anterior (hora de Ecuador).
     pool.query(`SELECT to_char(date_trunc('month', now() AT TIME ZONE '${ZONA}')::date - 1, 'YYYY-MM-DD') AS corte`)
   ]);
-  res.json({ corte_sugerido: corte.rows[0].corte, registros: filas.rows });
+  res.json({ corte_sugerido: corte.rows[0].corte, corte_arranque: CORTE_ARRANQUE, registros: filas.rows });
 }));
 
 // ── Catálogos para elegir (clientes, agricultores, proveedores, socios, productos)

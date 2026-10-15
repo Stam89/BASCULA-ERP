@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { esFinDeMes } from "./corte-mes.js";
+import { CORTE_ARRANQUE, esCorteValido, esFinDeMes } from "./corte-mes.js";
+
+describe("esCorteValido", () => {
+  it("acepta fin de mes y el día del arranque, nada más", () => {
+    expect(esCorteValido("2026-09-30")).toBe(true);
+    expect(esCorteValido(CORTE_ARRANQUE)).toBe(true);
+    expect(esCorteValido("2026-10-14")).toBe(true);
+    expect(esCorteValido("2026-10-13")).toBe(false);
+    expect(esCorteValido("2026-11-14")).toBe(false);
+  });
+});
 
 describe("esFinDeMes", () => {
   it("acepta el último día de cada mes (incluye febrero bisiesto)", () => {
