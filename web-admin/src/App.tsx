@@ -17,6 +17,7 @@ import { PrestamosBancarios } from "./components/PrestamosBancarios";
 import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
+import { BasculaCambios } from "./components/BasculaCambios";
 import { CruceSocios } from "./components/CruceSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
@@ -13863,6 +13864,10 @@ Motivo (obligatorio):`, "");
           </div>
           )}
 
+          {basculaVista === "tickets" && (
+            <BasculaCambios esAdmin={isAdmin} avisar={addToast}
+              onCambio={() => Promise.all([refreshBasculaTickets(), refresh()]).catch(() => undefined)} />
+          )}
           {(basculaVista === "tickets" || (basculaVista === "corregir" && !(accionistas.length > 1 && materiaPrimaEntries.length > 0))) && (
           <div className="tablePanel">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>

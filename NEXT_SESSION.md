@@ -121,6 +121,10 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - En un egreso común, proveedor, crédito, subcategoría y fondo provisional ya no alargan el formulario: están bajo «Más opciones» y reaparecen automáticamente si contienen información. Los flujos existentes de CxP, CxC, fondos, inventario, mantenimiento y sacos conservan los mismos estados, validaciones y endpoints.
 - El botón final indica la acción real: «Registrar egreso», «Registrar ingreso», «Guardar en Por Pagar» o «Entregar fondo». Verificado con builds backend/frontend, ESLint sin errores nuevos y 221/221 pruebas backend.
 
+### ⚖️ Ticket que la báscula cambió después de ingresarlo (2026-10-14, pedido del dueño)
+
+- `services/cambio-bascula.ts`: `aplicarCambioBascula` (peso nuevo de raw_payload.cambioPosterior → weighing_tickets (net_weight es GENERADA), mobile ticket, IN de cáscara, PROCESS_INPUT del pilado ±, processing_batches.input_quantity, *_drying_lots, liquidación (qq/bruto/neto) y su CxP neta; rechaza si la liquidación tiene pagos o si es liquidación de lote) y `descartarCambioBascula` (cambioDescartado; la sincronización ya no lo re-marca). Rutas `/tickets/cambios-bascula`, `/:id/aplicar-cambio`, `/:id/descartar-cambio` (admin). UI `BasculaCambios` arriba de Báscula → Tickets. Simulacro `cambio_bascula.mjs` con el ticket real #000 387 (MARGARO): 9.29→16.72 QQ, neto $23.73→$320.93, TODO OK. En la base REAL lo aplica el dueño con el botón.
+
 ### 🔔 Pedido nuevo avisa a bodega (2026-10-14, pedido del dueño)
 
 - `avisarPedidoNuevo` (orders.ts): cada pedido crea una notificación tipo PEDIDO (referencia sales_orders) para la MATRIZ («🧾 Pedido nuevo PED-… · N QQ», cliente, marcas, entrega; «STALYN vendió a …» si es de un socio). Campanita (`components/Notificaciones.tsx`): consulta cada 20 s y al volver; avisos NUEVOS suenan, vibran y salen como notificación del sistema si se activó «🔔 Activar avisos en este equipo» (`public/sw-avisos.js`: SW mínimo, sin caché ni fetch). Tocar el aviso abre Ventas → Cola de Despachos (`/?abrir=cola-despachos` o mensaje del SW). Con la app cerrada del todo no llega (eso sería Web Push). Simulacro `pedido_aviso.mjs` OK.

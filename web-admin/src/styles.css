@@ -6003,3 +6003,9 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .pagosConPlata__fila label input { width: 18px; height: 18px; flex: none; }
 .pagosConPlata__fila > input { width: 120px; text-align: right; }
 .pagosConPlata__fila.is-on { background: #eff6ff; }
+
+/* Báscula: tickets que la báscula cambió después de ingresarlos */
+.basCambios { border: 1px solid #fcd34d; background: #fffbeb; }
+.basCambios__item { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; padding: 8px 0; border-top: 1px solid #fde68a; }
+.basCambios__txt { display: grid; gap: 2px; font-size: 13px; flex: 1 1 260px; min-width: 0; }
+.basCambios__acc { display: flex; gap: 6px; flex-wrap: wrap; }

@@ -17,6 +17,7 @@ import { getMatrizId } from "../../services/matriz.js";
 import { env } from "../../config/env.js";
 import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
 import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
+import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -352,6 +353,20 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
 // ── «Contar tickets desde» (corte de la báscula) ────────────────────────────
 // GET: corte vigente (número de ticket; o fecha si no hay número) + cuántos pendientes
 // quedan fuera por ser anteriores + la fecha de ese ticket (para mostrarla) y el último número.
+// ⚖️ Tickets que la báscula cambió DESPUÉS de ingresarlos: ver, aplicar el peso nuevo o mantener el ingresado.
+mobileTicketsRouter.get("/cambios-bascula", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (_req, res) => {
+  res.json(await listarCambiosBascula(pool));
+}));
+mobileTicketsRouter.post("/:id/aplicar-cambio", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const user = (req as AuthenticatedRequest).user;
+  res.json(await inTransaction((client) => aplicarCambioBascula(client, String(req.params.id), user?.name ?? user?.username ?? null)));
+}));
+mobileTicketsRouter.post("/:id/descartar-cambio", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  const user = (req as AuthenticatedRequest).user;
+  await inTransaction((client) => descartarCambioBascula(client, String(req.params.id), user?.name ?? user?.username ?? null));
+  res.json({ ok: true });
+}));
+
 mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
   const corte = await leerCorteBascula();
   const r = (await pool.query<{ ocultos: number; fecha_numero: string | null; ultimo: string | null }>(
@@ -872,6 +887,11 @@ export async function importBasculaTickets(
             AND (weighing_ticket_id IS NOT NULL OR liquidated_at IS NOT NULL)
             AND mobile_updated_at <= $3
             AND (gross_weight <> $4::numeric OR tare_weight <> $6::numeric OR qualification <> $7::numeric)
+            -- «Mantener el ingresado»: el mismo cambio ya descartado no se vuelve a marcar.
+            AND NOT (raw_payload ? 'cambioDescartado'
+                     AND (raw_payload->'cambioDescartado'->>'pesoBruto')::numeric = $4::numeric
+                     AND (raw_payload->'cambioDescartado'->>'pesoTara')::numeric = $6::numeric
+                     AND (raw_payload->'cambioDescartado'->>'calificacion')::numeric = $7::numeric)
             AND (raw_payload->'cambioPosterior' IS NULL
                  OR (raw_payload->'cambioPosterior'->>'pesoBruto')::numeric <> $4::numeric
                  OR (raw_payload->'cambioPosterior'->>'pesoTara')::numeric <> $6::numeric
