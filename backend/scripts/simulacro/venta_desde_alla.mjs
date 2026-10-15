@@ -18,29 +18,30 @@ try {
   // En la COPIA se apartan los pedidos pendientes reales de ROVINSON (sin preparar) para partir limpio.
   await q("UPDATE sales_orders SET status = 'CANCELLED' WHERE accionista_id = $1 AND status = 'PENDING' AND prepared_at IS NULL", [rov]);
   const alla0 = await saldo(true), pil0 = await saldo(false);
-  check(alla0 > 40, `0. ROVINSON tiene ${alla0} QQ de 0.11 allá (informe de selección) y ${pil0} en la piladora`);
+  check(alla0 > 4, `0. ROVINSON tiene ${alla0} QQ de 0.11 allá (informe de selección) y ${pil0} en la piladora`);
+  const retiro = Math.floor(alla0 - 3), q1 = 5 + retiro; // lo que sale de allá en el 1er pedido
   // 5 QQ en la piladora para probar la mezcla (primero la piladora, luego allá)
   await q("INSERT INTO inventory_movements (product_id, warehouse_id, movement, quantity, unit, ownership, accionista_id, notes) VALUES ($1,$2,'ADJUSTMENT',5,'QQ','OWNED',$3,'sim venta alla')", [p011, wh, rov]);
 
   const cli = exigir(await api("POST", "/customers", { full_name: "SIM CLIENTE VENTA ALLA" }, rov), "A0. cliente");
-  const item = { product_id: flor, inventory_product_id: p011, presentation_name: "100lb", quantity: 45, unit_price: 46 };
-  const ped = exigir(await api("POST", "/orders", { customer_id: cli.id, items: [item] }, rov), "A1. pedido de 45 QQ Flor (5 en piladora + 40 allá): se ACEPTA");
-  const tope = round(alla0 + 5 - 45 + 1);
+  const item = { product_id: flor, inventory_product_id: p011, presentation_name: "100lb", quantity: q1, unit_price: 46 };
+  const ped = exigir(await api("POST", "/orders", { customer_id: cli.id, items: [item] }, rov), `A1. pedido de ${q1} QQ Flor (5 en piladora + ${retiro} allá): se ACEPTA`);
+  const tope = round(alla0 + 5 - q1 + 1);
   const otro = await api("POST", "/orders", { customer_id: cli.id, items: [{ ...item, quantity: tope }] }, rov);
   check(otro.status === 409, `A2. otro pedido de ${tope} QQ ya no cabe (respaldo = piladora + allá − pedidos)`, otro.status);
 
   const cola = exigir(await api("GET", "/orders/cola-global", undefined, rov), "B0. cola de despachos");
   const enCola = cola.find((o) => o.id === ped.id);
-  check(enCola && Number(enCola.stock_dueno[p011]) >= 45 && enCola.alla_dueno.some((x) => /Allá/.test(x.bodega) && x.qq > 40), "B1. la cola ve el stock con lo de allá y de qué proveedor", enCola && { stock: enCola.stock_dueno, alla: enCola.alla_dueno });
+  check(enCola && Number(enCola.stock_dueno[p011]) >= q1 && enCola.alla_dueno.some((x) => /Allá/.test(x.bodega) && x.qq >= retiro), "B1. la cola ve el stock con lo de allá y de qué proveedor", enCola && { stock: enCola.stock_dueno, alla: enCola.alla_dueno });
 
   const prep = exigir(await api("PATCH", `/orders/${ped.id}/prepare`, { prepared: true, warehouse_id: wh }, rov), "B2. preparar el pedido");
   const ret = prep.retiros_alla ?? [];
-  check(ret.length === 1 && Math.abs(ret[0].qq - 40) < 0.01 && /Allá/.test(ret[0].bodega), "B3. avisa: retirar 40 QQ allá", ret);
-  check(Math.abs((await saldo(true)) - (alla0 - 40)) < 0.01, "B4. lo de allá baja 40 QQ", { antes: alla0, ahora: await saldo(true) });
+  check(ret.length === 1 && Math.abs(ret[0].qq - retiro) < 0.01 && /Allá/.test(ret[0].bodega), `B3. avisa: retirar ${retiro} QQ allá`, ret);
+  check(Math.abs((await saldo(true)) - (alla0 - retiro)) < 0.01, `B4. lo de allá baja ${retiro} QQ`, { antes: alla0, ahora: await saldo(true) });
   check(Math.abs((await saldo(false)) - pil0) < 0.01, "B5. la piladora entrega sus 5 QQ (queda como antes)", { antes: pil0, ahora: await saldo(false) });
   const cola2 = exigir(await api("GET", "/orders/cola-global", undefined, rov), "B6. cola tras preparar");
   const e2 = cola2.find((o) => o.id === ped.id);
-  check(e2.retirado_alla.length === 1 && Math.abs(e2.retirado_alla[0].qq - 40) < 0.01, "B7. el pedido preparado muestra lo retirado allá", e2.retirado_alla);
+  check(e2.retirado_alla.length === 1 && Math.abs(e2.retirado_alla[0].qq - retiro) < 0.01, "B7. el pedido preparado muestra lo retirado allá", e2.retirado_alla);
 
   // Revertir la preparación devuelve todo a su sitio
   exigir(await api("PATCH", `/orders/${ped.id}/prepare`, { prepared: false }, rov), "C1. revertir preparación");

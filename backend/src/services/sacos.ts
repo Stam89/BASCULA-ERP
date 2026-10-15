@@ -241,7 +241,7 @@ export async function planSacosPedido(client: PoolClient, orderId: string): Prom
   const sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }> = [];
   const items = await client.query(
     `SELECT i.product_id, i.presentation_id, i.presentation_name, i.quantity::float AS quantity,
-            i.sobrante_saco_lb::float AS sobrante_saco_lb, p.code, p.name, p.product_type
+            i.sobrante_saco_lb::float AS sobrante_saco_lb, i.sack_id, p.code, p.name, p.product_type
      FROM sales_order_items i JOIN products p ON p.id = i.product_id
      WHERE i.order_id = $1`,
     [orderId]
@@ -254,9 +254,15 @@ export async function planSacosPedido(client: PoolClient, orderId: string): Prom
     porSaco.set(saco.id, acc);
   };
   for (const it of items.rows) {
-    // El ARROZ ENVEJECIDO se empaca en los sacos PROPIOS del socio al recibir el
-    // envejecido (Selección): al venderlo no se descuenta otro saco de la Matriz.
-    if (String(it.code ?? "").toUpperCase() === "ARROZ-ENVEJECIDO") continue;
+    // El ARROZ ENVEJECIDO nunca usa sacos de la Matriz: va en el saco PROPIO del socio que vende (Cecibel…,
+    // se descuenta de SUS sacos aquí, una sola vez) o en el saco del proveedor (sack_id vacío: no descuenta).
+    if (String(it.code ?? "").toUpperCase() === "ARROZ-ENVEJECIDO") {
+      if (!it.sack_id) continue;
+      const saco = (await client.query(`SELECT ${COLS_SACO} FROM sack_inventory WHERE id = $1`, [it.sack_id])).rows[0] as SacoRow | undefined;
+      const n = saco ? sacosParaQq(Number(it.quantity), Number(saco.peso_lb) || 100) : 0;
+      if (saco && n > 0) sumar(saco, n);
+      continue;
+    }
     const qq = Number(it.quantity);
     const peso = await pesoDePresentacion(client, it.presentation_id, it.presentation_name);
     if (!sacosParaQq(qq, peso)) continue;

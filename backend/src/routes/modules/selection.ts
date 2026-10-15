@@ -350,9 +350,9 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
       // Presentación/tamaño de saco en que regresó (para descontar el saco exacto).
       presentation: z.string().optional(),
       sack_weight_lb: z.number().positive().optional(),
-      // Empaque: TULA (por defecto, reutilizable) o SACO. `sack_id` = saco del
+      // Empaque: TULA (por defecto, reutilizable), SACO o PROVEEDOR (saco del proveedor). `sack_id` = saco del
       // catálogo PROPIO del socio (envejecido): se descuenta de su inventario.
-      empaque: z.enum(["TULA", "SACO"]).optional(),
+      empaque: z.enum(["TULA", "SACO", "PROVEEDOR"]).optional(),
       sack_id: z.string().uuid().optional(),
       // Parte de esta línea que QUEDÓ ALLÁ, donde el proveedor (no llegó a la piladora). 0 = llegó todo.
       qty_alla: z.number().nonnegative().optional()
@@ -413,26 +413,11 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
         [req.params.id, o.product_id, wid, qty, o.is_reject ?? false, o.presentation ?? null, o.sack_weight_lb ?? null,
          o.empaque ?? null, o.sack_id ?? null, alla]
       );
-      // SACOS PROPIOS del socio (envejecido): se descuentan de SU catálogo al
-      // recibir. Los de la Matriz no se tocan aquí (se descuentan al vender).
+      // SACOS PROPIOS del socio (envejecido, Cecibel…): aquí SOLO se anota en qué saco viene. Se descuentan
+      // UNA vez, al VENDER (Confirmar Preparación del pedido con ese saco); así no se cuentan dos veces.
       if (o.sack_id && !o.is_reject) {
-        const saco = await tx.query(
-          "SELECT id, tipo, peso_lb::float AS peso FROM sack_inventory WHERE id = $1 AND accionista_id = $2 AND activo FOR UPDATE",
-          [o.sack_id, accionistaId]
-        );
+        const saco = await tx.query("SELECT 1 FROM sack_inventory WHERE id = $1 AND accionista_id = $2", [o.sack_id, accionistaId]);
         if (!saco.rowCount) throw new ApiError(403, "Ese saco no pertenece a tu catálogo propio de sacos.");
-        const peso = Number(saco.rows[0].peso) || 100;
-        const nSacos = Math.max(1, Math.round((qty * 100) / peso));
-        const upd = await tx.query(
-          "UPDATE sack_inventory SET stock = stock - $2, updated_at = now() WHERE id = $1 RETURNING stock::float AS stock",
-          [o.sack_id, nSacos]
-        );
-        await tx.query(
-          `INSERT INTO sack_movements (sack_id, movement, cantidad, concepto, ref_selection)
-           VALUES ($1, 'SALIDA', $2, $3, $4)`,
-          [o.sack_id, nSacos, `${label} ${batch.rows[0].batch_number}: ${qty} QQ empacados`, req.params.id]
-        );
-        sacosPropios.push({ tipo: saco.rows[0].tipo, sacos: nSacos, nuevo_stock: Number(upd.rows[0].stock) });
       }
       if (!o.is_reject && o.sack_weight_lb && o.sack_weight_lb > 0) {
         const p = prodMap.get(o.product_id);

@@ -2081,6 +2081,9 @@ function conceptoPayable(p: AccountPayable): string {
 // "100 LB" -> 100. Sirve para guardar el peso del saco como número.
 // Valor del <select> de presentación para un peso personalizado (p. ej. 98 LB).
 const PRES_OTRO_PESO = "__otro_peso__";
+// Arroz Envejecido: la presentación es el saco (propio del socio que vende o del proveedor).
+const PRES_SACO_PROPIO = "__saco_propio__:";
+const PRES_SACO_PROVEEDOR = "__saco_proveedor__:";
 
 function sackWeightLbOf(presentation: string): number | undefined {
   const lb = Number(String(presentation).replace(/[^\d.]/g, ""));
@@ -3645,6 +3648,8 @@ export function App() {
     unit_price: number;
     /** Saco (lb) que pidió el cliente para el SOBRANTE; null = automático. */
     sobrante_saco_lb?: number | null;
+    /** Arroz Envejecido: saco PROPIO del socio que vende (Cecibel…; se descuenta al preparar). null = saco del proveedor. */
+    sack_id?: string | null;
   };
   const [saleLineItems, setSaleLineItems] = useState<SaleLineItem[]>([]);
   // Pedidos de venta (preventa) y forma de pago elegida al despachar cada uno.
@@ -5831,6 +5836,7 @@ export function App() {
           const peso = Number(sk?.peso_lb) || 100;
           return { ...base, sack_id: sk?.id, sack_weight_lb: peso, presentation: sk?.tipo ?? `${peso} LB`, empaque: "SACO" as const };
         }
+        if (emp === "PROVEEDOR") return { ...base, presentation: "Saco del proveedor", empaque: "PROVEEDOR" as const };
         if (emp.startsWith("SACO:")) {
           const peso = Number(emp.slice(5)) || 100;
           return { ...base, sack_weight_lb: peso, presentation: `${peso} LB`, empaque: "SACO" as const };
@@ -8296,12 +8302,16 @@ export function App() {
       addToast("Escribe el peso del bulto en libras (Otro peso)", "error");
       return false;
     }
+    // Envejecido: saco propio (descuenta) o del proveedor; no son presentaciones del catálogo.
+    const saco = presentation as { sack_id?: string; sack_tipo?: string };
+    const esSacoEnvejecido = saleLineForm.presentation_id.startsWith(PRES_SACO_PROPIO) || saleLineForm.presentation_id.startsWith(PRES_SACO_PROVEEDOR);
     const newItem: SaleLineItem = {
       id: `temp-${Date.now()}`,
       product_id: saleLineForm.product_id,
       // Peso personalizado: sin id de catálogo, solo el nombre ("98 LB").
-      presentation_id: saleLineForm.presentation_id === PRES_OTRO_PESO ? "" : saleLineForm.presentation_id,
-      presentation_name: presentation ? `${presentation.name}` : "",
+      presentation_id: saleLineForm.presentation_id === PRES_OTRO_PESO || esSacoEnvejecido ? "" : saleLineForm.presentation_id,
+      presentation_name: saco.sack_tipo ? saco.sack_tipo : presentation ? `${presentation.name}` : "",
+      sack_id: saco.sack_id ?? null,
       weight_lb: presentation && presentation.weight_lb ? Number(presentation.weight_lb) : null,
       quantity: Number(saleLineForm.quantity),
       unit_price: Number(saleLineForm.unit_price),
@@ -8512,7 +8522,7 @@ export function App() {
     setSaleLineForm((prev) => ({ ...prev, presentation_id: presentationId }));
     if (presentationId !== PRES_OTRO_PESO) setSaleLineOtroPesoLb("");
     setSaleLineSobranteLb("");
-    const idSugerencia = presentationId === PRES_OTRO_PESO ? "" : presentationId;
+    const idSugerencia = presentationId === PRES_OTRO_PESO || presentationId.startsWith(PRES_SACO_PROPIO) || presentationId.startsWith(PRES_SACO_PROVEEDOR) ? "" : presentationId;
     if (saleLineForm.product_id) sugerirPrecioLinea(saleLineForm.product_id, idSugerencia).catch(() => undefined);
   }
 
@@ -8542,7 +8552,21 @@ export function App() {
     try {
       const res = await apiFetch(`/products/${productId}/presentations`);
       if (res.ok) {
-        const pres = await res.json();
+        let pres = await res.json();
+        // ARROZ ENVEJECIDO: la presentación ES el saco. Los sacos PROPIOS del socio que vende (Cecibel…) se
+        // descuentan de SUS sacos al preparar; «saco del proveedor» no descuenta nada.
+        if (products.find((p) => p.id === productId)?.code === "ARROZ-ENVEJECIDO") {
+          const propios = await apiGet<SackInventory[]>("/sacks?propio=1", ventaOpts).catch(() => [] as SackInventory[]);
+          pres = [
+            ...propios.filter((sk) => sk.activo !== false && sk.categoria === "PROPIO")
+              .map((sk) => ({ id: `${PRES_SACO_PROPIO}${sk.id}`, name: `${sk.tipo} (tus sacos: ${Number(sk.stock)})`, weight_lb: Number(sk.peso_lb) || 100, sack_id: sk.id, sack_tipo: sk.tipo })),
+            ...[100, 50, 25].map((lb) => ({ id: `${PRES_SACO_PROVEEDOR}${lb}`, name: `${lb} LB · saco del proveedor`, weight_lb: lb })),
+            ...pres
+          ];
+          setSaleProductPresentations(pres);
+          setSaleLineForm(prev => ({ ...prev, presentation_id: "" }));
+          return;
+        }
         setSaleProductPresentations(pres);
         const firstPres = pres[0]?.id || "";
         setSaleLineForm(prev => ({ ...prev, presentation_id: firstPres }));
@@ -12053,7 +12077,8 @@ Motivo (obligatorio):`, "");
         inventory_product_id: inventoryProductId || line.product_id,
         quantity: line.quantity,
         unit_price: line.unit_price,
-        sobrante_saco_lb: line.sobrante_saco_lb ?? null
+        sobrante_saco_lb: line.sobrante_saco_lb ?? null,
+        sack_id: line.sack_id ?? null
       };
     });
 
@@ -12628,7 +12653,7 @@ Motivo (obligatorio):`, "");
    * y al guardar se reemplazan; la cuenta por cobrar se ajusta sola.
    */
   async function editarPedido(order: SalesOrder) {
-    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null }>; delivery_date: string | null; notes: string | null; customer_id: string; payment_method?: string | null }>(`/orders/${order.id}`, optsPedido(order));
+    const detalle = await apiGet<{ items: Array<{ product_id: string; presentation_id: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; sobrante_saco_lb?: string | number | null; sack_id?: string | null }>; delivery_date: string | null; notes: string | null; customer_id: string; payment_method?: string | null }>(`/orders/${order.id}`, optsPedido(order));
     setPedidoFormaPago(detalle.payment_method ?? "CASH");
     // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
     const dueno = order.accionista_id || activeAccionistaId || "";
@@ -12641,7 +12666,8 @@ Motivo (obligatorio):`, "");
       weight_lb: null,
       quantity: Number(it.quantity),
       unit_price: Number(it.unit_price),
-      sobrante_saco_lb: Number(it.sobrante_saco_lb) > 0 ? Number(it.sobrante_saco_lb) : null
+      sobrante_saco_lb: Number(it.sobrante_saco_lb) > 0 ? Number(it.sobrante_saco_lb) : null,
+      sack_id: it.sack_id ?? null
     })));
     setSelectedCustomerId(detalle.customer_id);
     setCustomerSearch(order.customer_name);
@@ -12665,7 +12691,8 @@ Motivo (obligatorio):`, "");
         inventory_product_id: inventoryProductId || line.product_id,
         quantity: line.quantity,
         unit_price: line.unit_price,
-        sobrante_saco_lb: line.sobrante_saco_lb ?? null
+        sobrante_saco_lb: line.sobrante_saco_lb ?? null,
+        sack_id: line.sack_id ?? null
       };
     });
     const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items, payment_method: pedidoFormaPago }, ventaOpts);
@@ -22196,19 +22223,21 @@ Motivo (obligatorio):`, "");
                                       onChange={(e) => setOutLine(i, { sack_weight_lb: e.target.value })} style={inputStyle} />
                                   );
                                 }
-                                // Empaque: TULA por defecto (casi siempre). En el ENVEJECIDO
-                                // del socio se elige su saco propio (se descuenta de su
-                                // inventario al recibir); en Selección el saco es informativo
-                                // (el saco de la Matriz se descuenta al vender).
-                                const usaPropios = b.service_type === "ENVEJECIMIENTO" && sacosPropiosActivos.length > 0;
+                                // Empaque: TULA por defecto (casi siempre). En el ENVEJECIDO se anota en
+                                // qué saco viene: el del proveedor o el propio del socio (Cecibel…). Es
+                                // solo un dato: el saco propio se descuenta UNA vez, al vender.
+                                const esEnvejecido = b.service_type === "ENVEJECIMIENTO";
                                 return (
                                   <select value={line.empaque ?? "TULA"} disabled={!!line.is_reject}
-                                    title={usaPropios ? "Empaque: tula o tu saco propio (se descuenta de tus sacos)" : "Empaque: tula o saco (informativo)"}
+                                    title={esEnvejecido ? "¿En qué saco viene? (tus sacos se descuentan al vender, no aquí)" : "Empaque: tula o saco (informativo)"}
                                     onChange={(e) => setOutLine(i, { empaque: e.target.value })} style={{ ...inputStyle, opacity: line.is_reject ? 0.5 : 1 }}>
                                     <option value="TULA">Tula</option>
-                                    {usaPropios
-                                      ? sacosPropiosActivos.map((sk) => <option key={sk.id} value={`PROPIO:${sk.id}`}>{sk.tipo} ({Number(sk.stock)})</option>)
-                                      : (["100", "25", "10"] as const).map((lb) => <option key={lb} value={`SACO:${lb}`}>Saco {lb} LB</option>)}
+                                    {esEnvejecido ? (
+                                      <>
+                                        <option value="PROVEEDOR">Saco del proveedor</option>
+                                        {sacosPropiosActivos.map((sk) => <option key={sk.id} value={`PROPIO:${sk.id}`}>{sk.tipo}</option>)}
+                                      </>
+                                    ) : (["100", "25", "10"] as const).map((lb) => <option key={lb} value={`SACO:${lb}`}>Saco {lb} LB</option>)}
                                   </select>
                                 );
                               })()}

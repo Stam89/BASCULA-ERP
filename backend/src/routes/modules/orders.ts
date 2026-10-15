@@ -36,8 +36,26 @@ const orderItemSchema = z.object({
   quantity: z.number().positive(),
   unit_price: z.number().nonnegative(),
   // Saco que pidió el cliente para el SOBRANTE (lb). Vacío = automático.
-  sobrante_saco_lb: z.number().positive().nullable().optional()
+  sobrante_saco_lb: z.number().positive().nullable().optional(),
+  // ARROZ ENVEJECIDO: saco PROPIO del socio que vende (Cecibel…) → se descuenta al preparar.
+  // Vacío = en el saco del proveedor (no descuenta).
+  sack_id: z.string().uuid().nullable().optional()
 });
+
+// El saco propio de una línea debe ser del socio que vende y solo aplica al Arroz Envejecido.
+async function validarSacosPropiosDelPedido(
+  client: PoolClient, accionistaId: string | undefined, items: Array<{ product_id: string; sack_id?: string | null }>
+): Promise<void> {
+  for (const it of items) {
+    if (!it.sack_id) continue;
+    const p = (await client.query("SELECT code FROM products WHERE id = $1", [it.product_id])).rows[0];
+    if (String(p?.code ?? "").toUpperCase() !== "ARROZ-ENVEJECIDO") throw new ApiError(400, "El saco propio solo se escoge para el Arroz Envejecido.");
+    const s = (await client.query(
+      "SELECT 1 FROM sack_inventory WHERE id = $1 AND accionista_id = $2 AND categoria = 'PROPIO' AND activo", [it.sack_id, accionistaId ?? null]
+    )).rowCount;
+    if (!s) throw new ApiError(400, "Ese saco no es de los sacos propios del socio que vende.");
+  }
+}
 
 ordersRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
@@ -179,6 +197,7 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
+    await validarSacosPropiosDelPedido(client, accionistaId, body.items);
     await validarRespaldoDelPedido(client, accionistaId, body.items);
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const order = await client.query(
@@ -190,12 +209,12 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     for (const item of body.items) {
       await client.query(
         `INSERT INTO sales_order_items
-         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb, sack_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           order.rows[0].id, item.product_id, item.presentation_id ?? null, item.presentation_name ?? null,
           item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price),
-          item.sobrante_saco_lb ?? null
+          item.sobrante_saco_lb ?? null, item.sack_id ?? null
         ]
       );
     }
@@ -515,6 +534,7 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
       throw new ApiError(409, "No se puede editar un pedido ya preparado. Primero revierte su preparacion.");
     }
 
+    await validarSacosPropiosDelPedido(client, accionistaId, body.items);
     await validarRespaldoDelPedido(client, accionistaId, body.items, req.params.id as string);
     if (body.payment_method) {
       await client.query("UPDATE sales_orders SET payment_method = $2 WHERE id = $1", [req.params.id, body.payment_method]);
@@ -525,12 +545,12 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     for (const item of body.items) {
       await client.query(
         `INSERT INTO sales_order_items
-         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+         (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb, sack_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [
           req.params.id, item.product_id, item.presentation_id ?? null, item.presentation_name ?? null,
           item.inventory_product_id, item.quantity, item.unit_price, round2(item.quantity * item.unit_price),
-          item.sobrante_saco_lb ?? null
+          item.sobrante_saco_lb ?? null, item.sack_id ?? null
         ]
       );
     }
