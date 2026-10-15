@@ -24,6 +24,24 @@ describe("clasificarEgreso (rubro por claves)", () => {
   it("'gas' no se confunde con 'gasolina' ni con 'gastos'", () => {
     expect(clasificarEgreso(["Gas", "Compra de 2 bombonas"], RUBROS)).toBe("gas");
     expect(clasificarEgreso(["Gasolina montacarga"], RUBROS)).toBe("gasolina");
+  });
+
+  it("montacarga: rubro propio aunque el gasto venga con otra categoría de Caja", () => {
+    const rubros = [
+      { id: "mant", claves: ["mantenimiento"], categorias: ["MANTENIMIENTO_EQUIPO"] },
+      { id: "diesel", claves: ["diesel"], categorias: ["DIESEL"] },
+      { id: "rep", claves: ["repuestos"], categorias: ["REPUESTOS"] },
+      { id: "monta", claves: ["gasolina", "montacarga"], categorias: ["GASOLINA_MONTACARGA"] }
+    ];
+    expect(clasificarMovimiento({ category: "MANTENIMIENTO_EQUIPO", description: "Mantenimiento MONTACARGA/MOTOR: cambio de aceite" }, rubros)).toBe("monta");
+    expect(clasificarMovimiento({ category: "DIESEL", description: "Diésel para el montacargas" }, rubros)).toBe("monta");
+    expect(clasificarMovimiento({ category: "REPUESTOS", area: "MONTACARGA", description: "Filtro" }, rubros)).toBe("monta");
+    expect(clasificarMovimiento({ category: "GASOLINA_MONTACARGA", subcategoria: "Llantas montacarga" }, rubros)).toBe("monta");
+    // Lo demás sigue en su rubro.
+    expect(clasificarMovimiento({ category: "MANTENIMIENTO_EQUIPO", description: "Mantenimiento PILADORA/OTROS: arreglo de eje" }, rubros)).toBe("mant");
+    expect(clasificarMovimiento({ category: "DIESEL", description: "Diésel secadora" }, rubros)).toBe("diesel");
+    // Sin rubro de montacarga, el gasto queda en su categoría.
+    expect(clasificarMovimiento({ category: "DIESEL", description: "Diésel montacarga" }, rubros.filter((r) => r.id !== "monta"))).toBe("diesel");
     expect(clasificarEgreso(["Gastos Generales", "GASTO_OPERATIVO", "Arreglo de techo"], RUBROS)).toBe("operativo");
     expect(clasificarEgreso(["Gastos administrativos", "Papel"], RUBROS)).toBe("admin");
   });

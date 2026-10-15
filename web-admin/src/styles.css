@@ -6047,3 +6047,6 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cajaOtros { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; padding: 8px 16px; background: rgba(100, 116, 139, 0.08); border-bottom: 1px solid var(--c-border, #e5e7eb); font-size: 12.5px; }
 .cajaOtros small { opacity: 0.75; }
 .cajaOtros button { padding: 5px 10px; font-size: 12px; }
+
+/* Mantenimiento: aviso de que el montacarga tiene su propio rubro de costos */
+.mantAvisoRubro { margin: 4px 0 8px; padding: 6px 10px; border-radius: 8px; background: rgba(234, 179, 8, 0.14); font-size: 12.5px; }

@@ -103,12 +103,31 @@ export function clasificarMovimiento(e: EgresoClasificable, rubros: RubroRegla[]
     }
     return clasificarEgreso([[e.subcategoria], [e.description]], rubros);
   }
+  // Equipos con rubro PROPIO (montacarga): todo lo que se le gasta (combustible, reparación, repuestos,
+  // mantenimiento con área MONTACARGA…) va a SU rubro aunque se registre con otra categoría de Caja.
+  const porEquipo = rubroDeEquipoPropio(e, rubros);
+  if (porEquipo) return porEquipo;
   const codigo = String(e.category ?? "").toUpperCase();
   const porCategoria = rubros.find((x) => (x.categorias ?? []).some((c) => c.toUpperCase() === codigo));
   if (porCategoria) return porCategoria.id;
   return clasificarEgreso(
     [[e.subcategoria], [e.description, e.maq_activo, e.area], [e.reference_type], [e.categoria_nombre, e.category]], rubros
   );
+}
+
+/** Equipos que tienen un rubro propio de costos (pedido del dueño 2026-10-14: el montacarga es un rubro aparte). */
+export const EQUIPOS_CON_RUBRO_PROPIO = ["montacarga"] as const;
+
+/** Rubro del equipo que nombra el egreso (área, máquina, subcategoría o descripción), si ese rubro existe
+ *  (un rubro activo que tenga la clave del equipo, p. ej. «montacarga»). */
+export function rubroDeEquipoPropio(e: EgresoClasificable, rubros: RubroRegla[]): string | null {
+  const blob = ` ${normalizar([e.area, e.maq_activo, e.subcategoria, e.description].filter(Boolean).join(" "))} `;
+  for (const eq of EQUIPOS_CON_RUBRO_PROPIO) {
+    if (!blob.includes(` ${eq} `) && !blob.includes(` ${eq}s `)) continue;
+    const r = rubros.find((x) => (x.claves ?? []).some((k) => normalizar(k) === eq));
+    if (r) return r.id;
+  }
+  return null;
 }
 
 /** Categorías de Caja que NO son costo operativo (compra de cáscara, fomentos,

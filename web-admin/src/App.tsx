@@ -19001,6 +19001,9 @@ Motivo (obligatorio):`, "");
                           {/* ── Equipo y trabajo ── */}
                           <section className="mantSec">
                             <div className="mantSec__head">Equipo y trabajo</div>
+                            {/montacarga/i.test(maintenanceForm.area) && (
+                              <div className="mantAvisoRubro">🚜 Lo del montacarga se carga a su propio rubro <b>Montacarga</b> en Costos operativos (no a Mantenimiento de la piladora).</div>
+                            )}
                             {maintenanceForm.area && maintenanceForm.section ? (
                               <div className="mantEquipoSel">
                                 <span className="mantEquipoSel__ico" aria-hidden="true">🔧</span>
