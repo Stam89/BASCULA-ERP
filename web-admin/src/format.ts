@@ -80,6 +80,8 @@ export function categoryLabel(cat: string): string {
     PAGO_PRESTAMO: "Cuota de préstamo bancario",
     PRESTAMO_RECIBIDO: "Préstamo bancario recibido",
     PAGO_POR_SOCIO: "Pago hecho por otro socio",
+    GASTO_POR_SOCIO: "Gasto de un socio pagado por esta caja",
+    GASTO_DE_TRANSPORTE: "Gasto de Transporte pagado por la Matriz",
     COBRO_PEDIDO: "Cobro de pedido",
     COBRO_CREDITO: "Cobro a crédito",
     VENTA: "Venta",

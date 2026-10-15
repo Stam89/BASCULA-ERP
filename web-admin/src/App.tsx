@@ -1057,6 +1057,9 @@ type CashMovement = {
   proveedor_nombre?: string | null;
   // Efectivo o banco (en una caja MIXTA).
   medio?: "EFECTIVO" | "BANCO" | null;
+  // Gasto de un socio pagado por esta caja (GASTO_POR_SOCIO): el socio y la categoría real del gasto.
+  por_cuenta_de?: string | null;
+  categoria_por_cuenta?: string | null;
 };
 
 /** Egreso A CRÉDITO registrado en la sesión: es una Cuenta por Pagar, no toca la caja. */
@@ -1916,7 +1919,7 @@ const CATEGORIAS_RUBRO_COSTO = new Set([
 // necesitan un rubro en Resultado mensual aunque sean egresos de la Matriz.
 const CATEGORIAS_NO_RESULTADO = new Set([
   "PAGO_AGRICULTOR", "LIQUIDACION_AGRICULTOR", "ANTICIPO_AGRICULTOR", "FOMENTO_ENTREGA", "FOMENTOS",
-  "PAGO_FOMENTO", "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS", "PAGO_PRESTAMO", "PAGO_POR_SOCIO",
+  "PAGO_FOMENTO", "COMPRA_ACTIVO_FIJO", "PAGO_ENTRE_SOCIOS", "PAGO_PRESTAMO", "PAGO_POR_SOCIO", "GASTO_POR_SOCIO",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA", "DEVOLUCION_VENTA",
   "PAGO_SALDO_INICIAL", "TRASPASO_INTERNO", "PAGO_MANO_OBRA"
 ]);
@@ -2695,6 +2698,7 @@ export function App() {
   function abrirMovimientoCaja(tipo: "EXPENSE" | "INCOME") {
     setMovType(tipo); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId("");
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false);
+    setMovPorCuentaDe("");
     setMaintenanceForm((f) => ({ ...f, area: "", section: "" }));
     setTeqTipoInicial(undefined); setTeqKey((k) => k + 1);
     setCajaMenu(null);
@@ -2704,13 +2708,16 @@ export function App() {
   // 🔁 Repetir un movimiento hecho en Caja: misma categoría, subcategoría, detalle y monto (se pueden cambiar).
   function repetirMovimientoCaja(m: CashMovement) {
     abrirMovimientoCaja(m.movement);
-    setMovCategory(m.category);
+    // Un gasto de socio se repite con su categoría real y el mismo socio.
+    const deSocio = m.category === "GASTO_POR_SOCIO" && !!m.categoria_por_cuenta;
+    setMovCategory(deSocio ? m.categoria_por_cuenta! : m.category);
+    if (deSocio) setMovPorCuentaDe(m.por_cuenta_de ?? "");
     setMovSubcategoria(m.subcategoria ?? "");
     setTimeout(() => {
       const f = document.querySelector("form.cj-form") as HTMLFormElement | null;
       const d = f?.querySelector("input[name='description']") as HTMLInputElement | null;
       const a = f?.querySelector("input[name='amount']") as HTMLInputElement | null;
-      if (d) d.value = m.description ?? "";
+      if (d) d.value = deSocio ? "" : m.description ?? "";
       if (a) { a.value = String(Number(m.amount)); a.focus(); a.select(); }
     }, 120);
   }
@@ -2739,6 +2746,18 @@ export function App() {
   // Proveedor y modalidad de pago del egreso (Contado por defecto / A crédito → CxP).
   const [movProveedor, setMovProveedor] = useState("");
   const [movModalidad, setMovModalidad] = useState<"CONTADO" | "CREDITO">("CONTADO");
+  // «¿De quién es este gasto?» (solo la caja de la Matriz): "" = de esta caja; si no, el id del socio dueño del gasto.
+  const [movPorCuentaDe, setMovPorCuentaDe] = useState("");
+  const [movDeudaSocio, setMovDeudaSocio] = useState<{ socio: string; le_debe: number } | null>(null);
+  useEffect(() => {
+    if (!movPorCuentaDe) { setMovDeudaSocio(null); return; }
+    setMovModalidad("CONTADO"); setMovEsFondo(false);
+    let vivo = true;
+    apiGet<{ le_debe: number }>(`/cash/gasto-por-socio/${movPorCuentaDe}`)
+      .then((r) => { if (vivo) setMovDeudaSocio({ socio: movPorCuentaDe, le_debe: Number(r.le_debe) || 0 }); })
+      .catch(() => { if (vivo) setMovDeudaSocio(null); });
+    return () => { vivo = false; };
+  }, [movPorCuentaDe]);
   const [movVence, setMovVence] = useState("");
   // Mantiene el egreso cotidiano corto. Los datos avanzados siguen montados y
   // conservan exactamente el mismo flujo; el usuario los despliega cuando aplican.
@@ -4777,6 +4796,11 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  // «¿De quién es este gasto?»: socios a los que la caja de la Matriz les puede pagar un gasto, y en qué categorías
+  // (las que tienen flujo propio —mantenimiento, sacos, repuestos, activos, pagos enlazados— no).
+  const sociosDelGasto = accionistas.filter((a) => a.tipo === "SOCIO" && a.id !== activeAccionistaId);
+  const gastoDeSocioPosible = (cat: string) => !!cat && cat !== "MANTENIMIENTO_EQUIPO" && cat !== "REPUESTOS" && cat !== CATEGORIA_MATERIALES
+    && cat !== "COMPRA_ACTIVO_FIJO" && !esCategoriaSacos(cat) && !CASH_REUSE[cat] && !CATEGORIAS_NO_RESULTADO.has(cat);
   // El reporte de Servicios es solo de la Matriz: con otro socio vuelve al Resumen.
   useEffect(() => {
     if ((reportKind === "servicios" || reportKind === "combustible") && matrizAccionista && !esMatrizActiva) { setReportKind("resumen"); setReportRows(null); }
@@ -9884,7 +9908,9 @@ export function App() {
     if (repUsoSinLista && !movMaquinaId) throw new Error("Uso inmediato: elige el equipo / máquina donde se instala.");
     const maquinaId = movement === "EXPENSE" && (category === CATEGORIA_MATERIALES || repUsoSinLista) ? movMaquinaId || undefined : undefined;
     const maquinaTxt = maquinaId ? etiquetaMaquina(maquinasPlanta.find((m) => m.id === maquinaId)) : "";
-    const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string } }>(`/cash/${registerId}/movements`, {
+    const porCuentaDe = movement === "EXPENSE" && esMatrizActiva && gastoDeSocioPosible(category) && !esFondo && !aCredito && !maquinaId ? movPorCuentaDe || undefined : undefined;
+    const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string };
+      gasto_por_socio?: { socio: string; descontado: number; por_cobrar: number } }>(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
@@ -9900,9 +9926,11 @@ export function App() {
       modalidad_pago: aCredito ? "CREDITO" : "CONTADO",
       due_date: aCredito && movVence ? movVence : undefined,
       maquina_id: maquinaId,
-      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? movMedio : undefined
+      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? movMedio : undefined,
+      por_cuenta_de: porCuentaDe
     });
     safeResetForm(formElement);
+    setMovPorCuentaDe("");
     setMovMedio("EFECTIVO");
     setMovCategory("");
     setMovPayableId("");
@@ -9912,8 +9940,13 @@ export function App() {
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
     setMovOpcionesOpen(false);
     await loadSubcategorias(); // refresca la memoria del datalist
+    const gs = creado.gasto_por_socio;
     addToast(
-      creado.credito
+      gs
+        ? `🤝 Gasto de ${gs.socio} registrado: salió ${money(amount)} de esta caja y queda en los gastos de ${gs.socio}` +
+          (gs.descontado > 0 ? ` · se descontaron ${money(gs.descontado)} de lo que le debías` : "") +
+          (gs.por_cobrar > 0 ? ` · ${gs.socio} te debe ${money(gs.por_cobrar)} (Por Cobrar)` : "")
+        : creado.credito
         ? `💳 Egreso a crédito: Cuenta por Pagar a ${creado.cuenta_por_pagar?.proveedor ?? provTxt} por ${money(amount)} · la caja no cambia`
         : esFondo
         ? `Fondo a rendir cuentas entregado a ${movResponsable.trim()} · queda Por Liquidar`
@@ -19088,10 +19121,38 @@ Motivo (obligatorio):`, "");
                       );
                     })()}
 
+                    {/* 🤝 ¿De quién es este gasto? La caja de la Matriz paga un gasto de un socio: sale de esta caja,
+                        queda en los gastos del socio, se descuenta de lo que se le debe y el resto se lo debe el socio. */}
+                    {movType === "EXPENSE" && esMatrizActiva && movCategory && gastoDeSocioPosible(movCategory) && sociosDelGasto.length > 0 && (() => {
+                      const socioSel = sociosDelGasto.find((a) => a.id === movPorCuentaDe);
+                      const chip = (id: string, txt: string) => (
+                        <button key={id || "propio"} type="button" className={`cj-dequien__op ${movPorCuentaDe === id ? "is-on" : ""}`} onClick={() => setMovPorCuentaDe(id)}>{txt}</button>
+                      );
+                      return (
+                        <div className={`cj-dequien ${socioSel ? "is-socio" : ""}`}>
+                          <span className="cj-dequien__tit">¿De quién es este gasto?</span>
+                          <div className="cj-dequien__ops">
+                            {chip("", `🏭 De ${matrizName || "la Matriz"}`)}
+                            {sociosDelGasto.map((a) => chip(a.id, `🤝 De ${a.name}`))}
+                          </div>
+                          {socioSel && (
+                            <small className="cj-dequien__info">
+                              La plata sale de esta caja, pero el gasto queda en las cuentas de <b>{socioSel.name}</b> (no es costo de la piladora).{" "}
+                              {movDeudaSocio?.socio !== socioSel.id ? "Revisando cuánto se le debe…"
+                                : movDeudaSocio.le_debe > 0
+                                  ? <>Hoy le debes <b>{money(movDeudaSocio.le_debe)}</b> a {socioSel.name}: se descuenta primero de ahí y lo que pase queda en Por Cobrar.</>
+                                  : <>Hoy no le debes nada a {socioSel.name}: todo queda en Por Cobrar ({socioSel.name} te lo debe).</>}
+                              {" "}Es de contado (sin crédito ni fondo).
+                            </small>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
                         Por Liquidar a nombre de un responsable. (En Mantenimiento va dentro
                         de su bloque «Monto y comprobante»; no aplica a una lista de repuestos.) */}
-                    {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && !(movCategory === "REPUESTOS" && repCart.length > 0) && (
+                    {movType === "EXPENSE" && movCategory !== "MANTENIMIENTO_EQUIPO" && !(movCategory === "REPUESTOS" && repCart.length > 0) && !movPorCuentaDe && (
                       <div className={`cj-mov-advanced ${!!CASH_REUSE[movCategory] || esCategoriaSacos(movCategory) || movOpcionesActivas ? "is-open" : ""}`} style={{ background: movEsFondo ? "#fffbeb" : "transparent", border: movEsFondo ? "1px solid #fde68a" : "1px dashed #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16 }}>
                         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                           <input type="checkbox" checked={movEsFondo} onChange={(e) => { setMovEsFondo(e.target.checked); if (e.target.checked) setMovModalidad("CONTADO"); }} style={{ width: "auto" }} />
@@ -19267,7 +19328,7 @@ Motivo (obligatorio):`, "");
                         de la caja: se crea una Cuenta por Pagar al proveedor (Por Pagar). Los
                         egresos con flujo propio (mantenimiento, sacos, pagos enlazados) siguen igual. */}
                     {movType === "EXPENSE" && movCategory && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && (() => {
-                      const creditoPosible = !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO";
+                      const creditoPosible = !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO" && !movPorCuentaDe;
                       const credito = creditoPosible && movModalidad === "CREDITO";
                       const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
                         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer",

@@ -43,9 +43,13 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
       FROM cash_movements cm
       LEFT JOIN LATERAL (SELECT sum(c.monto) AS cruzado FROM cruces_entre_socios c WHERE c.cash_movement_id = cm.id AND c.anulado_at IS NULL) x ON true
       LEFT JOIN accounts_payable p ON p.reference_type = 'pago_por_socio' AND p.reference_id = cm.id AND p.status <> 'CANCELLED'
-     WHERE cm.category = 'PAGO_POR_SOCIO' AND cm.reversal_of IS NULL
+     WHERE cm.category IN ('PAGO_POR_SOCIO', 'GASTO_POR_SOCIO') AND cm.reversal_of IS NULL
        AND ((cm.reversed_at IS NULL AND abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - cm.amount) > 0.005)
             OR (cm.reversed_at IS NOT NULL AND (COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL)))` },
+  { modulo: "Cuentas", nombre: "Gastos de un socio pagados por la Matriz: tienen el socio y su categoría real", sql: `
+    SELECT cm.id FROM cash_movements cm
+     WHERE cm.category = 'GASTO_POR_SOCIO' AND cm.reversal_of IS NULL
+       AND (cm.por_cuenta_de IS NULL OR cm.categoria_por_cuenta IS NULL)` },
   { modulo: "Préstamos", nombre: "Cuotas de préstamos: cada pagada tiene su pago vigente en Caja por lo pagado, y las pendientes ninguno", sql: `
     SELECT q.id, q.estado, m.amount::float AS caja, (q.capital + COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))::float AS pagado
       FROM prestamo_cuotas q LEFT JOIN cash_movements m ON m.id = q.cash_movement_id

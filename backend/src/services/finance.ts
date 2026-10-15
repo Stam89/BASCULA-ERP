@@ -307,12 +307,14 @@ export async function getEstadoResultados(
   // (sin anulados). Antes se leían tablas que ya no se usan (expenses, labor_payments) y salían en 0.
   // No son gasto: compra de cáscara, fomentos, pagos entre socios, activos fijos… (CATEGORIAS_NO_OPERATIVAS).
   const egresos = await client.query(
-    `SELECT COALESCE(SUM(m.amount) FILTER (WHERE m.category = 'PAGO_MANO_OBRA'), 0) AS mano_obra,
-            COALESCE(SUM(m.amount) FILTER (WHERE m.category <> 'PAGO_MANO_OBRA'), 0) AS gastos
+    // + los gastos de este socio que pagó la caja de la Matriz (GASTO_POR_SOCIO con su categoría real).
+    `SELECT COALESCE(SUM(m.amount) FILTER (WHERE COALESCE(m.categoria_por_cuenta, m.category) = 'PAGO_MANO_OBRA'), 0) AS mano_obra,
+            COALESCE(SUM(m.amount) FILTER (WHERE COALESCE(m.categoria_por_cuenta, m.category) <> 'PAGO_MANO_OBRA'), 0) AS gastos
        FROM cash_movements m JOIN cash_registers c ON c.id = m.cash_register_id
-      WHERE c.accionista_id = $1 AND m.movement = 'EXPENSE'
+      WHERE m.movement = 'EXPENSE'
         AND m.reversed_at IS NULL AND m.reversal_of IS NULL
-        AND NOT (COALESCE(m.category, '') = ANY($4::text[]))
+        AND ((c.accionista_id = $1 AND NOT (COALESCE(m.category, '') = ANY($4::text[])))
+             OR (m.category = 'GASTO_POR_SOCIO' AND m.por_cuenta_de = $1 AND NOT (COALESCE(m.categoria_por_cuenta, '') = ANY($4::text[]))))
         AND m.created_at::date BETWEEN $2 AND $3`,
     [accionistaId, desde, hasta, CATEGORIAS_NO_OPERATIVAS]
   );

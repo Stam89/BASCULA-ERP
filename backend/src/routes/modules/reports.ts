@@ -166,8 +166,8 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
        JOIN cash_registers cr ON cr.id = cm.cash_register_id
        WHERE cm.movement = 'EXPENSE' AND ${MOV_VIGENTE}
          AND cm.created_at::date BETWEEN $1 AND $2
-         AND ($3::uuid IS NULL OR cr.accionista_id = $3)
-         AND NOT (upper(cm.category) = ANY ($4::text[]))`,
+         AND ((($3::uuid IS NULL OR cr.accionista_id = $3) AND NOT (upper(cm.category) = ANY ($4::text[])))
+              OR (cm.category = 'GASTO_POR_SOCIO' AND cm.por_cuenta_de IS NOT NULL AND ($3::uuid IS NULL OR cm.por_cuenta_de = $3)))`,
       [from, to, acc, CATEGORIAS_NO_OPERATIVAS]
     ),
     pool.query(
@@ -332,17 +332,27 @@ reportsRouter.get("/expenses", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
   const acc = accionistaDelInforme(req);
   const rows = (await pool.query(
-    `SELECT cm.created_at, cm.category AS categoria_codigo, COALESCE(cc.nombre, cm.category) AS categoria,
+    // Gasto de un socio pagado por la Matriz (GASTO_POR_SOCIO): en el informe del socio (y en el de todos) sale como
+    // gasto del socio con su categoría real; en el de la Matriz, como egreso no operativo.
+    `SELECT x.* FROM (
+     SELECT cm.created_at,
+            (CASE WHEN v.es_socio THEN cm.categoria_por_cuenta ELSE cm.category END) AS categoria_codigo,
+            (CASE WHEN v.es_socio THEN COALESCE(cs.nombre, cm.categoria_por_cuenta) ELSE COALESCE(cc.nombre, cm.category) END) AS categoria,
             cm.subcategoria, NULLIF(cm.description, '') AS description, cm.amount::float AS amount,
-            a.name AS socio, (upper(cm.category) = ANY ($4::text[])) AS no_operativo
+            (CASE WHEN v.es_socio THEN ps.name ELSE a.name END) AS socio,
+            (CASE WHEN v.es_socio THEN upper(COALESCE(cm.categoria_por_cuenta, '')) = ANY ($4::text[]) ELSE upper(cm.category) = ANY ($4::text[]) END) AS no_operativo
        FROM cash_movements cm
        JOIN cash_registers cr ON cr.id = cm.cash_register_id
        JOIN accionistas a ON a.id = cr.accionista_id
+       LEFT JOIN accionistas ps ON ps.id = cm.por_cuenta_de
        LEFT JOIN cash_categories cc ON cc.codigo = cm.category
+       LEFT JOIN cash_categories cs ON cs.codigo = cm.categoria_por_cuenta
+       CROSS JOIN LATERAL (SELECT (cm.category = 'GASTO_POR_SOCIO' AND cm.por_cuenta_de IS NOT NULL
+                                   AND ($3::uuid IS NULL OR cm.por_cuenta_de = $3)) AS es_socio) v
       WHERE cm.movement = 'EXPENSE' AND ${MOV_VIGENTE}
         AND cm.created_at::date BETWEEN $1 AND $2
-        AND ($3::uuid IS NULL OR cr.accionista_id = $3)
-      ORDER BY cm.created_at DESC`,
+        AND (($3::uuid IS NULL OR cr.accionista_id = $3) OR v.es_socio)
+     ) x ORDER BY x.created_at DESC`,
     [from, to, acc, CATEGORIAS_NO_OPERATIVAS]
   )).rows as Array<{ categoria: string; amount: number; no_operativo: boolean }>;
   const porCat = new Map<string, { categoria: string; cnt: number; total: number; no_operativo: boolean }>();

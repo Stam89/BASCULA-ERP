@@ -6132,3 +6132,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 /* Trabajo en un equipo: máquinas de Transporte y el cruce con lo que se le debe */
 .teq-chips button.teq-chip--tr { border-color: #fcd34d; background: #fffbeb; }
 .teq-tr { display: grid; gap: 3px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; background: #fffbeb; border: 1px solid #fcd34d; color: #78350f; font-size: 13px; }
+
+/* Caja › ¿De quién es este gasto? (la Matriz paga un gasto de un socio) */
+.cj-dequien { display: grid; gap: 8px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid #e5e7eb; border-radius: 10px; }
+.cj-dequien.is-socio { background: #eff6ff; border-color: #93c5fd; }
+.cj-dequien__tit { font-size: 13px; font-weight: 700; }
+.cj-dequien__ops { display: flex; flex-wrap: wrap; gap: 8px; }
+.cj-dequien__op { padding: 8px 14px !important; border-radius: 999px !important; border: 1.5px solid #d1d5db !important; background: #fff !important; color: #111827 !important; font-size: 13px !important; font-weight: 600; cursor: pointer; }
+.cj-dequien__op.is-on { border-color: #2563eb !important; background: #2563eb !important; color: #fff !important; }
+.cj-dequien__info { color: #1e3a8a; font-size: 12.5px; line-height: 1.45; }

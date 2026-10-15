@@ -10,6 +10,7 @@ import { reversarEntradaRepuestosDeCaja, reversarEntradaRepuestosDeCredito, devo
 import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/maquinas.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { anularGastoTransporte } from "../../services/gasto-transporte.js";
+import { cruzarGastoPorSocio, cuantoLeDebeAlSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -665,7 +666,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
     if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
     // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
-    if (m.category === "PAGO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
+    if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
 
@@ -791,6 +792,13 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
+// «¿De quién es este gasto?»: cuánto le debe hoy la Matriz a ese socio (se descontará del gasto).
+cashRouter.get("/gasto-por-socio/:socioId", asyncRoute(async (req, res) => {
+  await exigirMatriz(req);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId!;
+  res.json({ le_debe: await cuantoLeDebeAlSocio(pool, accionistaId, String(req.params.socioId)) });
+}));
+
 // ── Registrar movimiento en una caja específica ─────────────────────────────────
 // «Materiales consumibles» (pernos, soldadura…): compra directa que se aplica ya
 // a una máquina, sin pasar por bodega. Exige el equipo / máquina.
@@ -857,8 +865,18 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     // el egreso queda en su hoja de vida. Obligatorio en «Materiales consumibles».
     maquina_id: z.string().uuid().optional(),
     // Efectivo o banco (solo cuenta en una caja MIXTA; las otras tienen un solo medio).
-    medio: z.enum(["EFECTIVO", "BANCO"]).optional()
+    medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+    // «¿De quién es este gasto?»: la caja de la Matriz paga un gasto de un SOCIO (sale en los gastos del socio,
+    // se descuenta de lo que la Matriz le debía y el resto se lo debe el socio).
+    por_cuenta_de: z.string().uuid().optional()
   }).parse(req.body);
+  if (body.por_cuenta_de) {
+    if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede ser gasto de otro socio.");
+    if (body.modalidad_pago === "CREDITO" || body.es_fondo || body.activo_fijo || (body.sacos?.length ?? 0) > 0 || body.maquina_id) {
+      throw new ApiError(400, "El gasto de un socio se registra de contado y sin fondo, activo fijo, sacos ni máquina.");
+    }
+    await exigirMatriz(req);
+  }
   // Un movimiento manual no se enlaza a mano a cuentas, ventas, nómina…: cada uno tiene su flujo (si no, al anularlo
   // devolvería saldo a una cuenta que nunca se pagó).
   if (body.reference_type || body.reference_id) throw new ApiError(400, "Un movimiento manual no se enlaza a otro registro: usa el flujo de ese módulo.");
@@ -928,20 +946,28 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
     await validarCategoriaManual(client, body.category, body.movement, accionistaId);
+    const socio = body.por_cuenta_de ? await validarSocioDelGasto(client, accionistaId!, body.por_cuenta_de) : null;
     if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
+    const catNombre = socio ? (await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category])).rows[0]?.nombre ?? body.category : null;
+    const conceptoSocio = socio ? [catNombre, body.subcategoria?.trim(), body.description?.trim()].filter(Boolean).join(" · ") : "";
     const mov = await client.query(
       `INSERT INTO cash_movements
         (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by,
-         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id, medio)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id, medio, por_cuenta_de, categoria_por_cuenta)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
-      [req.params.id, body.movement, body.category, body.amount, body.description, null, null, body.created_by,
+      [req.params.id, body.movement, socio ? "GASTO_POR_SOCIO" : body.category, body.amount,
+       socio ? `Gasto de ${socio.name}: ${conceptoSocio}` : body.description, null, null, body.created_by,
        body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado,
-       proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio)]
+       proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio), socio?.id ?? null, socio ? body.category : null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
+    if (socio) {
+      const cruce = await cruzarGastoPorSocio(client, { movimientoId: mov.rows[0].id, pagadorId: accionistaId!, socio, monto: body.amount, concepto: conceptoSocio });
+      return { ...mov.rows[0], gasto_por_socio: { socio: socio.name, ...cruce } };
+    }
     // Equipo / máquina: el egreso entra a su hoja de vida (Materiales consumibles…).
     // Queda enlazado como un mantenimiento: si se anula, sale de la hoja de vida;
     // si es un fondo, al liquidarlo la hoja de vida toma el gasto real.

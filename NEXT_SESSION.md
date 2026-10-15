@@ -77,6 +77,12 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 
 ## Estado funcional reciente
 
+### 🤝 Caja fase 3b: «¿De quién es este gasto?» (2026-10-15, pedido del dueño)
+- En la caja de la MATRIZ, al registrar un egreso común se elige «De CEYRO» o «De ROVINSON/STALYN». Si es de un socio: egreso `GASTO_POR_SOCIO` (no operativo para la Matriz) con `por_cuenta_de` + `categoria_por_cuenta` (migración 20261104).
+- Se descuenta primero de lo que la Matriz le debía al socio (pares por referencia, queda en `cruces_entre_socios`) y el resto es deuda `pago_por_socio` (CxP socio ↔ CxC Matriz). Anular el egreso lo deshace (`anularPagoPorSocio`). Servicio `services/gasto-por-socio.ts`; GET `/cash/gasto-por-socio/:socioId`.
+- El gasto sale en `/reports/expenses`, `/reports/summary` y estado de resultados (`finance.ts`) del socio con su categoría real. Solo contado (sin crédito, fondo, activo, sacos ni máquina). Simulacro `gasto_por_socio`.
+- Caja fase 3a (2026-10-15): máquinas de Transporte en «Trabajo en un equipo» (`services/gasto-transporte.ts`, migración 20261103). Pendiente: fase 4 (alertas, duración de piezas, fondos visibles, arqueo por billetes, gastos fijos mensuales, precio de referencia) y fase 5 (foto opcional).
+
 ### 📤 CxP explicables y Liquidaciones responsive (2026-10-14)
 
 - `GET /cash/payables` devuelve `detalle_humano` para cuentas actuales e historicas sin modificar datos: fomento indica agricultor y socio acreedor; flete/cosechadora indica agricultor y equipo/prestador; el pago normal indica a quien se compro el arroz.
