@@ -104,12 +104,32 @@ ordersRouter.get("/cola-global", asyncRoute(async (_req, res) => {
                 SELECT m.product_id, SUM(m.quantity)::float AS qq
                   FROM inventory_movements m
                  WHERE m.accionista_id = o.accionista_id AND m.ownership = 'OWNED'
-                   -- Lo que quedó ALLÁ donde el proveedor de envejecido no se despacha desde la piladora.
-                   AND m.warehouse_id NOT IN (SELECT id FROM warehouses WHERE type = 'EXTERNO')
+                   -- Incluye lo que quedó ALLÁ (selección/envejecido): con el informe ya se puede vender y el
+                   -- transportista lo retira allá. Su detalle va en alla_dueno.
                    AND m.product_id IN (SELECT i.inventory_product_id FROM sales_order_items i WHERE i.order_id = o.id)
                  GROUP BY m.product_id
               ) x
-            ), '{}'::json) AS stock_dueno
+            ), '{}'::json) AS stock_dueno,
+            COALESCE((
+              SELECT json_agg(json_build_object('product_id', x.product_id, 'bodega', x.bodega, 'qq', x.qq) ORDER BY x.bodega)
+                FROM (
+                SELECT m.product_id, w.name AS bodega, SUM(m.quantity)::float AS qq
+                  FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id AND w.type = 'EXTERNO'
+                 WHERE m.accionista_id = o.accionista_id AND m.ownership = 'OWNED'
+                   AND m.product_id IN (SELECT i.inventory_product_id FROM sales_order_items i WHERE i.order_id = o.id)
+                 GROUP BY m.product_id, w.name
+                HAVING SUM(m.quantity) > 0.0005
+              ) x
+            ), '[]'::json) AS alla_dueno,
+            COALESCE((
+              SELECT json_agg(json_build_object('product_id', x.product_id, 'bodega', x.bodega, 'qq', x.qq) ORDER BY x.bodega)
+                FROM (
+                SELECT m.product_id, w.name AS bodega, (-SUM(m.quantity))::float AS qq
+                  FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id AND w.type = 'EXTERNO'
+                 WHERE m.reference_type = 'sales_order' AND m.reference_id = o.id AND m.movement = 'OUT'
+                 GROUP BY m.product_id, w.name
+              ) x
+            ), '[]'::json) AS retirado_alla
      FROM sales_orders o
      JOIN customers c ON c.id = o.customer_id
      JOIN accionistas a ON a.id = o.accionista_id
@@ -259,7 +279,7 @@ async function validarRespaldoDelPedido(
         WHERE accionista_id = $1
           AND ownership = 'OWNED'
           AND product_id = ANY($2::uuid[])
-          AND warehouse_id NOT IN (SELECT id FROM warehouses WHERE type = 'EXTERNO')
+          -- Lo que quedó ALLÁ (selección/envejecido con informe) también respalda: se retira allá al despachar.
         GROUP BY product_id`,
       [accionistaId, stockIds]
     );
@@ -321,15 +341,18 @@ async function crearCobroDelPedido(
 // el saldo real en bodega antes del despacho. La cantidad del pedido ya está en
 // QUINTALES. IDEMPOTENTE: si el pedido ya tiene su salida registrada, no vuelve a
 // descontar (evita doble descuento). El despacho posterior usa omitirInventario.
+type RetiroAlla = { producto: string; bodega: string; qq: number };
+
 async function descontarInventarioPreparacion(
   client: PoolClient,
   opts: { orderId: string; accionistaId: string | undefined; warehouseId: string; createdBy?: string | null }
-): Promise<void> {
+): Promise<RetiroAlla[]> {
   const ya = await client.query(
     "SELECT 1 FROM inventory_movements WHERE reference_type = 'sales_order' AND reference_id = $1 AND movement = 'OUT' LIMIT 1",
     [opts.orderId]
   );
-  if (ya.rowCount) return; // ya descontado en una preparación previa
+  if (ya.rowCount) return []; // ya descontado en una preparación previa
+  const retiros: RetiroAlla[] = [];
 
   const items = await client.query(
     "SELECT inventory_product_id, product_id, quantity FROM sales_order_items WHERE order_id = $1",
@@ -343,16 +366,51 @@ async function descontarInventarioPreparacion(
   }
   for (const [productId, qq] of [...porProducto.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (!(qq > 0)) continue;
-    await consumeInventoryFIFO(client, {
-      productId,
-      warehouseId: opts.warehouseId,
-      accionistaId: opts.accionistaId,
-      quantity: qq,
-      referenceType: "sales_order",
-      referenceId: opts.orderId,
-      createdBy: opts.createdBy ?? null
-    });
+    // Sale primero de la bodega de la piladora; si no alcanza, lo que falta se RETIRA ALLÁ (lo que quedó
+    // donde el proveedor de selección/envejecido: el transportista lo recoge allá y lo lleva al cliente).
+    const enPiladora = await client.query(
+      `SELECT COALESCE(SUM(quantity), 0)::float AS q FROM inventory_movements
+        WHERE product_id = $1 AND warehouse_id = $2 AND accionista_id = $3 AND ownership = 'OWNED'`,
+      [productId, opts.warehouseId, opts.accionistaId ?? null]
+    );
+    const dePiladora = Math.min(qq, Math.max(0, round2(Number(enPiladora.rows[0]?.q ?? 0))));
+    let falta = round2(qq - dePiladora);
+    const allas = falta > 0.001 ? (await client.query(
+      `SELECT w.id, w.name, SUM(m.quantity)::float AS q, MIN(m.created_at) AS desde
+         FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id AND w.type = 'EXTERNO'
+        WHERE m.product_id = $1 AND m.accionista_id = $2 AND m.ownership = 'OWNED'
+        GROUP BY w.id, w.name HAVING SUM(m.quantity) > 0.0005
+        ORDER BY MIN(m.created_at), w.name`,
+      [productId, opts.accionistaId ?? null]
+    )).rows : [];
+    const tramos: { warehouseId: string; qq: number; bodega?: string }[] = [];
+    for (const a of allas) {
+      if (falta <= 0.001) break;
+      const toma = round2(Math.min(falta, Number(a.q)));
+      tramos.push({ warehouseId: a.id, qq: toma, bodega: a.name });
+      falta = round2(falta - toma);
+    }
+    // Si ni con lo de allá alcanza, la piladora toma todo y consumeInventoryFIFO avisa el faltante (como antes).
+    const usarAlla = falta <= 0.001 && tramos.length > 0;
+    const salidas = usarAlla
+      ? [...(dePiladora > 0.001 ? [{ warehouseId: opts.warehouseId, qq: dePiladora }] : []), ...tramos]
+      : [{ warehouseId: opts.warehouseId, qq }];
+    const nombre = usarAlla ? (await client.query("SELECT name FROM products WHERE id = $1", [productId])).rows[0]?.name ?? "producto" : "";
+    for (const s of salidas) {
+      await consumeInventoryFIFO(client, {
+        productId,
+        warehouseId: s.warehouseId,
+        accionistaId: opts.accionistaId,
+        quantity: s.qq,
+        referenceType: "sales_order",
+        referenceId: opts.orderId,
+        createdBy: opts.createdBy ?? null,
+        notes: s.bodega ? `Retirado allá (${s.bodega.replace(/^Allá: /, "")}) por el transportista para el pedido` : null
+      });
+      if (s.bodega) retiros.push({ producto: nombre, bodega: s.bodega, qq: s.qq });
+    }
   }
+  return retiros;
 }
 
 // Restaura el inventario descontado en la preparación (al revertir la preparación
@@ -480,6 +538,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
   }).parse(req.body);
 
   let sacos: ResultadoSacos | null = null;
+  let retirosAlla: RetiroAlla[] = [];
   const result = await inTransaction(async (client) => {
     const order = await client.query(
       "SELECT id, status FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
@@ -501,7 +560,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
         warehouseId = wh.rows[0]?.id ?? null;
       }
       if (!warehouseId) throw new ApiError(400, "No se encontró la bodega de producto terminado para descontar el inventario.");
-      await descontarInventarioPreparacion(client, {
+      retirosAlla = await descontarInventarioPreparacion(client, {
         orderId: req.params.id as string,
         accionistaId,
         warehouseId,
@@ -527,7 +586,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     );
     return updated.rows[0];
   });
-  res.json(sacos ? { ...result, sacos } : result);
+  res.json({ ...result, ...(sacos ? { sacos } : {}), retiros_alla: retirosAlla });
 }));
 
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
@@ -641,6 +700,13 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
 
     const customer = await client.query("SELECT full_name FROM customers WHERE id = $1", [order.rows[0].customer_id]);
     const totalQqDespachado = round2(items.rows.reduce((sum, item) => sum + Number(item.quantity || 0), 0));
+    // Lo que el transportista retiró ALLÁ (selección/envejecido) no lo carga la cuadrilla de la piladora.
+    const qqRetiradoAlla = round2(Number((await client.query(
+      `SELECT COALESCE(-SUM(m.quantity), 0)::float AS q FROM inventory_movements m
+         JOIN warehouses w ON w.id = m.warehouse_id AND w.type = 'EXTERNO'
+        WHERE m.reference_type = 'sales_order' AND m.reference_id = $1 AND m.movement = 'OUT'`,
+      [req.params.id]
+    )).rows[0]?.q ?? 0));
 
     // Flete con carro de Transporte y Cosechadora: CxC de Transporte + Por Pagar del que vende.
     const flete = body.flete
@@ -655,7 +721,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       order_number: order.rows[0].order_number,
       guia_number: order.rows[0].guia_number,
       customer_name: customer.rows[0]?.full_name ?? null,
-      quantity_qq: totalQqDespachado,
+      quantity_qq: Math.max(0, round2(totalQqDespachado - qqRetiradoAlla)),
       work_date: order.rows[0].delivered_at ? new Date(order.rows[0].delivered_at).toISOString().slice(0, 10) : null,
       created_by: body.created_by ?? null,
       accionista_id: accionistaId as string

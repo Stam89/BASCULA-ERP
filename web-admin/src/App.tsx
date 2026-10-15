@@ -1323,6 +1323,9 @@ type SalesOrder = {
   accionista_name?: string | null;
   accionista_tipo?: string | null;
   stock_dueno?: Record<string, number> | null;
+  // Lo que el dueño tiene ALLÁ (selección/envejecido con informe) y lo que este pedido ya retiró allá.
+  alla_dueno?: Array<{ product_id: string; bodega: string; qq: number }> | null;
+  retirado_alla?: Array<{ product_id: string; bodega: string; qq: number }> | null;
 };
 
 /** Resultado de pasar un lote a otro accionista, con la deuda que genera. */
@@ -12134,6 +12137,7 @@ Motivo (obligatorio):`, "");
     const location = (orderPickLocation[order.id] ?? order.picking_location ?? "").trim() || ubicacionSugerida;
     const prep = await apiPatch<SalesOrder & {
       sacos?: { descontados: Array<{ tipo: string; sacos: number; nuevo_stock: number }>; sin_saco: Array<{ producto: string; peso_lb: number; sacos: number }> };
+      retiros_alla?: Array<{ producto: string; bodega: string; qq: number }>;
     }>(`/orders/${order.id}/prepare`, {
       prepared,
       picking_location: location || undefined,
@@ -12151,6 +12155,9 @@ Motivo (obligatorio):`, "");
         : `Pedido ${order.order_number} devuelto a Pendiente por cargar · Stock y sacos restaurados`,
       "success"
     );
+    if (prepared && prep.retiros_alla?.length) {
+      addToast(`🚚 El transportista retira allá: ${prep.retiros_alla.map((r) => `${r.qq.enReal()} QQ de ${r.producto} en ${r.bodega.replace(/^Allá: /, "")}`).join(", ")}. Ya se descontó de lo que quedó allá.`, "warn");
+    }
     const negativos = prep.sacos?.descontados.filter((d) => d.nuevo_stock < 0) ?? [];
     if (negativos.length) {
       addToast(`⚠️ Faltan sacos: ${negativos.map((d) => `${d.tipo} quedó en ${d.nuevo_stock}`).join(", ")}. Registra la compra en Caja.`, "warn");
@@ -17241,7 +17248,28 @@ Motivo (obligatorio):`, "");
                     // Stock propio del DUEÑO del pedido (cola global); si no viene, el del activo.
                     const stockDueno = (id: string) => o.stock_dueno
                       ? Number(o.stock_dueno[id] ?? 0)
-                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED" && r.warehouse_type !== "EXTERNO").reduce((a, r) => a + Number(r.quantity), 0);
+                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED").reduce((a, r) => a + Number(r.quantity), 0);
+                    // Lo que hay ALLÁ (selección/envejecido) de cada producto, por proveedor.
+                    const allaDe = (id: string) => o.alla_dueno
+                      ? o.alla_dueno.filter((x) => x.product_id === id)
+                      : stock.filter((r) => r.product_id === id && r.ownership === "OWNED" && r.warehouse_type === "EXTERNO" && Number(r.quantity) > 0.0005)
+                          .map((r) => ({ product_id: id, bodega: r.warehouse_name, qq: Number(r.quantity) }));
+                    // Qué tendrá que retirar el transportista allá: lo que no alcanza en la piladora.
+                    const retiroAllaPrevisto: Array<{ producto: string; bodega: string; qq: number }> = [];
+                    for (const [id, requerido] of demandaPorProducto.entries()) {
+                      const alla = allaDe(id);
+                      const enPiladora = round2(stockDueno(id) - alla.reduce((a, x) => a + Number(x.qq), 0));
+                      let falta = round2(requerido - Math.max(0, enPiladora));
+                      for (const x of alla) {
+                        if (falta <= 0.001) break;
+                        const toma = round2(Math.min(falta, Number(x.qq)));
+                        retiroAllaPrevisto.push({ producto: products.find((p) => p.id === id)?.name ?? "producto", bodega: x.bodega, qq: toma });
+                        falta = round2(falta - toma);
+                      }
+                    }
+                    const retiroAlla = (o.prepared_at
+                      ? (o.retirado_alla ?? []).map((x) => ({ producto: products.find((p) => p.id === x.product_id)?.name ?? "producto", bodega: x.bodega, qq: Number(x.qq) }))
+                      : retiroAllaPrevisto).filter((x) => x.qq > 0.001);
                     const dispUbicQq = round2([...invIdsPedido].reduce((s, id) => s + stockDueno(id), 0));
                     const faltanteTerminadoQq = round2([...demandaPorProducto.entries()].reduce((total, [id, requerido]) =>
                       total + Math.max(0, requerido - round2(stockDueno(id)))
@@ -17328,6 +17356,14 @@ Motivo (obligatorio):`, "");
                           />
                         )}
                       </div>
+
+                      {retiroAlla.length > 0 && (
+                        <div style={{ background: "#eff6ff", border: "1px solid #93c5fd", borderRadius: 8, padding: "8px 12px", color: "#1e3a8a", fontSize: 12.5, fontWeight: 700 }}>
+                          🚚 {o.prepared_at ? "El transportista retira allá" : "Al preparar, esto se retira allá"}:{" "}
+                          {retiroAlla.map((x) => `${x.qq.enReal()} QQ de ${x.producto} en ${x.bodega.replace(/^Allá: /, "")}`).join(" · ")}
+                          <div style={{ fontWeight: 500, fontSize: 11.5, marginTop: 2 }}>Ya tiene el informe de selección: se vende desde allá y baja lo que quedó allá.</div>
+                        </div>
+                      )}
 
                       {!listo && !listoParaPreparar && (
                         <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "8px 12px", color: "#92400e", fontSize: 12.5, fontWeight: 700 }}>

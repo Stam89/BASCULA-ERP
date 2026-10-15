@@ -183,6 +183,7 @@ Invoke-WebRequest -UseBasicParsing http://localhost:4000/health
 - Si el producto ya llegó se elige «El producto ya llegó a la piladora»; todavía se puede indicar una parte que permaneció donde el proveedor. Más adelante, el panel existente «Traer a piladora» mueve ese saldo externo al inventario físico sin duplicarlo.
 - Inventario ya no mezcla ese saldo externo con el físico: las categorías normales y el Dashboard cuentan solo bodegas de planta; cuando exista saldo externo aparece una categoría naranja independiente «Fuera de piladora», detallada por producto y proveedor. Selección conserva además la comparación `Piladora / Allá / Total`.
 - No se modificó la BD ni el endpoint de cierre: se aprovechó `qty_alla` y la bodega externa ya existentes. Backend/frontend compilan, 220 pruebas pasan y preflight no reporta errores críticos. La separación de la guardia se verificó visualmente; no se crearon lotes reales para probar la recepción.
+- (2026-10-14) Lo que quedó ALLÁ con informe YA SE VENDE: el respaldo del pedido y la Cola de Despachos cuentan piladora + allá; al «Confirmar preparación» sale primero de la piladora y lo que falta se retira de «Allá: <proveedor>» (nota en el movimiento, aviso «🚚 el transportista retira allá» en la tarjeta y en `retiros_alla`); la cuadrilla no cobra lo retirado allá. Simulacro `venta_desde_alla.mjs`.
 
 ### 🌙 Guardia semanal del secador sin túneles (2026-10-12)
 

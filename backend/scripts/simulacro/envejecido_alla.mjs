@@ -57,7 +57,8 @@ try {
   const ped = exigir(await api("POST", "/orders", { customer_id: cli.id, items: [{ product_id: arroz, inventory_product_id: arroz, quantity: 1, unit_price: 30 }] }, acc), "B1. pedido pendiente");
   const cola = (await api("GET", "/orders/cola-global", undefined, acc)).data;
   const enCola = (Array.isArray(cola) ? cola : cola.rows ?? []).find((o) => o.id === ped.id);
-  check(enCola && r3(enCola.stock_dueno?.[arroz] ?? 0) === await piladora(arroz), "B2. el stock que ve Ventas es solo el de la piladora (sin lo de allá)", { ventas: enCola?.stock_dueno?.[arroz], piladora: await piladora(arroz), alla: await alla(arroz) });
+  // Con el informe, lo de allá YA se vende (el transportista lo retira allá): Ventas ve piladora + allá.
+  check(enCola && r3(enCola.stock_dueno?.[arroz] ?? 0) === r3(await piladora(arroz) + await alla(arroz)) && (enCola.alla_dueno ?? []).length > 0, "B2. el stock que ve Ventas es piladora + lo de allá (con su proveedor)", { ventas: enCola?.stock_dueno?.[arroz], piladora: await piladora(arroz), alla: await alla(arroz) });
 
   // ── C. Traer a la piladora ──
   const pA = await piladora(arroz), aA = await alla(arroz);
