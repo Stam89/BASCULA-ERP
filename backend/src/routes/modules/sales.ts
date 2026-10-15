@@ -292,6 +292,71 @@ async function crearVentaInterna(
   }
 }
 
+// 📊 HISTORIAL DE VENTAS de TODOS los socios a los que el usuario tiene acceso (el administrador ve todos),
+// con sus líneas (producto, saco/presentación, QQ), los sacos que se descontaron, el cobro de la Matriz por
+// sacos (con su detalle por tramo), el flete y la forma de pago. Solo lectura.
+salesRouter.get("/historial", asyncRoute(async (req, res) => {
+  const user = (req as AuthenticatedRequest).user;
+  const desde = typeof req.query.desde === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.desde) ? req.query.desde : null;
+  const hasta = typeof req.query.hasta === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.hasta) ? req.query.hasta : null;
+  const esAdmin = user?.role_name === "ADMINISTRADOR";
+  const result = await pool.query(
+    `SELECT s.id, s.sale_number, s.created_at, s.total_amount::float AS total_amount, s.sale_status,
+            s.accionista_id, a.name AS accionista_name, a.tipo AS accionista_tipo,
+            c.full_name AS customer_name,
+            CASE WHEN ar.id IS NULL OR ar.status = 'CANCELLED' THEN s.payment_status::text
+                 WHEN ar.balance <= 0.005 THEN 'PAID'
+                 WHEN ar.balance + 0.005 < ar.amount THEN 'PARTIAL'
+                 ELSE 'PENDING' END AS payment_status,
+            ar.balance::float AS saldo_pendiente,
+            o.id AS order_id, o.order_number, o.guia_number, o.payment_method AS forma_pago_pedido,
+            o.flete_monto::float AS flete_monto, fa.nombre AS flete_activo_nombre,
+            (SELECT cm.medio FROM cash_movements cm WHERE cm.reference_type = 'sales' AND cm.reference_id = s.id ORDER BY cm.created_at LIMIT 1) AS medio_cobro,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                       'producto', p.name, 'presentacion', i.presentation_name, 'qq', i.quantity::float,
+                       'precio', i.unit_price::float, 'total', i.total::float,
+                       'saco_propio', sk.tipo) ORDER BY i.id)
+                FROM sales_order_items i JOIN products p ON p.id = i.product_id
+                LEFT JOIN sack_inventory sk ON sk.id = i.sack_id
+               WHERE i.order_id = o.id
+            ), (
+              SELECT json_agg(json_build_object('producto', p.name, 'presentacion', NULL, 'qq', si.quantity::float,
+                       'precio', si.unit_price::float, 'total', si.total::float, 'saco_propio', NULL))
+                FROM sale_items si JOIN products p ON p.id = si.product_id WHERE si.sale_id = s.id
+            ), '[]'::json) AS items,
+            COALESCE((
+              SELECT json_agg(x ORDER BY x.tipo) FROM (
+                SELECT sk.tipo, sk.accionista_id IS NULL AS de_matriz,
+                       SUM(CASE WHEN sm.movement = 'SALIDA' THEN sm.cantidad ELSE -sm.cantidad END)::float AS sacos
+                  FROM sack_movements sm JOIN sack_inventory sk ON sk.id = sm.sack_id
+                 WHERE o.id IS NOT NULL AND sm.ref_order = o.id
+                 GROUP BY sk.tipo, sk.accionista_id
+                HAVING SUM(CASE WHEN sm.movement = 'SALIDA' THEN sm.cantidad ELSE -sm.cantidad END) <> 0
+              ) x
+            ), '[]'::json) AS sacos,
+            (SELECT json_build_object('monto', mpc.monto::float, 'detalle', mpc.detalle, 'estado', mpc.status)
+               FROM matriz_packaging_charges mpc WHERE o.id IS NOT NULL AND mpc.order_id = o.id
+              ORDER BY mpc.created_at DESC LIMIT 1) AS cargo_sacos
+       FROM sales s
+       JOIN accionistas a ON a.id = s.accionista_id
+       LEFT JOIN customers c ON c.id = s.customer_id
+       LEFT JOIN sales_orders o ON o.sale_id = s.id
+       LEFT JOIN campo_activos fa ON fa.id = o.flete_activo_id
+       LEFT JOIN LATERAL (
+         SELECT x.id, x.status, x.amount, x.balance FROM accounts_receivable x
+          WHERE x.sale_id = s.id ORDER BY x.created_at DESC LIMIT 1
+       ) ar ON true
+      WHERE ($1::boolean OR s.accionista_id IN (SELECT ua.accionista_id FROM user_accionistas ua WHERE ua.user_id = $2))
+        AND ($3::date IS NULL OR (s.created_at AT TIME ZONE 'America/Guayaquil')::date >= $3::date)
+        AND ($4::date IS NULL OR (s.created_at AT TIME ZONE 'America/Guayaquil')::date <= $4::date)
+      ORDER BY s.created_at DESC
+      LIMIT 500`,
+    [esAdmin, user?.id ?? null, desde, hasta]
+  );
+  res.json(result.rows);
+}));
+
 // GET todas las ventas con detalles de cliente
 salesRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;

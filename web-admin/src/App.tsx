@@ -18,6 +18,7 @@ import { BuscadorCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
+import { HistorialVentas } from "./components/HistorialVentas";
 import { CruceSocios } from "./components/CruceSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
@@ -1742,6 +1743,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
     { key: "nuevo", label: "Nuevo Pedido" },
     { key: "despachos", label: "Cola de Despachos" },
     { key: "guias", label: "Guías de Remisión" },
+    { key: "historial", label: "Historial de ventas" },
   ],
   Seleccion: [
     { key: "nuevo", label: "Nuevo Envío" },
@@ -3656,7 +3658,7 @@ export function App() {
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   // Ventas se divide en dos sub-vistas: "nuevo" (POS limpio, tomar pedido) y
   // "despachos" (cola de carga/fulfillment para bodega).
-  const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias">("nuevo");
+  const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias" | "historial">("nuevo");
   // Modal de "Cantidades por Despachar y Entregar" (saldos pendientes de la cola).
   const [pendientesModalOpen, setPendientesModalOpen] = useState(false);
   // Pedido a enfocar/resaltar al pulsar "⚡ Ir a Despachar" desde el modal.
@@ -16847,7 +16849,8 @@ Motivo (obligatorio):`, "");
               {([
                 { key: "nuevo", label: "🛒 Nuevo Pedido" },
                 { key: "despachos", label: "🚚 Cola de Despachos" },
-                { key: "guias", label: "📄 Guías de Remisión" }
+                { key: "guias", label: "📄 Guías de Remisión" },
+                { key: "historial", label: "📊 Historial de ventas" }
               ] as const).filter((t) => puedeVerSubTab("Ventas", t.key)).map((t) => {
                 const active = ventasView === t.key;
                 return (
@@ -18020,6 +18023,12 @@ Motivo (obligatorio):`, "");
             )}
 
             {/* ===== 📄 GUÍAS DE REMISIÓN (formato legal EC) ===== */}
+            {ventasView === "historial" && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <HistorialVentas socios={accionistas.map((a) => ({ id: a.id, name: a.name }))} />
+              </div>
+            )}
+
             {ventasView === "guias" && (
             <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "minmax(0, 1.4fr) minmax(0, 1fr)", gap: 16, alignItems: "start" }}>
               {/* Formulario por bloques (simula el documento físico) */}
