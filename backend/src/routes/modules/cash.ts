@@ -103,9 +103,11 @@ async function validarCategoriaManual(
 }
 
 // ── Subcategorías de gasto (memoria para el datalist del form de Caja) ───────
-cashRouter.get("/subcategorias", asyncRoute(async (_req, res) => {
+cashRouter.get("/subcategorias", asyncRoute(async (req, res) => {
   try {
-    const r = await pool.query("SELECT nombre FROM subcategorias_gastos ORDER BY lower(btrim(nombre)) ASC");
+    const r = await pool.query("SELECT nombre, categoria FROM subcategorias_gastos ORDER BY lower(btrim(nombre)) ASC");
+    // ?con_categoria=1 → [{nombre, categoria}] (buscador de Caja); sin él, la lista de nombres de siempre.
+    if (req.query.con_categoria === "1") { res.json(r.rows); return; }
     res.json(r.rows.map((x: { nombre: string }) => x.nombre));
   } catch {
     res.json([]); // sin tabla aún → lista vacía (no rompe el form)

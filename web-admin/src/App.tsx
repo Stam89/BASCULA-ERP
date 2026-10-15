@@ -14,7 +14,7 @@ import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, Sac
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { PrestamosBancarios } from "./components/PrestamosBancarios";
-import { BuscadorCombo } from "./components/BuscadorCombo";
+import { BuscadorCombo, type OpcionCombo } from "./components/BuscadorCombo";
 import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
@@ -2721,6 +2721,18 @@ export function App() {
   const [proveedoresCaja, setProveedoresCaja] = useState<Array<{ id: string; name: string }>>([]);
   const [cajaCreditos, setCajaCreditos] = useState<CajaCredito[]>([]);
   const [subcategoriasGastos, setSubcategoriasGastos] = useState<string[]>([]);
+  // Subcategorías CON su categoría: el buscador de «Nuevo movimiento» sugiere «Llantas montacarga → Montacarga».
+  const [subcatsConCategoria, setSubcatsConCategoria] = useState<Array<{ nombre: string; categoria: string | null }>>([]);
+  // Categorías usadas hace poco en Caja (por tipo), para elegirlas con un toque.
+  const [cajaRecientes, setCajaRecientes] = useState<Record<string, string[]>>(() => {
+    try { return JSON.parse(localStorage.getItem("bascula-erp:caja-recientes") ?? "{}") ?? {}; } catch { return {}; }
+  });
+  const recordarCategoriaCaja = (tipo: string, codigo: string) => setCajaRecientes((cur) => {
+    const lista = [codigo, ...(cur[tipo] ?? []).filter((c) => c !== codigo)].slice(0, 6);
+    const n = { ...cur, [tipo]: lista };
+    try { localStorage.setItem("bascula-erp:caja-recientes", JSON.stringify(n)); } catch { /* sin almacenamiento */ }
+    return n;
+  });
   // Modal de liquidación de un fondo a rendir cuentas.
   // Liquidar un fondo: gasto real + (solo fondos de «Repuestos») las piezas que se
   // compraron con ese dinero, que entran a bodega.
@@ -9727,6 +9739,7 @@ export function App() {
     const movement = form.get("movement") as "INCOME" | "EXPENSE";
     const category = form.get("category") as string;
     const amount = round2(Number(form.get("amount"))); // 2 decimales exactos
+    if (!category && !(movement === "INCOME" && movReceivableId)) throw new Error("Escribe en el buscador qué se pagó o qué entró y elígelo");
     // Enlace directo: "Pago a Agricultor" con una liquidación vinculada usa el
     // flujo de pago de cuentas (descuenta caja + abona la liquidación, un solo
     // asiento; la relación queda cash_movement -> accounts_payable -> liquidation).
@@ -9902,6 +9915,7 @@ export function App() {
 
   async function loadSubcategorias() {
     try { setSubcategoriasGastos(await apiGet<string[]>("/cash/subcategorias")); } catch { /* sin memoria aún */ }
+    apiGet<Array<{ nombre: string; categoria: string | null }>>("/cash/subcategorias?con_categoria=1").then(setSubcatsConCategoria).catch(() => undefined);
   }
 
   // Liquida un fondo provisional (rendir cuentas). El backend registra el vuelto
@@ -18878,24 +18892,67 @@ Motivo (obligatorio):`, "");
                           : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                         const esGuiada = (codigo: string) => codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
                           || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo);
-                        const rapidas = visibles.filter((c) => !esGuiada(c.codigo));
-                        const guiadas = visibles.filter((c) => esGuiada(c.codigo));
+                        // ── Buscador único: categoría, subcategoría («Llantas montacarga» → Montacarga) o, en un
+                        //    ingreso, la cuenta por cobrar que se está cobrando. Recientes con un toque. ──
+                        const elegirCategoria = (codigo: string, sub = "") => {
+                          setMovCategory(codigo);
+                          setMovSubcategoria(sub && cashCategoryAllowsSubcategory(codigo, cashCategories) && !CATEGORIAS_SIN_SUBCATEGORIA.has(codigo) ? sub : "");
+                          setMovPayableId("");
+                          setMovMaquinaId("");
+                          setMovReceivableId("");
+                          recordarCategoriaCaja(movType, codigo);
+                          // Lo siguiente es el monto: el cursor salta ahí (si el formulario de esa categoría lo tiene).
+                          setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 80);
+                        };
+                        const codigosVisibles = new Set(visibles.map((c) => c.codigo));
+                        const cxcPendientes = movType === "INCOME"
+                          ? accountsReceivable.filter((ar) => Number(ar.balance) > 0.001 && !["PAID", "CANCELLED"].includes(String(ar.status ?? "")))
+                          : [];
+                        const opciones: OpcionCombo[] = [
+                          ...visibles.map((c) => ({ key: `CAT:${c.codigo}`, titulo: c.nombre, etiqueta: esGuiada(c.codigo) ? "proceso" : undefined })),
+                          ...subcatsConCategoria.filter((s) => s.categoria && codigosVisibles.has(s.categoria))
+                            .map((s) => ({ key: `SUB:${s.categoria}|${s.nombre}`, titulo: s.nombre, detalle: visibles.find((c) => c.codigo === s.categoria)?.nombre })),
+                          ...cxcPendientes.map((ar) => ({ key: `CXC:${ar.id}`, titulo: `Cobro: ${ar.customer_name || ar.description || "Cliente"}`, detalle: `${ar.customer_name && ar.description ? `${String(ar.description).slice(0, 60)} · ` : ""}saldo ${money(Number(ar.balance))}`, etiqueta: "por cobrar" }))
+                        ];
+                        const recientes = (cajaRecientes[movType] ?? []).filter((c) => codigosVisibles.has(c)).slice(0, 6);
+                        const sugeridas = recientes.length ? recientes : visibles.filter((c) => !esGuiada(c.codigo)).slice(0, 6).map((c) => c.codigo);
+                        const catSel = visibles.find((c) => c.codigo === movCategory) ?? cashCategories.find((c) => c.codigo === movCategory);
+                        const cxcSel = movReceivableId ? accountsReceivable.find((ar) => ar.id === movReceivableId) : null;
                         return (
-                          <select name="category" required={!(movType === "INCOME" && !!movReceivableId)} value={movCategory} onChange={(e: any) => {
-                            const nextCategory = e.target.value;
-                            setMovCategory(nextCategory);
-                            if (!cashCategoryAllowsSubcategory(nextCategory, cashCategories) || CATEGORIAS_SIN_SUBCATEGORIA.has(nextCategory)) setMovSubcategoria("");
-                            setMovPayableId("");
-                            setMovMaquinaId("");
-                          }} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                            <option value="">Seleccione una opción</option>
-                            {rapidas.length > 0 && <optgroup label={movType === "EXPENSE" ? "EGRESOS FRECUENTES" : "INGRESOS"}>
-                              {rapidas.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
-                            </optgroup>}
-                            {guiadas.length > 0 && <optgroup label="COMPRAS Y PROCESOS ESPECIALES">
-                              {guiadas.map((c) => <option key={c.id} value={c.codigo}>{c.nombre}</option>)}
-                            </optgroup>}
-                          </select>
+                          <>
+                            <input type="hidden" name="category" value={movCategory} />
+                            {movCategory || cxcSel ? (
+                              <div className="cjBuscaSel">
+                                <span>
+                                  {cxcSel ? <>🔗 Cobro: <b>{cxcSel.customer_name || cxcSel.description || "Cliente"}</b> · saldo {money(Number(cxcSel.balance))}</>
+                                    : <><b>{catSel?.nombre ?? movCategory}</b>{movSubcategoria ? <small> · {movSubcategoria}</small> : null}</>}
+                                </span>
+                                <button type="button" className="btnGhost" onClick={() => { setMovCategory(""); setMovSubcategoria(""); setMovReceivableId(""); setMovPayableId(""); setMovMaquinaId(""); }}>Cambiar</button>
+                              </div>
+                            ) : (
+                              <>
+                                <BuscadorCombo id="cajaCat" autoFocus max={10}
+                                  placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: diésel, almuerzo, llanta, repuesto…" : "🔍 Escribe qué entró o el cliente que pagó…"}
+                                  opciones={opciones} vacio="Nada coincide: prueba con otra palabra o crea la categoría en Configuración"
+                                  onElegir={(key) => {
+                                    if (key.startsWith("CAT:")) elegirCategoria(key.slice(4));
+                                    else if (key.startsWith("SUB:")) { const [cat, ...rest] = key.slice(4).split("|"); elegirCategoria(cat, rest.join("|")); }
+                                    else if (key.startsWith("CXC:")) {
+                                      setMovReceivableId(key.slice(4)); setMovCategory(""); setMovSubcategoria("");
+                                      setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 80);
+                                    }
+                                  }} />
+                                {sugeridas.length > 0 && (
+                                  <div className="cjBuscaChips" aria-label={recientes.length ? "Recientes" : "Frecuentes"}>
+                                    <small>{recientes.length ? "Recientes:" : "Frecuentes:"}</small>
+                                    {sugeridas.map((codigo) => (
+                                      <button key={codigo} type="button" onClick={() => elegirCategoria(codigo)}>{visibles.find((c) => c.codigo === codigo)?.nombre ?? codigo}</button>
+                                    ))}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </>
                         );
                       })()}
                     </label>
@@ -18908,27 +18965,7 @@ Motivo (obligatorio):`, "");
                       </button>
                     )}
 
-                    {/* INGRESO · Ligar a un servicio (Cuenta por Cobrar): el ingreso se
-                        registra como ABONO y reduce el saldo de esa cuenta. */}
-                    {movType === "INCOME" && (() => {
-                      const pendientes = accountsReceivable.filter((ar) => Number(ar.balance) > 0.001);
-                      if (!pendientes.length) return null;
-                      return (
-                        <label style={{ display: "block", marginBottom: 16 }}>
-                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>🔗 Ligar a un servicio / cuenta por cobrar <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
-                          <select value={movReceivableId} onChange={(e) => { setMovReceivableId(e.target.value); if (e.target.value) { setMovCategory(""); setMovSubcategoria(""); } }}
-                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                            <option value="">— Sin ligar (ingreso normal) —</option>
-                            {pendientes.map((ar) => (
-                              <option key={ar.id} value={ar.id}>
-                                {(ar.customer_name || ar.description || "Cliente")} · saldo {money(Number(ar.balance))}
-                              </option>
-                            ))}
-                          </select>
-                          {movReceivableId && <small className="muted" style={{ display: "block", marginTop: 4 }}>✔ El ingreso abonará a esta cuenta y reducirá su saldo en Por Cobrar (un solo asiento).</small>}
-                        </label>
-                      );
-                    })()}
+                    {/* INGRESO ligado a una cuenta por cobrar: se elige en el buscador del paso 1 («Cobro: cliente»). */}
 
                     {/* Subcategoría: texto libre con memoria (datalist). Se sugieren
                         las escritas antes y se guarda cada término nuevo. */}
