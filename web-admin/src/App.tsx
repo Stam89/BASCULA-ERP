@@ -16971,7 +16971,12 @@ Motivo (obligatorio):`, "");
                     const wl = pres?.weight_lb ? Number(pres.weight_lb) : null;
                     const sacos = sacosDisponiblesDeMarca(saleLineForm.product_id, wl);
                     const hayTerminado = qq > 0;
-                    const hayRespaldo = respaldo.coberturaLibreQq > 0;
+                    // Lo que ya va en ESTE pedido (líneas agregadas, aún sin guardar) también se descuenta.
+                    const enEstePedido = round2(saleLineItems
+                      .filter((it) => (getInventoryProductForBrand(products.find((p) => p.id === it.product_id)?.name || "") || it.product_id) === respaldo.inventoryProductId)
+                      .reduce((sum, it) => sum + qqDeLinea(it), 0));
+                    const libre = Math.max(0, round2(respaldo.coberturaLibreQq - enEstePedido));
+                    const hayRespaldo = libre > 0;
                     return (
                       <div style={{ marginTop: 4, display: "grid", gap: 2 }}>
                         <small style={{ fontWeight: 700, color: hayTerminado ? "#15803d" : "#b45309" }}>
@@ -16988,7 +16993,9 @@ Motivo (obligatorio):`, "");
                           </small>
                         )}
                         <small style={{ fontWeight: 800, color: hayRespaldo ? "#0f766e" : "#b91c1c" }}>
-                          {hayRespaldo ? `Disponible para nuevos pedidos: ${respaldo.coberturaLibreQq.enReal()} QQ` : "Sin producto ni cáscara libre para vender"}
+                          {hayRespaldo
+                            ? `Disponible para nuevos pedidos: ${libre.enReal()} QQ${enEstePedido > 0 ? ` (ya van ${enEstePedido.enReal()} QQ en este pedido)` : ""}`
+                            : enEstePedido > 0 ? `Sin disponible: ya van ${enEstePedido.enReal()} QQ en este pedido` : "Sin producto ni cáscara libre para vender"}
                         </small>
                       </div>
                     );
