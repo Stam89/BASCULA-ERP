@@ -6146,3 +6146,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .versionNueva { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 10000; max-width: calc(100vw - 24px);
   padding: 12px 18px; border: 0; border-radius: 12px; background: #1d4ed8; color: #fff; font-size: 14px; font-weight: 700;
   box-shadow: 0 8px 24px rgba(0,0,0,.25); cursor: pointer; }
+
+/* Liquidación en el celular: la grilla de PC (más abajo en este archivo) le ganaba a la del teléfono y
+   «QQ» y «Precio / QQ» quedaban montados. En el teléfono: ticket arriba y QQ | Precio debajo, mitad y mitad. */
+@media (max-width: 600px) {
+  .liqLayout .liqLine { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 10px; }
+  .liqLayout .liqLine .liqEntryLabel { grid-column: 1 / -1; }
+  .liqLayout .liqLine .liqLineField { min-width: 0; }
+  .liqLayout .liqLine .liqLineField input { width: 100%; box-sizing: border-box; }
+}
