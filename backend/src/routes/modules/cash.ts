@@ -446,6 +446,30 @@ cashRouter.post("/registers/:id/traspaso", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// ── Convertir la caja ABIERTA en MIXTA (efectivo + banco) ─────────────────────
+// Pedido del dueño 2026-10-15: CEYRO también paga con su tarjeta de débito. Lo registrado sigue igual (era efectivo o
+// banco según la caja); desde ahora cada movimiento pregunta si fue en efectivo o por el banco. Solo administrador.
+cashRouter.post("/registers/:id/a-mixta", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ opening_balance_bank: z.number().nonnegative().default(0), opening_balance_cash: z.number().nonnegative().optional() }).parse(req.body);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const out = await inTransaction(async (client) => {
+    const reg = (await client.query("SELECT * FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId])).rows[0];
+    if (!reg) throw new ApiError(404, "Caja no disponible para el accionista activo");
+    if (reg.status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    if (reg.tipo === "MIXTO") throw new ApiError(409, "La caja ya es mixta (efectivo + banco).");
+    // Los movimientos que ya tiene quedan con su medio (el de la caja de antes).
+    await client.query("UPDATE cash_movements SET medio = $2 WHERE cash_register_id = $1 AND medio IS NULL", [reg.id, reg.tipo === "BANCO" ? "BANCO" : "EFECTIVO"]);
+    const cash = reg.tipo === "BANCO" ? round2(body.opening_balance_cash ?? 0) : round2(Number(reg.opening_balance_cash ?? reg.opening_balance ?? 0));
+    const bank = reg.tipo === "BANCO" ? round2(Number(reg.opening_balance_bank ?? reg.opening_balance ?? 0)) : round2(body.opening_balance_bank);
+    return (await client.query(
+      `UPDATE cash_registers SET tipo = 'MIXTO', opening_balance_cash = $2, opening_balance_bank = $3, opening_balance = $4
+        WHERE id = $1 RETURNING *`,
+      [reg.id, cash, bank, round2(cash + bank)]
+    )).rows[0];
+  });
+  res.json(out);
+}));
+
 // ── Editar saldo inicial de una caja abierta (para corregir aperturas con saldo 0) ─
 cashRouter.put("/registers/:id/opening-balance", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
@@ -950,8 +974,15 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
-    await validarCategoriaManual(client, body.category, body.movement, accionistaId);
     const socio = body.por_cuenta_de ? await validarSocioDelGasto(client, accionistaId!, body.por_cuenta_de) : null;
+    // Gasto de un socio: vale una categoría de esta caja o una del socio (p. ej. Fomentos de ROVINSON que entregó la
+    // caja de CEYRO: el fomento del agricultor se anota en Fomentos de ROVINSON, sin caja).
+    if (socio) {
+      const deCaja = await validarCategoriaManual(client, body.category, body.movement, accionistaId).then(() => true, () => false);
+      if (!deCaja && body.category !== "FOMENTOS") await validarCategoriaManual(client, body.category, body.movement, socio.id);
+    } else {
+      await validarCategoriaManual(client, body.category, body.movement, accionistaId);
+    }
     if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
