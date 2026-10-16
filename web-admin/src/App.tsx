@@ -3678,7 +3678,7 @@ export function App() {
     { buyer_accionista_id: "", items: [{ product_id: "", quintals: "", price_per_qq: "" }] }
   );
   const [comprarProdBusy, setComprarProdBusy] = useState(false);
-  const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz">("todos");
+  const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "proveedores">("todos");
   // Buscador por nombre en Por Cobrar / Por Pagar (útil en el celular con muchos deudores).
   const [cuentasBuscar, setCuentasBuscar] = useState("");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
@@ -21505,14 +21505,21 @@ Motivo (obligatorio):`, "");
         {activeTab === "Por Cobrar" && (() => {
           const hoy = new Date().toISOString().slice(0, 10);
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
-          const clasif = (ar: AccountsReceivable) => {
-            if (ar.entre_socios) return "socios";
+          // A quién se le cobra: la MATRIZ (solo si la deuda es con ella), otro SOCIO, un AGRICULTOR o un CLIENTE.
+          // Antes todo lo que no se reconocía caía en «Matriz» (los clientes del socio salían como deuda de la Matriz)
+          // y un cliente cuyo nombre contenía el de un socio (p. ej. «STALYN MARIN») salía en «Socios».
+          const matrizNm = (matrizName || "").trim().toUpperCase();
+          const clasif = (ar: AccountsReceivable): "socios" | "matriz" | "agricultores" | "clientes" => {
+            const nm = (ar.customer_name || "").trim().toUpperCase();
+            if (ar.entre_socios) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
             if (ar.farmer_id) return "agricultores";
+            if (ar.customer_id) return "clientes";
             const rt = ar.reference_type || "";
-            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
-            const nm = (ar.customer_name || ar.description || "").toUpperCase();
-            if (socioNames.some((s) => s && nm.includes(s))) return "socios";
-            return "matriz";
+            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
+            // Cuentas viejas sin enlace: se reconoce al socio por el nombre.
+            const nmDesc = (ar.customer_name || ar.description || "").toUpperCase();
+            if (socioNames.some((s) => s && nmDesc.includes(s))) return "socios";
+            return "clientes";
           };
           const esVencida = (ar: AccountsReceivable) => !!ar.due_date && ar.due_date.slice(0, 10) < hoy && Number(ar.balance) > 0.001;
           // CxC por Ventas: cuentas generadas por ventas a crédito (arroz,
@@ -21520,7 +21527,8 @@ Motivo (obligatorio):`, "");
           const esVenta = (ar: AccountsReceivable) => ["sales_order", "sales", "sale", "invoice"].includes(ar.reference_type || "")
             // Saldo inicial de un cliente (ventas de antes del arranque).
             || (ar.reference_type === "saldo_inicial" && !!ar.customer_id);
-          const enFiltro = (ar: AccountsReceivable, f: typeof arFilter) => f === "todos" ? true : f === "ventas" ? esVenta(ar) : clasif(ar) === f;
+          const enFiltro = (ar: AccountsReceivable, f: typeof arFilter) => f === "todos" ? true
+            : f === "ventas" ? (esVenta(ar) || clasif(ar) === "clientes") && !ar.entre_socios : clasif(ar) === f;
           const filtrado = accountsReceivable.filter((ar) => enFiltro(ar, arFilter));
           const buscado = normalizarTexto(cuentasBuscar.trim());
           const grupos = groupReceivables(filtrado).filter((g) => !buscado || normalizarTexto(g.nombre).includes(buscado));
@@ -21531,7 +21539,7 @@ Motivo (obligatorio):`, "");
             ["ventas", "🛒 CxC por Ventas"],
             ["socios", "Socios"],
             ["agricultores", "Agricultores"],
-            ["matriz", `Matriz (${matrizName})`],
+            ...(esMatrizActiva ? [] : [["matriz", `Matriz (${matrizName})`] as [typeof arFilter, string]]),
             ["todos", "Todos"]
           ];
           // Ítems del deudor abierto en el modal (en vivo desde el estado).
@@ -21679,14 +21687,17 @@ Motivo (obligatorio):`, "");
         {activeTab === "Por Pagar" && (() => {
           const hoy = new Date().toISOString().slice(0, 10);
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
-          const clasif = (p: AccountPayable) => {
-            if (p.entre_socios) return "socios";
+          // A quién se le debe: la MATRIZ (solo si la deuda es con ella), otro SOCIO, un AGRICULTOR o un PROVEEDOR / otro.
+          // Antes lo que no se reconocía caía en «Matriz» (proveedores y terceros salían como deuda con la Matriz).
+          const matrizNm = (matrizName || "").trim().toUpperCase();
+          const clasif = (p: AccountPayable): "socios" | "matriz" | "agricultores" | "proveedores" => {
+            const nm = (p.farmer_name || "").trim().toUpperCase();
+            if (p.entre_socios) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
             if (p.liquidation_number || p.farmer_id) return "agricultores";
             const rt = p.reference_type || "";
-            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return "socios";
-            const nm = (p.farmer_name || "").toUpperCase();
-            if (socioNames.some((s) => s && nm.includes(s))) return "socios";
-            return "matriz";
+            if (["service_charge", "pilado_service", "lot_transfer"].includes(rt)) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
+            if (socioNames.some((s) => s && nm === s)) return "socios";
+            return "proveedores";
           };
           const buscado = normalizarTexto(cuentasBuscar.trim());
           const todosGrupos = groupPayablesByAcreedor(cashPayables).map((g) => ({ ...g, clase: clasif(g.items[0]) }));
@@ -21696,7 +21707,8 @@ Motivo (obligatorio):`, "");
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
           const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
           const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
-          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["matriz", `Matriz (${matrizName})`]];
+          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["proveedores", "Proveedores y otros"],
+            ...(esMatrizActiva ? [] : [["matriz", `Matriz (${matrizName})`] as [typeof apFilter, string]])];
           const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
           return (
           <section className="cuentasLayout">
