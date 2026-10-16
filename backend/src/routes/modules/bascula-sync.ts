@@ -57,6 +57,10 @@ const registerDeviceSchema = z.object({
 });
 
 const deviceStatusSchema = z.object({ activo: z.boolean() });
+const pullQuerySchema = z.object({
+  after: z.coerce.number().int().nonnegative().optional().default(0),
+  limit: z.coerce.number().int().min(1).max(500).optional().default(100)
+});
 
 function formatTicketNumber(value: number): string {
   const padded = String(Math.max(1, value)).padStart(6, "0");
@@ -97,6 +101,39 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
   });
 
   res.status(201).json({ ok: true, via: "wifi-directo", ...result });
+}));
+
+// GET /api/bascula/pull
+// Retorno incremental ERP → tablet, limitado a tickets nacidos manualmente en
+// el ERP. No consulta Firebase ni devuelve el historial completo en cada ciclo.
+// La tablet los fusiona por (modo, número) y nunca reemplaza un ticket local
+// diferente: una colisión se conserva para revisión humana.
+basculaSyncRouter.get("/pull", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const query = pullQuerySchema.parse(req.query);
+  const result = await pool.query<{
+    raw_payload: unknown;
+    en_espera: boolean;
+    mobile_updated_at: string;
+  }>(
+    `SELECT raw_payload, en_espera, mobile_updated_at::text
+       FROM mobile_synced_tickets
+      WHERE raw_payload->>'origen' = 'ERP_MANUAL'
+        AND mobile_updated_at > $1::bigint
+      ORDER BY mobile_updated_at ASC, id ASC
+      LIMIT $2`,
+    [query.after, query.limit]
+  );
+  const watermark = result.rows.reduce(
+    (max, row) => Math.max(max, Number(row.mobile_updated_at) || 0),
+    query.after
+  );
+  res.json({
+    ok: true,
+    tickets: result.rows.map((row) => ({ ticket: row.raw_payload, enEspera: row.en_espera })),
+    watermark,
+    hasMore: result.rows.length === query.limit
+  });
 }));
 
 // GET /api/bascula/restore

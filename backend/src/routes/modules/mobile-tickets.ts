@@ -18,6 +18,7 @@ import { env } from "../../config/env.js";
 import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
 import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
+import { buildManualBasculaPayload, formatBasculaTicketNumber } from "../../utils/manual-bascula-ticket.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -89,6 +90,25 @@ export function riceTypeFromCalidad(calidad: string | null | undefined): "0.11" 
 const basculaImportSchema = z.object({
   deviceId: z.string().optional().default("bascula-app"),
   tickets: z.array(basculaTicketSchema).min(1)
+});
+
+const manualTicketSchema = z.object({
+  ticket_number: z.coerce.number().int().positive().max(999_999_999),
+  farmer_id: z.string().uuid(),
+  operation_type: z.enum(["COMPRA", "SECADO", "SECADO_PILADO", "PILADO"]),
+  rice_type: z.enum(["0.11", "CORRIENTE"]),
+  bajada_x: z.string().trim().max(100).optional().default(""),
+  plate: z.string().trim().min(5, "La placa debe tener al menos 5 caracteres.").max(20),
+  term_days: z.coerce.number().int().nonnegative().max(3650).optional(),
+  payment_date: z.union([z.string().regex(/^\d{4}-\d{2}-\d{2}$/), z.literal("")]).optional(),
+  gross_weight: z.coerce.number().positive("El peso bruto debe ser mayor que cero."),
+  tare_weight: z.coerce.number().positive("La tara debe ser mayor que cero."),
+  qualification: z.coerce.number().positive("La calificación debe ser mayor que cero."),
+  humidity: z.coerce.number().min(0).max(99.9).optional(),
+  impurity: z.coerce.number().min(0).max(99.9).optional()
+}).refine((data) => data.gross_weight > data.tare_weight, {
+  path: ["tare_weight"],
+  message: "La tara debe ser menor que el peso bruto."
 });
 
 const ticketSchema = z.object({
@@ -350,6 +370,117 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
     params
   );
   res.json(result.rows);
+}));
+
+// Contexto mínimo para que el ingreso manual muestre el mismo número visible
+// que la app. Es una sugerencia: el operador puede escribir el número que ya
+// aparece en la tablet cuando está recuperando un ticket que no llegó al ERP.
+mobileTicketsRouter.get("/manual-context", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula"]), asyncRoute(async (_req, res) => {
+  const latest = await pool.query<{ last_number: string | null }>(
+    `SELECT max(${numeroTicketSql("t")})::text AS last_number
+       FROM mobile_synced_tickets t
+      WHERE lower(COALESCE(NULLIF(t.raw_payload->>'modo', ''), 'principal')) = 'principal'
+        AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'`
+  );
+  const lastNumber = latest.rows[0]?.last_number != null ? Number(latest.rows[0].last_number) : 0;
+  const suggestedNumber = Math.max(1, lastNumber + 1);
+  res.json({
+    last_number: lastNumber || null,
+    suggested_number: suggestedNumber,
+    formatted_number: formatBasculaTicketNumber(suggestedNumber)
+  });
+}));
+
+// Ingreso de emergencia desde el ERP en el formato NATIVO de BASCULA. Primero
+// queda en mobile_synced_tickets y luego el frontend usa /:id/create-lot, el
+// mismo camino de los tickets WiFi/Firebase. Repetir la petición con el mismo
+// número reutiliza el registro: nunca crea una segunda entrada de inventario.
+mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+  const body = manualTicketSchema.parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const farmer = await pool.query<{ id: string; full_name: string }>(
+    "SELECT id, full_name FROM farmers WHERE id = $1",
+    [body.farmer_id]
+  );
+  if (!farmer.rowCount) throw new ApiError(404, "Agricultor no encontrado.");
+
+  const existingQuery = () => pool.query<{
+    id: string;
+    farmer_id: string | null;
+    gross_weight: string;
+    tare_weight: string;
+    qualification: string;
+    en_espera: boolean;
+    weighing_ticket_id: string | null;
+    liquidated_at: Date | null;
+  }>(
+    `SELECT id, farmer_id, gross_weight, tare_weight, qualification, en_espera,
+            weighing_ticket_id, liquidated_at
+       FROM mobile_synced_tickets t
+      WHERE COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'
+        AND lower(COALESCE(NULLIF(t.raw_payload->>'modo', ''), 'principal')) = 'principal'
+        AND ${numeroTicketSql("t")} = $1::bigint
+      ORDER BY t.mobile_updated_at DESC
+      LIMIT 1`,
+    [body.ticket_number]
+  );
+
+  let existing = (await existingQuery()).rows[0] ?? null;
+  const existedBefore = Boolean(existing);
+  if (existing?.weighing_ticket_id || existing?.liquidated_at) {
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya fue procesado en el ERP.`);
+  }
+  if (existing?.farmer_id && existing.farmer_id !== body.farmer_id) {
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya pertenece a otro agricultor. Revísalo en la lista antes de continuar.`);
+  }
+
+  const differsFromCompleteTicket = existing && !existing.en_espera && (
+    Math.abs(Number(existing.gross_weight) - body.gross_weight) > 0.01
+    || Math.abs(Number(existing.tare_weight) - body.tare_weight) > 0.01
+    || Math.abs(Number(existing.qualification) - body.qualification) > 0.001
+  );
+  if (differsFromCompleteTicket) {
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya existe con otros pesos. Usa el ticket sincronizado o corrígelo desde BASCULA.`);
+  }
+
+  // Si no existe, o estaba esperando el segundo pesaje, se publica el registro
+  // manual completo. Si ya llegó completo desde la tablet, solo se reutiliza.
+  if (!existing || existing.en_espera) {
+    const now = Date.now();
+    const payload = buildManualBasculaPayload({
+      ticketNumber: body.ticket_number,
+      farmerName: farmer.rows[0].full_name,
+      bajadaX: body.bajada_x,
+      plate: body.plate,
+      riceType: body.rice_type,
+      operationType: body.operation_type,
+      termDays: body.term_days,
+      paymentDate: body.payment_date || undefined,
+      grossWeight: body.gross_weight,
+      tareWeight: body.tare_weight,
+      qualification: body.qualification,
+      humidity: body.humidity,
+      impurity: body.impurity,
+      updatedBy: user?.name ?? user?.username ?? "ERP"
+    }, now);
+    await importBasculaTickets([payload], "erp-manual");
+    existing = (await existingQuery()).rows[0] ?? null;
+  }
+
+  if (!existing) throw new ApiError(500, "No se pudo registrar el ticket manual.");
+  await pool.query(
+    `UPDATE mobile_synced_tickets
+        SET farmer_id = $2,
+            en_espera = false,
+            synced_at = now()
+      WHERE id = $1`,
+    [existing.id, body.farmer_id]
+  );
+
+  res.status(existedBefore ? 200 : 201).json({
+    ticket: { id: existing.id, numero: formatBasculaTicketNumber(body.ticket_number) },
+    reused: existedBefore
+  });
 }));
 
 // ── «Contar tickets desde» (corte de la báscula) ────────────────────────────
