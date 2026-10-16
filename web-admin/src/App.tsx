@@ -8007,24 +8007,36 @@ export function App() {
     if (!(total > 0)) { addToast("Monto inválido", "error"); return; }
     // Cobro recibido por OTRO socio que además pagó deudas mías con esa plata → un solo paso (todo o nada).
     const gruposPagar = groupPayablesByAcreedor(cashPayables);
+    // «⇄ Lo que le debo al que recibió»: no es un pago desde su caja, es un cruce con esa misma plata.
+    const cruzar = recibidoPor ? round2(Number(pagosConPlata["CRUCE:" + recibidoPor] || 0)) : 0;
     const pagos = recibidoPor ? Object.entries(pagosConPlata)
+      .filter(([key]) => !key.startsWith("CRUCE:"))
       .map(([key, v]) => ({ grupo: gruposPagar.find((g) => g.key === key), amount: round2(Number(v)) }))
       .filter((p) => p.grupo && p.amount > 0)
       .map((p) => ({ payable_ids: p.grupo!.items.map((it) => it.id), amount: p.amount, nombre: p.grupo!.nombre })) : [];
-    if (recibidoPor && pagos.length > 0) {
+    if (recibidoPor && (pagos.length > 0 || cruzar > 0)) {
       const otro = accionistas.find((a) => a.id === recibidoPor)?.name ?? "el socio";
       const totalPagos = round2(pagos.reduce((s, p) => s + p.amount, 0));
-      if (!window.confirm(`${otro} recibió ${money(total)} de este cliente y con esa plata pagó:\n\n${pagos.map((p) => `• ${p.nombre}: ${money(p.amount)}`).join("\n")}\n\nTotal pagado: ${money(totalPagos)}. ¿Registrar todo junto?`)) return;
-      const rc = await apiPost<{ cobrado: number; pagado: number; receptor: string; el_receptor_te_debe: number; tu_le_debes: number; se_puede_cruzar: number }>(
+      if (cruzar > total + 0.005) {
+        addToast(`Lo que se descuenta de tu deuda con ${otro} (${money(cruzar)}) no puede pasar de lo que recibió (${money(total)}).`, "error");
+        return;
+      }
+      const lineas = [
+        ...pagos.map((p) => `• Pagó a ${p.nombre}: ${money(p.amount)}`),
+        ...(cruzar > 0 ? [`• Se descuenta de lo que le debes a ${otro}: ${money(cruzar)}`] : [])
+      ];
+      if (!window.confirm(`${otro} recibió ${money(total)} de este cliente. Con esa plata:\n\n${lineas.join("\n")}\n\n${totalPagos > 0 ? `Total pagado: ${money(totalPagos)}. ` : ""}¿Registrar todo junto?`)) return;
+      const rc = await apiPost<{ cobrado: number; pagado: number; cruzado: number; receptor: string; el_receptor_te_debe: number; tu_le_debes: number; se_puede_cruzar: number }>(
         "/receivable/cobro-y-pagos-por-socio",
         { receivable_ids: items.map((it) => it.id), amount: total, recibido_por: recibidoPor, medio_pago: medioOperacion,
-          pagos: pagos.map(({ payable_ids, amount }) => ({ payable_ids, amount })) }
+          pagos: pagos.map(({ payable_ids, amount }) => ({ payable_ids, amount })), cruzar_con_receptor: cruzar > 0 ? cruzar : undefined }
       );
       setMedioOperacion("EFECTIVO");
       setCobroRecibidoPor("");
       setPagosConPlata({});
       await Promise.all([refreshReceivables(), refreshPayables()]);
-      addToast(`${rc.receptor} recibió ${money(rc.cobrado)} y pagó ${money(rc.pagado)} de tus deudas. ` +
+      addToast(`${rc.receptor} recibió ${money(rc.cobrado)}` + (rc.pagado > 0 ? ` y pagó ${money(rc.pagado)} de tus deudas` : "") +
+        (rc.cruzado > 0 ? ` · se descontaron ${money(rc.cruzado)} de lo que le debías` : "") + ". " +
         `Entre ustedes: ${rc.receptor} te debe ${money(rc.el_receptor_te_debe)} · tú le debes ${money(rc.tu_le_debes)}.` +
         (rc.se_puede_cruzar > 0.005 ? ` Puedes cruzar ${money(rc.se_puede_cruzar)} con «⇄ Cruzar cuentas con un socio».` : ""), "success");
       return;
@@ -21671,9 +21683,20 @@ Motivo (obligatorio):`, "");
                 }}
                 onVerInforme={(id) => loadPiladoReport(id).catch((err) => addToast(err.message, "error"))}
                 pagosConPlata={cobroRecibidoPor ? {
-                  // Mis deudas que el otro socio pudo pagar: con terceros (agricultores, proveedores…) y con Transporte.
-                  grupos: groupPayablesByAcreedor(cashPayables.filter((p) => !p.entre_socios || p.reference_type === "campo_servicio"))
-                    .map((g) => ({ key: g.key, nombre: g.nombre, saldo: round2(g.items.reduce((s, it) => s + Number(it.balance), 0)), transporte: g.items.some((it) => it.reference_type === "campo_servicio") })),
+                  // Mis deudas que el otro socio pudo pagar: con terceros (agricultores, proveedores…) y con Transporte;
+                  // y lo que le DEBO A ÉL MISMO, que se descuenta con esa plata (cruce, no sale de su caja).
+                  grupos: (() => {
+                    const receptor = accionistas.find((a) => a.id === cobroRecibidoPor)?.name ?? "ese socio";
+                    const receptorNm = receptor.trim().toUpperCase();
+                    const deboAlReceptor = round2(cashPayables
+                      .filter((p) => p.entre_socios && p.reference_type !== "campo_servicio" && (p.farmer_name || "").trim().toUpperCase() === receptorNm)
+                      .reduce((s, it) => s + Number(it.balance), 0));
+                    return [
+                      ...(deboAlReceptor > 0.005 ? [{ key: "CRUCE:" + cobroRecibidoPor, nombre: `⇄ Lo que le debes a ${receptor} (se descuenta; no sale de su caja)`, saldo: deboAlReceptor }] : []),
+                      ...groupPayablesByAcreedor(cashPayables.filter((p) => !p.entre_socios || p.reference_type === "campo_servicio"))
+                        .map((g) => ({ key: g.key, nombre: g.nombre, saldo: round2(g.items.reduce((s, it) => s + Number(it.balance), 0)), transporte: g.items.some((it) => it.reference_type === "campo_servicio") }))
+                    ];
+                  })(),
                   valores: pagosConPlata,
                   onChange: (key, v) => setPagosConPlata((prev) => ({ ...prev, [key]: v }))
                 } : undefined}

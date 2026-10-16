@@ -538,7 +538,10 @@ receivableRouter.post("/cobro-y-pagos-por-socio", asyncRoute(async (req, res) =>
     pagos: z.array(z.object({
       payable_ids: z.array(z.string().uuid()).min(1),
       amount: z.number().positive().transform(round2)
-    })).max(30).default([])
+    })).max(30).default([]),
+    // Lo que este socio le DEBE al que recibió el dinero se descuenta con esa misma plata (cruce, sin mover caja):
+    // p. ej. el cliente de STALYN le depositó a ROVINSON y STALYN le debía a ROVINSON.
+    cruzar_con_receptor: z.number().positive().transform(round2).optional()
   }).parse(req.body);
   if (body.recibido_por === auth.accionistaId) throw new ApiError(400, "Elige el socio que recibió el dinero (no tú).");
   const out = await inTransaction(async (client) => {
@@ -555,11 +558,19 @@ receivableRouter.post("/cobro-y-pagos-por-socio", asyncRoute(async (req, res) =>
       descontado = round2(descontado + (r.pago_por_socio?.descontado ?? 0));
       deudaNueva = round2(deudaNueva + (r.pago_por_socio?.deuda_nueva ?? 0));
     }
+    let cruzado = 0;
+    if (body.cruzar_con_receptor) {
+      const c = await aplicarCruce(client, {
+        accionistaId: String(auth.accionistaId), contraparteId: body.recibido_por, monto: body.cruzar_con_receptor,
+        nota: `Con el pago del cliente que recibió (${body.concepto ?? "cobro recibido por otro socio"})`, userId: auth.user?.id ?? null
+      });
+      cruzado = c.monto;
+    }
     const receptor = (await client.query("SELECT name FROM accionistas WHERE id = $1", [body.recibido_por])).rows[0]?.name ?? "el socio";
     // Saldo TOTAL entre los dos después de la operación (todas sus deudas enlazadas, no solo esta).
     const saldo = await resumenCruce(client, String(auth.accionistaId), body.recibido_por);
     return {
-      cobrado: cobro.paid, pagado, receptor, descontado, deuda_nueva: deudaNueva,
+      cobrado: cobro.paid, pagado, receptor, descontado, deuda_nueva: deudaNueva, cruzado,
       el_receptor_te_debe: saldo.total_me_debe,
       tu_le_debes: saldo.total_le_debo,
       se_puede_cruzar: saldo.maximo
