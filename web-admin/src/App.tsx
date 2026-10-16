@@ -321,6 +321,46 @@ type BasculaTicket = {
   calidad: string | null;
 };
 
+type ManualBasculaContext = {
+  last_number: number | null;
+  suggested_number: number;
+  formatted_number: string;
+};
+
+type ManualBasculaForm = {
+  ticketNumber: string;
+  farmerId: string;
+  operationType: "" | "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO";
+  riceType: "" | "0.11" | "CORRIENTE";
+  bajadaX: string;
+  plazo: string;
+  fechaPago: string;
+  placa: string;
+  gross: string;
+  tara: string;
+  qualification: string;
+  humedad: string;
+  impureza: string;
+};
+
+function emptyManualBasculaForm(): ManualBasculaForm {
+  return {
+    ticketNumber: "",
+    farmerId: "",
+    operationType: "",
+    riceType: "",
+    bajadaX: "",
+    plazo: "",
+    fechaPago: "",
+    placa: "",
+    gross: "",
+    tara: "",
+    qualification: "",
+    humedad: "",
+    impureza: ""
+  };
+}
+
 type ReportSummary = {
   range: { from: string; to: string };
   consolidado?: boolean;
@@ -2491,8 +2531,6 @@ export function App() {
   const [tunelCompartiendoId, setTunelCompartiendoId] = useState<string | null>(null);
   const [productionPackages, setProductionPackages] = useState<ProductionPackageState>(defaultProductionPackages);
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
-  const [weighingRiceType, setWeighingRiceType] = useState<"0.11" | "CORRIENTE">("0.11");
-
   // ── Tickets sincronizados de la app de báscula ──────────────────────────────
   const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
   // Báscula en pestañas: los tickets (donde se ingresa la materia prima) van solos; corregir el
@@ -2512,9 +2550,9 @@ export function App() {
   // Báscula como bandeja de entrada: el registro manual vive en un modal, y el
   // traspaso de lote se movió a Inventario (también en modal).
   const [ingresoModalOpen, setIngresoModalOpen] = useState(false);
-  // Calculadora de merma del ingreso manual (peso en kg; humedad/impureza en %).
-  // Solo apoyo visual: NO cambia lo que se guarda (el ticket sigue su modelo).
-  const [mermaForm, setMermaForm] = useState({ gross: "", tara: "", humedad: "", impureza: "" });
+  const [manualBasculaForm, setManualBasculaForm] = useState<ManualBasculaForm>(emptyManualBasculaForm);
+  const [manualBasculaContext, setManualBasculaContext] = useState<ManualBasculaContext | null>(null);
+  const [manualBasculaBusy, setManualBasculaBusy] = useState(false);
   // Conector de báscula por Web Serial (RS232). Refs para el bucle de lectura.
   const serialPortRef = useRef<any>(null);
   const serialReaderRef = useRef<any>(null);
@@ -10315,48 +10353,98 @@ export function App() {
     }
   }
 
+  function setManualBasculaField<K extends keyof ManualBasculaForm>(field: K, value: ManualBasculaForm[K]) {
+    setManualBasculaForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function fechaPagoDesdePlazo(value: string): string {
+    const days = Math.trunc(Number(value));
+    if (!(days > 0)) return "";
+    const date = new Date();
+    let added = 0;
+    while (added < days) {
+      date.setDate(date.getDate() + 1);
+      if (date.getDay() !== 0 && date.getDay() !== 6) added++;
+    }
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  async function abrirIngresoManualBascula() {
+    setManualBasculaForm(emptyManualBasculaForm());
+    setManualBasculaContext(null);
+    setIngresoModalOpen(true);
+    try {
+      const context = await apiGet<ManualBasculaContext>("/tickets/manual-context");
+      setManualBasculaContext(context);
+      setManualBasculaForm((current) => ({ ...current, ticketNumber: String(context.suggested_number) }));
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "No se pudo consultar el siguiente ticket", "error");
+    }
+  }
+
+  async function cerrarIngresoManualBascula() {
+    if (manualBasculaBusy) return;
+    await desconectarBascula();
+    setIngresoModalOpen(false);
+    setManualBasculaForm(emptyManualBasculaForm());
+  }
+
   async function submitWeighing(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formElement = event.currentTarget;
-    const form = new FormData(formElement);
-    const gross = Number(form.get("gross_weight"));
-    const tare = Number(form.get("tare_weight"));
-    const qualification = Number(form.get("qualification"));
-    const farmerId = String(form.get("farmer_id"));
-    const riceType = String(form.get("rice_type")) as "0.11" | "CORRIENTE";
-    const productId = riceType === "CORRIENTE" ? rawProductCorriente?.id : rawProduct011?.id;
-    const warehouseId = rawWarehouse?.id ?? "";
-    // Destino / Tipo de operación del lote (4 opciones). COMPRA = propio; el resto
-    // son servicio (maquila). El backend deriva is_maquila/ownership de aquí.
-    const operationType = String(form.get("operation_type") || "COMPRA");
-    const esServicio = operationType !== "COMPRA";
+    if (manualBasculaBusy) return;
+    const form = manualBasculaForm;
+    const ticketNumber = Math.trunc(Number(form.ticketNumber));
+    const gross = Number(form.gross);
+    const tare = Number(form.tara);
+    const qualification = Number(form.qualification);
 
-    if (!productId) {
-      setMessage("Falta crear el producto de cascara para ese tipo de arroz");
-      return;
+    if (!(ticketNumber >= 1)) { addToast("Escribe un número de ticket válido", "error"); return; }
+    if (!form.farmerId) { addToast("Selecciona el cliente o agricultor", "error"); return; }
+    if (!form.operationType) { addToast("Selecciona el destino de la carga", "error"); return; }
+    if (!form.riceType) { addToast("Selecciona el tipo de arroz", "error"); return; }
+    if (form.placa.trim().length < 5) { addToast("Escribe la placa completa", "error"); return; }
+    if (!(gross > 0) || !(tare > 0) || gross <= tare) { addToast("Revisa bruto y tara: ambos deben ser mayores que cero y el bruto debe ser mayor", "error"); return; }
+    if (!(qualification > 0)) { addToast("La calificación debe ser mayor que cero", "error"); return; }
+
+    setManualBasculaBusy(true);
+    try {
+      const saved = await apiPost<{ ticket: { id: string; numero: string }; reused: boolean }>("/tickets/manual", {
+        ticket_number: ticketNumber,
+        farmer_id: form.farmerId,
+        operation_type: form.operationType,
+        rice_type: form.riceType,
+        bajada_x: form.bajadaX.trim(),
+        plate: form.placa.trim(),
+        term_days: form.plazo ? Math.trunc(Number(form.plazo)) : undefined,
+        payment_date: form.fechaPago || undefined,
+        gross_weight: gross,
+        tare_weight: tare,
+        qualification,
+        humidity: form.humedad ? Number(form.humedad) : undefined,
+        impurity: form.impureza ? Number(form.impureza) : undefined
+      });
+
+      await apiPost(`/tickets/${saved.ticket.id}/create-lot`, {
+        rice_type: form.riceType,
+        operation_type: form.operationType,
+        ownership: form.operationType === "COMPRA" ? "OWNED" : "MAQUILA",
+        accionista_id: activeAccionistaId ?? undefined,
+        created_by: authUser?.id
+      });
+
+      addToast(`Ticket #${saved.ticket.numero} guardado e ingresado correctamente`, "success");
+      await desconectarBascula();
+      setIngresoModalOpen(false);
+      setManualBasculaForm(emptyManualBasculaForm());
+      await Promise.all([refreshBasculaTickets(), refresh()]);
+    } catch (error) {
+      addToast(error instanceof Error ? error.message : "No se pudo guardar el ticket", "error");
+    } finally {
+      setManualBasculaBusy(false);
     }
-
-    const created = await apiPost<{ ticket: { id: string } }>("/weighing-tickets", {
-      farmer_id: farmerId,
-      rice_type: riceType,
-      operation_type: operationType,
-      ownership: esServicio ? "MAQUILA" : "OWNED",
-      is_maquila: esServicio,
-      gross_weight: gross
-    });
-
-    await apiPut(`/weighing-tickets/${created.ticket.id}/tare-weight`, { tare_weight: tare });
-    await apiPut(`/weighing-tickets/${created.ticket.id}/qualification`, { qualification });
-    await apiPost(`/weighing-tickets/${created.ticket.id}/close`, {
-      product_id: productId,
-      warehouse_id: warehouseId
-    });
-
-    safeResetForm(formElement);
-    setMessage("Ticket de bascula cerrado e inventario actualizado");
-    await desconectarBascula();
-    setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" });
-    await refresh();
   }
 
   // ── Conector de báscula (Web Serial API) ──────────────────────────────────
@@ -10430,7 +10518,7 @@ export function App() {
   // Vuelca la última lectura de la báscula en el campo Peso bruto del form.
   function capturarPeso() {
     if (!serialWeight) { addToast("Aún no hay lectura de la báscula", "error"); return; }
-    setMermaForm((cur) => ({ ...cur, gross: serialWeight }));
+    setManualBasculaForm((current) => ({ ...current, gross: serialWeight }));
     addToast(`Peso capturado: ${serialWeight} kg`, "success");
   }
 
@@ -14162,7 +14250,7 @@ Motivo (obligatorio):`, "");
                 <h2 style={{ marginBottom: 2 }}>📲 Tickets de la app de báscula</h2>
                 <p className="muted" style={{ margin: 0 }}>Pesajes que llegan de tu app. Se importan solos; también puedes traerlos al instante.</p>
               </div>
-              <button type="button" className="btnSecondary" onClick={() => { setMermaForm({ gross: "", tara: "", humedad: "", impureza: "" }); setIngresoModalOpen(true); }}>
+              <button type="button" className="btnSecondary" onClick={() => abrirIngresoManualBascula()}>
                 + Ingreso Manual (Emergencia)
               </button>
               <button type="button" className="btnSecondary" disabled={basculaImporting || basculaFullSyncing} onClick={() => runFirebaseImport()}>
@@ -14279,97 +14367,145 @@ Motivo (obligatorio):`, "");
           </div>
           )}
 
-          {/* Modal: Ingreso Manual (emergencia) — mismo formulario y lógica de antes */}
-          {ingresoModalOpen && (
-            <div className="modalOverlay" onClick={() => { desconectarBascula(); setIngresoModalOpen(false); }}>
-              <form className="modalCard formPanel" onClick={(e) => e.stopPropagation()}
-                onSubmit={(event) => submitWeighing(event).then(() => setIngresoModalOpen(false)).catch((error) => setMessage(error.message))}>
-                <h3 style={{ marginTop: 0 }}>⚖️ Ingreso manual (emergencia)</h3>
-                <p className="muted" style={{ marginTop: -4 }}>Usa esto solo si la báscula automática no envió el ticket.</p>
-                <Select name="farmer_id" label="Agricultor" rows={farmers.map((f) => [f.id, f.full_name])} />
-                <Select name="operation_type" label="Destino / Tipo de operación" rows={[
-                  ["COMPRA", "Compra / Producción Propia"],
-                  ["SECADO", "Solo Servicio de Secado"],
-                  ["SECADO_PILADO", "Servicio Completo (Secada + Pilada)"],
-                  ["PILADO", "Solo Servicio de Pilada (ya viene seco)"]
-                ]} />
-                <label>
-                  <span>Tipo de arroz</span>
-                  <select name="rice_type" value={weighingRiceType} onChange={(event) => setWeighingRiceType(event.target.value as "0.11" | "CORRIENTE")}>
-                    <option value="0.11">0.11</option>
-                    <option value="CORRIENTE">Corriente</option>
-                  </select>
-                </label>
-                {/* Peso bruto + conector de báscula (Web Serial RS232) */}
-                <label><span>Peso bruto kg</span>
-                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                    <input name="gross_weight" type="number" step="0.01" min="0" required style={{ flex: 1 }}
-                      value={mermaForm.gross}
-                      onChange={(e) => setMermaForm({ ...mermaForm, gross: e.target.value })} />
-                    {!serialConnected ? (
-                      <button type="button" className="btnSecondary" title="Conectar el indicador de báscula por USB/Serial"
-                        onClick={() => conectarBascula()}>🔌 Conectar Báscula</button>
-                    ) : (
-                      <>
-                        <button type="button" className="primary" onClick={() => capturarPeso()}>Capturar Peso</button>
-                        <button type="button" className="btnSecondary" title="Desconectar" onClick={() => desconectarBascula()}>✖</button>
-                      </>
-                    )}
-                  </div>
-                  {serialConnected && (
-                    <small className="muted">Lectura en vivo: <strong>{serialWeight || "—"}</strong> kg</small>
-                  )}
-                </label>
-                <Input name="tare_weight" label="Tara kg" type="number"
-                  value={mermaForm.tara} onChange={(e) => setMermaForm({ ...mermaForm, tara: e.target.value })} />
-                <Input name="qualification" label="Calificacion" type="number" />
-                {/* Calculadora de merma (apoyo visual; no cambia lo que se guarda) */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                  <label><span>Humedad (%)</span>
-                    <input type="number" step="0.1" min="0" max="99.9" placeholder="0.0" value={mermaForm.humedad}
-                      onChange={(e) => setMermaForm({ ...mermaForm, humedad: e.target.value })} />
-                  </label>
-                  <label><span>Impureza (%)</span>
-                    <input type="number" step="0.1" min="0" max="99.9" placeholder="0.0" value={mermaForm.impureza}
-                      onChange={(e) => setMermaForm({ ...mermaForm, impureza: e.target.value })} />
-                  </label>
-                </div>
-                {(() => {
-                  const LB_KG = 2.2046, QQ_LB = 100;
-                  const base = Number(appSettings.humedad_base_pct ?? 13);
-                  const gross = Number(mermaForm.gross || 0);
-                  const tara = Number(mermaForm.tara || 0);
-                  const hum = Number(mermaForm.humedad || 0);
-                  const imp = Number(mermaForm.impureza || 0);
-                  const netoKg = Math.max(0, gross - tara);
-                  const netoLb = netoKg * LB_KG;
-                  const descHumPct = hum > base ? (hum - base) / (100 - base) : 0;
-                  const descHumLb = netoLb * descHumPct;
-                  const descImpLb = netoLb * (imp / 100);
-                  const liqLb = Math.max(0, netoLb - descHumLb - descImpLb);
-                  const netoQq = netoLb / QQ_LB;
-                  const liqQq = liqLb / QQ_LB;
-                  const n = (v: number, d = 2) => v.toLocaleString("es-EC", { minimumFractionDigits: d, maximumFractionDigits: d });
-                  if (netoKg <= 0) return null;
-                  return (
-                    <div style={{ background: "var(--c-surface-2)", borderRadius: 8, padding: "10px 12px", marginTop: 4, fontSize: 13 }}>
-                      <strong style={{ display: "block", marginBottom: 6 }}>🌾 Cálculo de merma <span className="muted" style={{ fontWeight: 400 }}>(humedad base {n(base, 1)}%)</span> {cfgLink("⚙️ Parámetros de planta", "Cambiar humedad base")}</strong>
-                      <div style={{ display: "flex", justifyContent: "space-between" }}><span>Peso Neto Verde</span><span>{n(netoLb)} lb · {n(netoQq)} QQ</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Humedad ({n(descHumPct * 100)}%)</span><span>− {n(descHumLb)} lb</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "var(--c-danger-text)" }}><span>Descuento por Impureza ({n(imp, 1)}%)</span><span>− {n(descImpLb)} lb</span></div>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, borderTop: "1px solid var(--c-border)", marginTop: 6, paddingTop: 6 }}>
-                        <span>Quintales Liquidados Finales</span><span>{n(liqLb)} lb · {n(liqQq)} QQ</span>
-                      </div>
+          {/* Modal: captura de emergencia compatible con el formato nativo de BASCULA. */}
+          {ingresoModalOpen && (() => {
+            const gross = Number(manualBasculaForm.gross || 0);
+            const tare = Number(manualBasculaForm.tara || 0);
+            const qualification = Number(manualBasculaForm.qualification || 0);
+            const netoKg = Math.max(0, gross - tare);
+            const totalQq = qualification > 0 ? (netoKg * 2.2) / qualification : 0;
+            const base = Number(appSettings.humedad_base_pct ?? 13);
+            const hum = Number(manualBasculaForm.humedad || 0);
+            const imp = Number(manualBasculaForm.impureza || 0);
+            const netoLb = netoKg * 2.2046;
+            const descHumPct = hum > base ? (hum - base) / (100 - base) : 0;
+            const liqLb = Math.max(0, netoLb - netoLb * descHumPct - netoLb * (imp / 100));
+            const n = (value: number, decimals = 2) => value.toLocaleString("es-EC", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+            return (
+              <div className="modalOverlay" onClick={() => { void cerrarIngresoManualBascula(); }}>
+                <form className="modalCard basManual" onClick={(event) => event.stopPropagation()} onSubmit={submitWeighing}>
+                  <header className="basManual__head">
+                    <div>
+                      <span className="basManual__eyebrow">BÁSCULA · MODO PRINCIPAL</span>
+                      <h3>Ingreso manual de emergencia</h3>
                     </div>
-                  );
-                })()}
-                <div className="buttonRow">
-                  <button className="primary">Cerrar ticket</button>
-                  <button type="button" onClick={() => { desconectarBascula(); setIngresoModalOpen(false); }}>Cancelar</button>
-                </div>
-              </form>
-            </div>
-          )}
+                    <button type="button" className="basManual__close" aria-label="Cerrar" title="Cerrar" onClick={() => { void cerrarIngresoManualBascula(); }}>×</button>
+                  </header>
+
+                  <div className="basManual__ticket">
+                    <span>Ticket #</span>
+                    <input type="number" min="1" step="1" inputMode="numeric" required aria-label="Número de ticket"
+                      value={manualBasculaForm.ticketNumber}
+                      onChange={(event) => setManualBasculaField("ticketNumber", event.target.value)} />
+                    <small>{manualBasculaContext?.last_number ? `Último sincronizado: #${manualBasculaContext.last_number}` : "Numeración compartida con BASCULA"}</small>
+                  </div>
+
+                  <section className="basManual__section">
+                    <h4>Datos del ingreso</h4>
+                    <div className="basManual__grid basManual__grid--2">
+                      <Select name="farmer_id" label="Cliente / agricultor" rows={farmers.map((farmer) => [farmer.id, farmer.full_name])}
+                        value={manualBasculaForm.farmerId} onChange={(event) => setManualBasculaField("farmerId", event.target.value)} />
+                      <Select name="operation_type" label="Destino de la carga" rows={[
+                        ["COMPRA", "Compra / Producción propia"],
+                        ["SECADO", "Solo servicio de secado"],
+                        ["SECADO_PILADO", "Servicio completo: secada + pilada"],
+                        ["PILADO", "Solo servicio de pilada"]
+                      ]} value={manualBasculaForm.operationType}
+                        onChange={(event) => setManualBasculaField("operationType", event.target.value as ManualBasculaForm["operationType"])} />
+                      <label><span>Bajada X</span>
+                        <input value={manualBasculaForm.bajadaX} maxLength={100}
+                          onChange={(event) => setManualBasculaField("bajadaX", event.target.value.toUpperCase())} />
+                      </label>
+                      <label><span>Placa</span>
+                        <input value={manualBasculaForm.placa} maxLength={20} required autoCapitalize="characters"
+                          onChange={(event) => setManualBasculaField("placa", event.target.value.toUpperCase().replace(/\s+/g, ""))} />
+                      </label>
+                      <label><span>Plazo (días laborables)</span>
+                        <input type="number" min="0" step="1" inputMode="numeric" value={manualBasculaForm.plazo}
+                          onChange={(event) => {
+                            const plazo = event.target.value;
+                            setManualBasculaForm((current) => ({ ...current, plazo, fechaPago: fechaPagoDesdePlazo(plazo) }));
+                          }} />
+                      </label>
+                      <label><span>Fecha a pagar</span>
+                        <input type="date" value={manualBasculaForm.fechaPago}
+                          onChange={(event) => setManualBasculaField("fechaPago", event.target.value)} />
+                      </label>
+                      <label className="basManual__wide"><span>Tipo de arroz</span>
+                        <select required value={manualBasculaForm.riceType}
+                          onChange={(event) => setManualBasculaField("riceType", event.target.value as ManualBasculaForm["riceType"])}>
+                          <option value="">Seleccione</option>
+                          <option value="0.11">GRANO 0.11</option>
+                          <option value="CORRIENTE">CORRIENTE</option>
+                        </select>
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="basManual__section">
+                    <div className="basManual__sectionHead">
+                      <h4>Datos de pesaje</h4>
+                      <span className={serialConnected ? "basManual__status is-on" : "basManual__status"}>{serialConnected ? "Indicador conectado" : "Captura manual"}</span>
+                    </div>
+                    <div className="basManual__grid basManual__grid--4">
+                      <label><span>Peso bruto (kg)</span>
+                        <input type="number" step="0.01" min="0.01" inputMode="decimal" required value={manualBasculaForm.gross}
+                          onChange={(event) => setManualBasculaField("gross", event.target.value)} />
+                      </label>
+                      <label><span>Peso tara (kg)</span>
+                        <input type="number" step="0.01" min="0.01" inputMode="decimal" required value={manualBasculaForm.tara}
+                          onChange={(event) => setManualBasculaField("tara", event.target.value)} />
+                      </label>
+                      <label><span>Peso neto (kg)</span>
+                        <input value={netoKg > 0 ? n(netoKg, 2) : "0.00"} readOnly className="basManual__readonly" />
+                      </label>
+                      <label><span>Calificación</span>
+                        <input type="number" step="0.01" min="0.01" inputMode="decimal" required value={manualBasculaForm.qualification}
+                          onChange={(event) => setManualBasculaField("qualification", event.target.value)} />
+                      </label>
+                    </div>
+
+                    <div className="basManual__weightActions">
+                      {!serialConnected ? (
+                        <button type="button" className="btnSecondary" onClick={() => conectarBascula()}>Conectar indicador</button>
+                      ) : (
+                        <>
+                          <span>Lectura: <strong>{serialWeight || "—"} kg</strong></span>
+                          <button type="button" className="primary" onClick={() => capturarPeso()}>Capturar bruto</button>
+                          <button type="button" className="btnSecondary" title="Desconectar indicador" onClick={() => desconectarBascula()}>Desconectar</button>
+                        </>
+                      )}
+                    </div>
+
+                    <div className="basManual__total">
+                      <span>Total Q.Q.</span>
+                      <strong>{n(totalQq, 3)}</strong>
+                    </div>
+                  </section>
+
+                  <details className="basManual__optional">
+                    <summary>Control de humedad e impureza</summary>
+                    <div className="basManual__grid basManual__grid--2">
+                      <label><span>Humedad (%)</span>
+                        <input type="number" step="0.1" min="0" max="99.9" inputMode="decimal" value={manualBasculaForm.humedad}
+                          onChange={(event) => setManualBasculaField("humedad", event.target.value)} />
+                      </label>
+                      <label><span>Impureza (%)</span>
+                        <input type="number" step="0.1" min="0" max="99.9" inputMode="decimal" value={manualBasculaForm.impureza}
+                          onChange={(event) => setManualBasculaField("impureza", event.target.value)} />
+                      </label>
+                    </div>
+                    {netoKg > 0 && <p>Resultado referencial: <strong>{n(liqLb / 100, 2)} QQ</strong> después de merma · humedad base {n(base, 1)}%</p>}
+                  </details>
+
+                  <footer className="buttonRow basManual__actions">
+                    <button type="submit" className="primary" disabled={manualBasculaBusy}>{manualBasculaBusy ? "Guardando…" : "Guardar e ingresar"}</button>
+                    <button type="button" disabled={manualBasculaBusy} onClick={() => { void cerrarIngresoManualBascula(); }}>Cancelar</button>
+                  </footer>
+                </form>
+              </div>
+            );
+          })()}
           </>
         )}
 

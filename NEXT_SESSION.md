@@ -1657,6 +1657,18 @@ Implementado el 2026-10-13:
 - No cambia la lógica ni el resultado: continúan escapándose `&`, `<`, `>` y comillas para imprimir HTML de forma segura.
 - Verificaciones: ESLint sin errores (177 advertencias históricas no bloqueantes), frontend build y `git diff --check` correctos.
 
+### Ingreso manual de Bascula y correccion de unidad en Produccion
+
+Implementado el 2026-10-16:
+
+- El ingreso manual del ERP replica los campos operativos de la app BASCULA y registra primero un ticket canonico en `mobile_synced_tickets`; despues utiliza el flujo existente de `create-lot`.
+- Repetir el mismo numero reutiliza el ticket y no crea una segunda entrada. Un numero existente con otro agricultor, pesos distintos o ya procesado se bloquea con un mensaje claro.
+- La app Android v11.56 recibe incrementalmente los tickets `ERP_MANUAL`; si el mismo numero ya existe localmente con otros datos, conserva el pesaje de la tablet y reporta el conflicto.
+- La sincronizacion de retorno no consulta Firebase ni descarga el historial completo en cada ciclo.
+- Se corrigio el cierre de Produccion desde stock: `processing_batches.input_quantity` permanece en kg para rendimiento, pero antes de validar/descontar `inventory_movements` se convierte a QQ. El caso real `4.452,92 kg = 98,17 QQ` ya no intenta descontar 4.452,92 QQ.
+- Consulta solo lectura del lote `SI-141026-002`: `98,170 QQ`, estado `WEIGHED`, cero procesos abiertos despues del intento fallido.
+- Verificaciones: backend build, 232/232 tests, frontend build, ESLint sin errores y Android `testDebugUnitTest assembleDebug` exitoso.
+
 ## Servidor local
 
 El backend compilado se inicia desde `backend/` con:

@@ -15,6 +15,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import { createProductionWorkerPayments } from "./labor.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
+import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
 
 export const processingRouter = Router();
 
@@ -252,7 +253,7 @@ processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
-const QQ_TO_KG = 45.359237;
+const QQ_TO_KG = KG_PER_QUINTAL;
 
 const productionUnitSchema = z.enum(["QQ", "KG", "SACK"]);
 
@@ -1316,13 +1317,21 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       // stock patrimonial.
       const lotMeta = await client.query("SELECT operation_type FROM lots WHERE id = $1", [lotId]);
       if (loteAfectaInventarioPropio(lotMeta.rows[0]?.operation_type)) {
+        // processing_batches.input_quantity está expresado en KG (alimenta los
+        // reportes de rendimiento). El inventario de cáscara, en cambio, se
+        // registra en QQ. Comparar/descontar los kg como si fueran QQ inflaba el
+        // consumo 45,359 veces (98,17 QQ aparecían como 4.452,92 QQ).
+        const inputQuantityQq = kilogramsToQuintals(inputQuantity);
+        if (!(inputQuantityQq > 0)) {
+          throw new ApiError(400, "La cantidad de cáscara del lote no es válida.");
+        }
         // Freno de stock negativo (igual que en el flujo desde secadora).
-        await assertStockNoNegativo(client, inputProductId, inputWarehouseId, lotId, inputQuantity);
+        await assertStockNoNegativo(client, inputProductId, inputWarehouseId, lotId, inputQuantityQq);
         await client.query(
           `INSERT INTO inventory_movements
            (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
            VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
-          [inputProductId, inputWarehouseId, lotId, -inputQuantity, batch.rows[0].id, inputOwnership, body.created_by, inputAccionistaId]
+          [inputProductId, inputWarehouseId, lotId, -inputQuantityQq, batch.rows[0].id, inputOwnership, body.created_by, inputAccionistaId]
         );
       }
       await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [lotId]);
