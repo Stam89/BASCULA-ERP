@@ -8558,6 +8558,12 @@ export function App() {
   // "stock insuficiente" al guardar.
   // Stock del socio que vende (sesión de ventas).
   const stockVenta = ventaEsActivo ? stock : ventaStock;
+  // Rendimiento de subproductos por QQ de cáscara (servidor: historial de piladas o el normal de piladora).
+  const [rendimientoSubproducto, setRendimientoSubproducto] = useState<Record<string, number>>({ "ARROCILLO-34": 0.06, "ARROCILLO-FINO": 0.02, "POLVILLO": 0.1, "RECHAZO": 0.01 });
+  useEffect(() => {
+    if (!authUser) return;
+    apiGet<{ rendimientos: Record<string, number> }>("/orders/rendimiento-subproductos").then((r) => setRendimientoSubproducto(r.rendimientos)).catch(() => undefined);
+  }, [authUser]);
   const pedidosVenta = ventaEsActivo ? salesOrders : ventaPedidos;
   function stockDisponibleDeMarca(brandProductId: string): number | null {
     const marca = products.find((p) => p.id === brandProductId);
@@ -8586,7 +8592,13 @@ export function App() {
     const inventoryProductId = getInventoryProductForBrand(marca?.name || "") || brandProductId;
     const rawProductId = rawBackingProductId(inventoryProductId);
     const terminadoQq = stockPropioPorProducto(inventoryProductId);
-    const cascaraQq = stockPropioPorProducto(rawProductId);
+    // Subproducto (arrocillo, polvillo, rechazo): lo respalda la cáscara del socio por su rendimiento (igual que el servidor).
+    const codigoInv = products.find((p) => p.id === inventoryProductId)?.code ?? "";
+    const rendSub = !rawProductId ? rendimientoSubproducto[codigoInv] : undefined;
+    const cascaraTotalQq = rendSub != null
+      ? round2(["CASCARA-011", "CASCARA-CORRIENTE"].reduce((a, c) => a + Math.max(0, stockPropioPorProducto(products.find((p) => p.code === c)?.id ?? null)), 0))
+      : 0;
+    const cascaraQq = rendSub != null ? round2(cascaraTotalQq * rendSub) : stockPropioPorProducto(rawProductId);
     const comprometidoQq = round2(pedidosVenta
       .filter((order) => order.status === "PENDING" && !order.prepared_at && order.id !== pedidoEditando)
       .flatMap((order) => order.items)
@@ -8595,7 +8607,9 @@ export function App() {
     return {
       inventoryProductId,
       rawProductId,
-      rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cascara" : null,
+      rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cascara"
+        : rendSub != null ? `cáscara (${cascaraTotalQq.enReal()} QQ × ${(rendSub * 100).toFixed(1)}% al pilarla)` : null,
+      esSubproducto: rendSub != null,
       terminadoQq,
       cascaraQq,
       comprometidoQq,
@@ -17275,7 +17289,7 @@ Motivo (obligatorio):`, "");
                                 : `📦 Producto terminado: ${qq.enReal()} QQ`)
                             : "Producto terminado: 0.00 QQ"}
                         </small>
-                        {respaldo.rawProductId && (
+                        {(respaldo.rawProductId || respaldo.esSubproducto) && (
                           <small style={{ fontWeight: 700, color: respaldo.cascaraQq > 0 ? "#1d4ed8" : "#6b7280" }}>
                             🌾 Respaldo {respaldo.rawProductName}: {respaldo.cascaraQq.enReal()} QQ
                             {respaldo.comprometidoQq > 0 ? ` · comprometido: ${respaldo.comprometidoQq.enReal()} QQ` : ""}

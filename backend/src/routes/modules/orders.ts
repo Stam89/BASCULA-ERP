@@ -16,7 +16,7 @@ import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } 
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { traerDesdeAlla } from "../../services/traer-alla.js";
 import { validarFleteRegreso, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
-import { calculateOrderStockCoverage, rawBackingCode } from "../../utils/order-stock-coverage.js";
+import { calculateOrderStockCoverage, CODIGOS_CASCARA, rawBackingCode, RENDIMIENTO_SUBPRODUCTO_DEFECTO, subproductoEsperadoQq } from "../../utils/order-stock-coverage.js";
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
 import { notificar } from "../../services/notificaciones.js";
 import { getMatrizId } from "../../services/matriz.js";
@@ -184,6 +184,11 @@ ordersRouter.get("/suggest-price", asyncRoute(async (req, res) => {
   res.json({ unit_price: r.rowCount ? Number(r.rows[0].unit_price) : null });
 }));
 
+// Rendimiento de subproductos por QQ de cáscara (para que la pantalla de pedidos muestre el mismo respaldo).
+ordersRouter.get("/rendimiento-subproductos", asyncRoute(async (_req, res) => {
+  res.json(await rendimientoSubproductos(pool));
+}));
+
 ordersRouter.post("/", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
@@ -262,6 +267,30 @@ async function avisarPedidoNuevo(
  * consumen cobertura comercial, aunque el inventario fisico solo se descuenta
  * al confirmar la preparacion.
  */
+/**
+ * Rendimiento de cada SUBPRODUCTO por QQ de cáscara pilada: el real de las piladas de los últimos 180 días
+ * (kg de subproducto / kg de cáscara) si hay al menos 3; si no, el normal de piladora (RENDIMIENTO_SUBPRODUCTO_DEFECTO).
+ * Con él, un pedido de arrocillo/polvillo/rechazo se respalda con la cáscara del socio (se sacará al pilarla).
+ */
+export async function rendimientoSubproductos(db: { query: PoolClient["query"] }): Promise<{ rendimientos: Record<string, number>; fuente: "historial" | "normal"; piladas: number }> {
+  const r = (await db.query(
+    `SELECT count(*)::int AS n,
+            SUM(broken_rice_kg)::float AS a34, SUM(fine_broken_rice_kg)::float AS fino, SUM(bran_kg)::float AS pol,
+            SUM(input_paddy_kg)::float AS entrada
+       FROM production_yields
+      WHERE created_at > now() - interval '180 days' AND input_paddy_kg > 0`
+  )).rows[0] as { n: number; a34: number | null; fino: number | null; pol: number | null; entrada: number | null };
+  const rendimientos = { ...RENDIMIENTO_SUBPRODUCTO_DEFECTO };
+  if (Number(r?.n) >= 3 && Number(r.entrada) > 0) {
+    const f = (kg: number | null) => Math.round((Number(kg || 0) / Number(r.entrada)) * 10000) / 10000;
+    if (Number(r.a34) > 0) rendimientos["ARROCILLO-34"] = f(r.a34);
+    if (Number(r.fino) > 0) rendimientos["ARROCILLO-FINO"] = f(r.fino);
+    if (Number(r.pol) > 0) rendimientos["POLVILLO"] = f(r.pol);
+    return { rendimientos, fuente: "historial", piladas: Number(r.n) };
+  }
+  return { rendimientos, fuente: "normal", piladas: Number(r?.n ?? 0) };
+}
+
 async function validarRespaldoDelPedido(
   client: PoolClient,
   accionistaId: string | undefined,
@@ -322,7 +351,29 @@ async function validarRespaldoDelPedido(
       [accionistaId, productId, excluirPedidoId ?? null]
     );
     const pendienteQq = Number(pendientes.rows[0]?.quantity || 0);
-    const cobertura = calculateOrderStockCoverage(solicitadoQq, pendienteQq, terminadoQq, cascaraQq);
+    // SUBPRODUCTO (arrocillo, polvillo, rechazo): lo respalda la cáscara del socio (0.11 y corriente) por su
+    // rendimiento; al pilarla sale. No se descuenta de la cáscara que respalda el arroz: salen juntos.
+    const rendSub = RENDIMIENTO_SUBPRODUCTO_DEFECTO[String(producto.rows[0].code)] != null
+      ? (await rendimientoSubproductos(client)).rendimientos[String(producto.rows[0].code)] : null;
+    let cascaraSubQq = 0;
+    if (rendSub != null && !rawCode) {
+      const c = (await client.query(
+        `SELECT COALESCE(SUM(m.quantity), 0)::float AS q FROM inventory_movements m JOIN products p ON p.id = m.product_id
+          WHERE m.accionista_id = $1 AND m.ownership = 'OWNED' AND p.code = ANY($2::text[])`,
+        [accionistaId, CODIGOS_CASCARA]
+      )).rows[0];
+      cascaraSubQq = Math.max(0, Number(c?.q || 0));
+    }
+    const subEsperadoQq = rendSub != null ? subproductoEsperadoQq(cascaraSubQq, rendSub) : 0;
+    const cobertura = calculateOrderStockCoverage(solicitadoQq, pendienteQq, terminadoQq, rawCode ? cascaraQq : subEsperadoQq);
+    if (!cobertura.covered && rendSub != null && !rawCode) {
+      throw new ApiError(
+        409,
+        `Respaldo insuficiente para ${producto.rows[0].name}: los pedidos pendientes mas este pedido requieren ${cobertura.requiredQq.toFixed(2)} QQ. ` +
+        `El socio tiene ${round2(terminadoQq).toFixed(2)} QQ terminados y ${round2(cascaraSubQq).toFixed(2)} QQ de cáscara, de la que saldrían unos ` +
+        `${subEsperadoQq.toFixed(2)} QQ (${(rendSub * 100).toFixed(1)}% por QQ). Faltan ${cobertura.shortageQq.toFixed(2)} QQ.`
+      );
+    }
     if (!cobertura.covered) {
       const detalleCascara = rawCode
         ? ` y ${round2(cascaraQq).toFixed(2)} QQ de ${rawProduct?.rows[0]?.name ?? rawCode}`
