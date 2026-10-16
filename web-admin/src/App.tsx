@@ -17299,13 +17299,26 @@ Motivo (obligatorio):`, "");
                     const hayRespaldo = libre > 0;
                     return (
                       <div style={{ marginTop: 4, display: "grid", gap: 2 }}>
-                        <small style={{ fontWeight: 700, color: hayTerminado ? "#15803d" : "#b45309" }}>
-                          {hayTerminado
-                            ? (wl
-                                ? `📦 Producto terminado: ${sacos} sacos (${qq.enReal()} QQ)`
-                                : `📦 Producto terminado: ${qq.enReal()} QQ`)
-                            : "Producto terminado: 0.00 QQ"}
-                        </small>
+                        {(() => {
+                          // Por separado: lo que está AQUÍ en la piladora y lo que está ALLÁ (selección / envejecido).
+                          const filasProd = stockVenta.filter((st) => st.product_id === respaldo.inventoryProductId && st.ownership === "OWNED");
+                          const aqui = round2(filasProd.filter((st) => st.warehouse_type !== "EXTERNO").reduce((a2, st) => a2 + Number(st.quantity), 0));
+                          const alla = new Map<string, number>();
+                          for (const st of filasProd.filter((x) => x.warehouse_type === "EXTERNO")) {
+                            const nom = String(st.warehouse_name ?? "Allá").replace(/^Allá:\s*/i, "");
+                            alla.set(nom, round2((alla.get(nom) ?? 0) + Number(st.quantity)));
+                          }
+                          const enSacos = (q2: number) => wl ? `${Math.floor((q2 * 100) / wl)} sacos (${q2.enReal()} QQ)` : `${q2.enReal()} QQ`;
+                          if (!hayTerminado) return <small style={{ fontWeight: 700, color: "#b45309" }}>Producto terminado: 0.00 QQ</small>;
+                          return (
+                            <>
+                              <small style={{ fontWeight: 700, color: aqui > 0 ? "#15803d" : "#6b7280" }}>📦 Aquí en la piladora: {enSacos(Math.max(0, aqui))}</small>
+                              {[...alla.entries()].filter(([, q2]) => Math.abs(q2) > 0.005).map(([nom, q2]) => (
+                                <small key={nom} style={{ fontWeight: 700, color: "#7c3aed" }}>🚚 Allá donde {nom}: {enSacos(q2)} <span style={{ fontWeight: 400 }}>(se retira allá al preparar)</span></small>
+                              ))}
+                            </>
+                          );
+                        })()}
                         {(respaldo.rawProductId || respaldo.esSubproducto) && (
                           <small style={{ fontWeight: 700, color: respaldo.cascaraQq > 0 ? "#1d4ed8" : "#6b7280" }}>
                             🌾 Respaldo {respaldo.rawProductName}: {respaldo.cascaraQq.enReal()} QQ
