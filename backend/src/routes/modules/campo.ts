@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
@@ -93,6 +93,26 @@ async function asegurarMovimientoApertura(client: Q, sesion: {
     [sesion.fecha_apertura, cajaId, saldoInicial, CONCEPTO_APERTURA_CAJA,
      NATURALEZA_APERTURA_CAJA, sesion.id, sesion.usuario_id ?? null]
   )).rows[0] ?? null;
+}
+
+// Saldo del BANCO de Transporte al abrir la caja o al editar el saldo inicial (como en la caja de los socios).
+// El banco es una cuenta continua: si el saldo que se escribe difiere del libro, se asienta la diferencia con
+// naturaleza 'ajuste_saldo_banco' (no es ingreso ni gasto: los reportes de resultados no la cuentan).
+const NATURALEZA_AJUSTE_BANCO = "ajuste_saldo_banco";
+async function ajustarSaldoBanco(client: Q, nuevo: number, usuarioId: string | null, concepto: string) {
+  const banco = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = 'BANCO' LIMIT 1 FOR UPDATE")).rows[0];
+  if (!banco) throw new ApiError(409, "No existe la cuenta BANCO de Transporte.");
+  const actual = Number((await client.query(
+    "SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE -monto END), 0)::float AS s FROM campo_movimientos WHERE cuenta_id = $1",
+    [banco.id]
+  )).rows[0].s);
+  const dif = Math.round((nuevo - actual) * 100) / 100;
+  if (Math.abs(dif) < 0.005) return null;
+  return (await client.query(
+    `INSERT INTO campo_movimientos (cuenta_id, signo, monto, concepto, naturaleza, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+    [banco.id, dif > 0 ? "entrada" : "salida", Math.abs(dif), `${concepto} (de ${actual.toFixed(2)} a ${nuevo.toFixed(2)})`, NATURALEZA_AJUSTE_BANCO, usuarioId]
+  )).rows[0];
 }
 
 type ParteClienteInput = {
@@ -3071,6 +3091,8 @@ campoRouter.get("/caja/sesion-activa", asyncRoute(async (_req, res) => {
 campoRouter.post("/caja/abrir", asyncRoute(async (req, res) => {
   const body = z.object({
     saldo_inicial: z.number().nonnegative(),
+    // Opcional: cuánto hay en el banco al abrir (si difiere del libro se corrige).
+    saldo_banco: z.number().nonnegative().optional(),
     observaciones: z.string().max(400).optional()
   }).parse(req.body);
   const row = await inTransaction(async (client) => {
@@ -3081,9 +3103,34 @@ campoRouter.post("/caja/abrir", asyncRoute(async (req, res) => {
       [userId(req), body.saldo_inicial, body.observaciones?.trim() || null]
     )).rows[0];
     await asegurarMovimientoApertura(client, sesion);
+    if (body.saldo_banco !== undefined) await ajustarSaldoBanco(client, body.saldo_banco, userId(req), "Saldo del banco al abrir la caja");
     return sesion;
   });
   res.status(201).json(row);
+}));
+
+// ✏️ Editar saldo inicial de la caja abierta (efectivo y, opcional, banco). Solo administrador, como en los socios.
+campoRouter.put("/caja/saldo-inicial", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    saldo_inicial: z.number().nonnegative(),
+    saldo_banco: z.number().nonnegative().optional()
+  }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const s = (await client.query("SELECT * FROM campo_caja_sesiones WHERE estado = 'ABIERTA' ORDER BY fecha_apertura DESC LIMIT 1 FOR UPDATE")).rows[0];
+    if (!s) throw new ApiError(400, "No hay una caja abierta.");
+    const nuevo = Math.round(body.saldo_inicial * 100) / 100;
+    const sesion = (await client.query("UPDATE campo_caja_sesiones SET saldo_inicial = $2 WHERE id = $1 RETURNING *", [s.id, nuevo])).rows[0];
+    // El efectivo inicial vive en el libro como el movimiento de apertura de la sesión: se ajusta a la par.
+    const mov = (await client.query(
+      "SELECT id FROM campo_movimientos WHERE caja_sesion_id = $1 AND naturaleza = $2 LIMIT 1", [s.id, NATURALEZA_APERTURA_CAJA]
+    )).rows[0];
+    if (mov && nuevo > 0) await client.query("UPDATE campo_movimientos SET monto = $2 WHERE id = $1", [mov.id, nuevo]);
+    else if (mov) await client.query("DELETE FROM campo_movimientos WHERE id = $1", [mov.id]);
+    else await asegurarMovimientoApertura(client, sesion);
+    if (body.saldo_banco !== undefined) await ajustarSaldoBanco(client, body.saldo_banco, userId(req), "Saldo del banco corregido");
+    return { saldo_inicial: nuevo };
+  });
+  res.json(out);
 }));
 
 // Vista previa del arqueo (sin cerrar): saldo inicial, ingresos, egresos y teórico.

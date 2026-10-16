@@ -266,12 +266,14 @@ function AlertasCampo({ onIr, version }: { onIr?: (s: CampoSeccion) => void; ver
   );
 }
 
-export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion, puedeVerSeccion }: {
+export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion, puedeVerSeccion, esAdmin = false }: {
   section?: CampoSeccion; nombre?: string; matrizName?: string; onNombreChange?: (n: string) => void;
   /** Cambia de sección del menú de Transporte (p. ej. de la caja al Estado de Resultados). */
   onIrSeccion?: (s: CampoSeccion) => void;
   /** Secciones que el usuario puede abrir (para no mostrar accesos que no le sirven). */
   puedeVerSeccion?: (s: CampoSeccion) => boolean;
+  /** Administrador: puede editar el saldo inicial de la caja abierta (como en la caja de los socios). */
+  esAdmin?: boolean;
 }) {
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
@@ -284,8 +286,13 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   // «libro» = solo los movimientos (como la Caja de la piladora); los formularios se abren con los botones grandes.
   const [cajaTab, setCajaTab] = useState<"libro" | "ingreso" | "egreso" | "transferencia" | "cierres">("libro");
   const [sesion, setSesion] = useState<SesionResp | null>(null);
-  const [modalCaja, setModalCaja] = useState<"" | "abrir" | "cerrar">("");
+  const [modalCaja, setModalCaja] = useState<"" | "cerrar">("");
   const [menuCaja, setMenuCaja] = useState(false);
+  // Apertura (igual que la caja de los socios: efectivo + banco, «Traer saldo anterior») y edición del saldo inicial.
+  const [apertura, setApertura] = useState<{ efectivo: string; banco: string; obs: string; busy?: boolean }>({ efectivo: "", banco: "", obs: "" });
+  const [editSaldo, setEditSaldo] = useState<{ efectivo: string; banco: string; busy?: boolean } | null>(null);
+  // «Depositar / retirar del banco» abre la transferencia ya armada CAJA ⇄ BANCO.
+  const [transfPreset, setTransfPreset] = useState<{ origen: string; destino: string } | null>(null);
   const refreshSesion = useCallback(async () => {
     try { setSesion(await apiGet<SesionResp>("/campo/caja/sesion-activa")); } catch { /* opcional */ }
   }, []);
@@ -458,7 +465,111 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   const arqueo = sesion?.activa?.arqueo;
   const ver = (x: CampoSeccion) => !puedeVerSeccion || puedeVerSeccion(x);
   const icoCuenta = (n: string) => n === "CAJA" ? "💵" : n === "BANCO" ? "🏦" : n === "CRUCE PILADORA" ? "🔁" : "📁";
-  const irA = (t: typeof cajaTab) => { setMenuCaja(false); setCajaTab((x) => (x === t && t !== "libro" ? "libro" : t)); };
+  const irA = (t: typeof cajaTab) => { setMenuCaja(false); if (t === "transferencia") setTransfPreset(null); setCajaTab((x) => (x === t && t !== "libro" ? "libro" : t)); };
+  const cuentaCaja = cuentas.find((c) => c.nombre === "CAJA");
+  const cuentaBanco = cuentas.find((c) => c.nombre === "BANCO");
+  const traerSaldoAnterior = () => setApertura((x) => ({ ...x, efectivo: String(sesion?.saldo_sugerido ?? 0), banco: String(cuentaBanco?.saldo ?? 0) }));
+  async function abrirCaja() {
+    try {
+      const efectivo = Number(apertura.efectivo || 0);
+      if (!(efectivo >= 0)) throw new Error("Ingresa el saldo inicial en efectivo (0 o más)");
+      const banco = apertura.banco.trim() === "" ? undefined : Number(apertura.banco);
+      if (banco !== undefined && !(banco >= 0)) throw new Error("El saldo del banco debe ser 0 o más");
+      setApertura((x) => ({ ...x, busy: true }));
+      await apiPost("/campo/caja/abrir", { saldo_inicial: efectivo, saldo_banco: banco, observaciones: apertura.obs.trim() || undefined });
+      setApertura({ efectivo: "", banco: "", obs: "" });
+      await Promise.all([refreshSesion(), refreshCatalogos()]);
+      setLibroVersion((v) => v + 1);
+      notify("Caja abierta");
+    } catch (e) { notify((e as Error).message, "err"); setApertura((x) => ({ ...x, busy: false })); }
+  }
+  async function guardarSaldoInicial() {
+    if (!editSaldo) return;
+    try {
+      const efectivo = Number(editSaldo.efectivo || 0);
+      const banco = Number(editSaldo.banco || 0);
+      if (!(efectivo >= 0) || !(banco >= 0)) throw new Error("Los saldos deben ser 0 o más");
+      setEditSaldo({ ...editSaldo, busy: true });
+      await apiPut("/campo/caja/saldo-inicial", { saldo_inicial: efectivo, saldo_banco: banco });
+      setEditSaldo(null);
+      await onCajaSaved("Saldo inicial actualizado");
+    } catch (e) { notify((e as Error).message, "err"); setEditSaldo((x) => x && { ...x, busy: false }); }
+  }
+  // Movimientos de la sesión abierta (desde el día de apertura) para el Excel y el PDF.
+  async function movimientosSesion(): Promise<LibroRow[]> {
+    const desde = sesion?.activa ? new Date(sesion.activa.fecha_apertura).toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }) : "";
+    return apiGet<LibroRow[]>(`/campo/caja/libro${desde ? `?from=${desde}` : ""}`);
+  }
+  const titulo = nombre ?? "Transporte y Cosechadora";
+  async function descargarExcel() {
+    try {
+      const rows = await movimientosSesion();
+      const XLSX = await import("xlsx");
+      const datos = rows.map((r) => ({ Fecha: String(r.fecha).slice(0, 10), Concepto: r.concepto ?? "", "Categoría": r.categoria_nombre ?? "", "Máquina": r.activo_nombre ?? "", Cuenta: r.cuenta_nombre, Entrada: r.entrada || 0, Salida: r.salida || 0, Saldo: r.saldo_corrido }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(datos), "Caja");
+      XLSX.writeFile(wb, `caja-transporte-${new Date().toLocaleDateString("en-CA")}.xlsx`);
+    } catch (e) { notify(`Error al descargar: ${(e as Error).message}`, "err"); }
+  }
+  async function imprimirPdf() {
+    try {
+      const rows = await movimientosSesion();
+      const esc = (t: unknown) => String(t ?? "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] as string));
+      const ent = rows.reduce((t, r) => t + (r.entrada || 0), 0);
+      const sal = rows.reduce((t, r) => t + (r.salida || 0), 0);
+      const filas = rows.map((r, i) => `<tr><td>${i + 1}</td><td>${esc(String(r.fecha).slice(0, 10))}</td><td>${esc(r.concepto)}${r.activo_nombre ? ` · ${esc(r.activo_nombre)}` : ""}</td><td>${esc(r.categoria_nombre)}</td><td>${esc(r.cuenta_nombre)}</td><td style="color:green">${r.entrada > 0 ? money(r.entrada) : ""}</td><td style="color:#c00">${r.salida > 0 ? money(r.salida) : ""}</td></tr>`).join("");
+      const html = `<html><head><title>Caja ${esc(titulo)}</title><style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style></head><body>
+      <h2 style="text-align:center">${esc(titulo)} — Caja</h2>
+      <p>${sesion?.activa ? `Apertura: ${new Date(sesion.activa.fecha_apertura).toLocaleString("es-EC")} · Saldo inicial efectivo: ${money(arqueo?.saldo_inicial ?? 0)} · ` : ""}${cuentas.map((c) => `${esc(c.nombre)}: ${money(c.saldo)}`).join(" · ")}</p>
+      <table><thead><tr><th>#</th><th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Cuenta</th><th>Entrada</th><th>Salida</th></tr></thead><tbody>${filas}</tbody>
+      <tfoot><tr class="tot"><td colspan="5">TOTALES</td><td style="color:green">${money(ent)}</td><td style="color:#c00">${money(sal)}</td></tr>
+      <tr class="tot"><td colspan="5">DISPONIBLE (sin el cruce interno)</td><td colspan="2">${money(totalDisponible)}</td></tr></tfoot></table></body></html>`;
+      const w = window.open("", "_blank");
+      if (!w) return;
+      w.document.write(html); w.document.close(); w.print();
+    } catch (e) { notify((e as Error).message, "err"); }
+  }
+
+  // Todavía cargando el estado de la caja: no mostrar «No hay caja abierta» por un instante.
+  if (sesion === null) return <section className="panelGrid"><p className="muted" style={{ gridColumn: "1 / -1" }}>Cargando caja…</p></section>;
+
+  // ── Sin caja abierta: igual que la caja de los socios ──
+  if (!cajaAbierta) {
+    return (
+      <section className="panelGrid">
+        <div style={{ gridColumn: "1 / -1", display: "grid", gap: 20, maxWidth: 600, margin: "28px auto", width: "100%" }}>
+          {flashEl}
+          <div className="emptyState">
+            <div className="emptyIcon">💼</div>
+            <h2>No hay caja abierta</h2>
+            <p>Abre la caja de {titulo} para comenzar a registrar movimientos de dinero</p>
+          </div>
+          <form className="formPanel" onSubmit={(e) => { e.preventDefault(); abrirCaja(); }} style={{ padding: 24 }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: 16, fontWeight: 700 }}>Abrir caja nueva</h3>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label><span>Saldo inicial ($)</span>
+                <input type="number" step="0.01" min="0" value={apertura.efectivo} onChange={(e) => setApertura({ ...apertura, efectivo: e.target.value })} placeholder="0.00" />
+              </label>
+              <label><span>Saldo inicial en Banco ($)</span>
+                <input type="number" step="0.01" min="0" value={apertura.banco} onChange={(e) => setApertura({ ...apertura, banco: e.target.value })} placeholder={String(cuentaBanco?.saldo ?? 0)} />
+              </label>
+            </div>
+            <small className="muted" style={{ display: "block", marginTop: -4 }}>Banco según el sistema: {money(cuentaBanco?.saldo ?? 0)}. Si lo dejas vacío no se cambia; si escribes otro valor, se corrige la diferencia.</small>
+            <label><span>Observaciones (opcional)</span><input type="text" value={apertura.obs} onChange={(e) => setApertura({ ...apertura, obs: e.target.value })} placeholder="Ej: Turno mañana" /></label>
+            <button type="button" className="btnSecondary" onClick={traerSaldoAnterior}>
+              🔄 Traer saldo anterior (efectivo {money(sesion?.saldo_sugerido ?? 0)} y banco {money(cuentaBanco?.saldo ?? 0)})
+            </button>
+            <button className="primary" disabled={apertura.busy} style={{ width: "100%", padding: "10px 0", fontSize: 14, fontWeight: 700 }}>{apertura.busy ? "Abriendo…" : "💰 Abrir caja"}</button>
+          </form>
+          <div style={{ textAlign: "center" }}>
+            <button type="button" className="btnSecondary" onClick={() => setCajaTab((x) => (x === "cierres" ? "libro" : "cierres"))}>📋 {cajaTab === "cierres" ? "Ocultar" : "Ver"} cierres de caja anteriores</button>
+          </div>
+        </div>
+        {cajaTab === "cierres" && <CierresCajaView />}
+      </section>
+    );
+  }
+
   return (
     <section className="panelGrid">
       <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
@@ -466,26 +577,45 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
         <div className="cjx-hero">
           <div style={{ minWidth: 0 }}>
             <p className="cjx-sub">
-              {cajaAbierta
-                ? <><span className="cj-live" /> {nombre ?? "Transporte y Cosechadora"} · abierta por {sesion!.activa!.usuario_nombre ?? "—"} el {new Date(sesion!.activa!.fecha_apertura).toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}</>
-                : <><span className="cj-live cj-live--off" /> {nombre ?? "Transporte y Cosechadora"} · caja cerrada: ábrela para registrar ingresos y egresos</>}
+              <span className="cj-live" /> {titulo} · abierta por {sesion!.activa!.usuario_nombre ?? "—"} el {new Date(sesion!.activa!.fecha_apertura).toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}
             </p>
             <div className="cjx-saldo">{money(totalDisponible)}</div>
             <p className="cjx-sub">
               {cuentas.map((c) => (
                 <span key={c.id} style={{ whiteSpace: "nowrap" }}>{icoCuenta(c.nombre)} {c.nombre === "CRUCE PILADORA" ? "Cruce (no se suma)" : c.nombre === "CAJA" ? "Gaveta" : c.nombre} <b className={c.saldo < 0 ? "cj-neg" : undefined}>{money(c.saldo)}</b> · </span>
               )).flatMap((el) => [el, " "])}
-              {cajaAbierta && <>entró <b className="cj-pos">+{money(arqueo?.ingresos ?? 0)}</b> · salió <b className="cj-neg">−{money(arqueo?.egresos ?? 0)}</b>
-                <span className="cjx-ini"> · inicial {money(arqueo?.saldo_inicial ?? 0)}</span></>}
+              entró <b className="cj-pos">+{money(arqueo?.ingresos ?? 0)}</b> · salió <b className="cj-neg">−{money(arqueo?.egresos ?? 0)}</b>
+              <span className="cjx-ini"> · inicial {money(arqueo?.saldo_inicial ?? 0)}</span>
             </p>
           </div>
           <div className="cj-dd">
-            {!cajaAbierta && <button type="button" className="cj-btn cj-btn--primary" style={{ marginRight: 6 }} onClick={() => setModalCaja("abrir")}>🔓 Abrir caja</button>}
             <button type="button" className={`cj-btn ${menuCaja ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={menuCaja} onClick={() => setMenuCaja((m) => !m)}>
               Más <span className="cj-caret">▾</span>
             </button>
             {menuCaja && (
               <div className="cj-menu cj-menu--right" role="menu">
+                {esAdmin && (
+                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => {
+                    setMenuCaja(false);
+                    setEditSaldo({ efectivo: String(arqueo?.saldo_inicial ?? 0), banco: String(cuentaBanco?.saldo ?? 0) });
+                  }}>
+                    <span className="cj-menu-ico">✏️</span><span className="cj-menu-label">Editar saldo inicial</span>
+                  </button>
+                )}
+                {cuentaCaja && cuentaBanco && (
+                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => {
+                    setMenuCaja(false); setTransfPreset({ origen: cuentaCaja.id, destino: cuentaBanco.id }); setCajaTab("transferencia");
+                  }}>
+                    <span className="cj-menu-ico">🏦</span><span className="cj-menu-label">Depositar / retirar del banco</span>
+                  </button>
+                )}
+                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); descargarExcel(); }}>
+                  <span className="cj-menu-ico">📥</span><span className="cj-menu-label">Descargar Excel</span>
+                </button>
+                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); imprimirPdf(); }}>
+                  <span className="cj-menu-ico">🖨</span><span className="cj-menu-label">Imprimir PDF</span>
+                </button>
+                <div className="cj-menu-sep" />
                 <button type="button" role="menuitem" className={`cj-menu-item ${cajaTab === "cierres" ? "is-current" : ""}`} onClick={() => irA("cierres")}>
                   <span className="cj-menu-ico">📋</span><span><span className="cj-menu-label">Cierres de caja</span><span className="cj-menu-hint">Historial de aperturas y arqueos</span></span>
                 </button>
@@ -495,19 +625,27 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
                   </button>
                 )}
                 <div className="cj-menu-sep" />
-                {cajaAbierta ? (
-                  <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setMenuCaja(false); setModalCaja("cerrar"); }}>
-                    <span className="cj-menu-ico">🔒</span><span className="cj-menu-label">Cerrar / arquear caja</span>
-                  </button>
-                ) : (
-                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); setModalCaja("abrir"); }}>
-                    <span className="cj-menu-ico">🔓</span><span className="cj-menu-label">Abrir caja</span>
-                  </button>
-                )}
+                <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setMenuCaja(false); setModalCaja("cerrar"); }}>
+                  <span className="cj-menu-ico">✕</span><span className="cj-menu-label">Cerrar caja</span>
+                </button>
               </div>
             )}
           </div>
         </div>
+
+        {editSaldo && (
+          <div className="cj-card cj-edit-saldo">
+            <div className="cj-card-title">✏️ Editar saldo inicial</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              <label><span>Efectivo $</span><input type="number" step="0.01" min="0" value={editSaldo.efectivo} onChange={(e) => setEditSaldo({ ...editSaldo, efectivo: e.target.value })} /></label>
+              <label><span>Banco $</span><input type="number" step="0.01" min="0" value={editSaldo.banco} onChange={(e) => setEditSaldo({ ...editSaldo, banco: e.target.value })} /></label>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" className="primary" disabled={editSaldo.busy} onClick={guardarSaldoInicial}>{editSaldo.busy ? "Guardando…" : "Guardar"}</button>
+              <button type="button" onClick={() => setEditSaldo(null)}>Cancelar</button>
+            </div>
+          </div>
+        )}
 
         {/* Lo de todos los días: dos botones grandes. */}
         <div className="cjx-big">
@@ -551,7 +689,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
           onSaved={() => onCajaSaved("Egreso registrado")} onError={(m) => notify(m, "err")} />
       )}
       {cajaTab === "transferencia" && (
-        <TransferenciaForm cuentas={cuentas}
+        <TransferenciaForm key={transfPreset ? `${transfPreset.origen}-${transfPreset.destino}` : "libre"} preset={transfPreset} cuentas={cuentas.filter((c) => c.nombre !== "CRUCE PILADORA")}
           onSaved={() => onCajaSaved("Transferencia registrada")} onError={(m) => notify(m, "err")} />
       )}
       {cajaTab === "cierres" && <CierresCajaView />}
@@ -560,17 +698,6 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
         onReversed={() => onCajaSaved("Movimiento reversado y registrado en el libro")}
         onError={(m) => notify(m, "err")} />}
 
-      {modalCaja === "abrir" && (
-        <AperturaCajaModal saldoSugerido={sesion?.saldo_sugerido ?? 0}
-          onClose={() => setModalCaja("")}
-          onDone={async () => {
-            setModalCaja("");
-            await Promise.all([refreshSesion(), refreshCatalogos()]);
-            setLibroVersion((v) => v + 1);
-            notify("Caja abierta");
-          }}
-          onError={(m) => notify(m, "err")} />
-      )}
       {modalCaja === "cerrar" && (
         <CierreCajaModal
           onClose={() => setModalCaja("")}
@@ -1931,10 +2058,12 @@ function LiquidarValeModal({ vale, onClose, onDone, onError }: {
 
 // ⇄ TRANSFERENCIA: mueve dinero entre dos cuentas (par de movimientos). NO es
 // ingreso ni egreso real; sí cambia el saldo de cada cuenta.
-function TransferenciaForm({ cuentas, onSaved, onError }: {
+function TransferenciaForm({ cuentas, onSaved, onError, preset }: {
   cuentas: Cuenta[]; onSaved: OnSaved; onError: (m: string) => void;
+  /** Cuentas ya elegidas (p. ej. «Depositar / retirar del banco»: CAJA → BANCO). */
+  preset?: { origen: string; destino: string } | null;
 }) {
-  const [f, setF] = useState({ fecha: hoy(), origen: "", destino: "", monto: "", concepto: "" });
+  const [f, setF] = useState({ fecha: hoy(), origen: preset?.origen ?? "", destino: preset?.destino ?? "", monto: "", concepto: "" });
   const [busy, setBusy] = useState(false);
   async function submit() {
     try {
@@ -2066,40 +2195,6 @@ function LibroView({ cuentas, version, onReversed, onError }: {
         </table>
       </div>
       <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>Cada fila muestra el saldo corrido de su propia cuenta. Reversar crea un asiento contrario y conserva el original para auditoria.</p>
-    </div>
-  );
-}
-
-// ── 🔓 Apertura de caja ──────────────────────────────────────────────────────
-function AperturaCajaModal({ saldoSugerido, onClose, onDone, onError }: {
-  saldoSugerido: number; onClose: () => void; onDone: () => void | Promise<void>; onError: (m: string) => void;
-}) {
-  const [monto, setMonto] = useState(saldoSugerido ? String(saldoSugerido) : "");
-  const [obs, setObs] = useState("");
-  const [busy, setBusy] = useState(false);
-  async function submit() {
-    try {
-      setBusy(true);
-      const saldo = Number(monto);
-      if (!(saldo >= 0)) throw new Error("Ingresa el monto inicial (0 o más)");
-      await apiPost("/campo/caja/abrir", { saldo_inicial: saldo, observaciones: obs.trim() || undefined });
-      await onDone();
-    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
-  }
-  return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
-      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }} style={{ maxWidth: 440, width: "100%", margin: 0 }}>
-        <h2 style={{ marginTop: 0 }}>🔓 Abrir caja</h2>
-        <label><span>Monto inicial en efectivo $</span>
-          <input type="number" step="0.01" min="0" autoFocus value={monto} onChange={(e) => setMonto(e.target.value)} placeholder="0.00" />
-          <small className="muted" style={{ cursor: "pointer" }} onClick={() => setMonto(String(saldoSugerido))}>› Sugerido (cierre anterior): {money(saldoSugerido)}</small>
-        </label>
-        <label><span>Observaciones (opcional)</span><input type="text" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="Ej: Turno mañana" /></label>
-        <div className="buttonRow">
-          <button type="submit" className="primary" disabled={busy}>{busy ? "Abriendo…" : "Abrir caja"}</button>
-          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
-        </div>
-      </form>
     </div>
   );
 }
@@ -3371,7 +3466,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         <div className="content">
           {secciones.length === 0 || !permitida(seccion)
             ? <p className="muted">No tienes ninguna sección de {nombre} asignada. Pide acceso a un administrador.</p>
-            : <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={irA} puedeVerSeccion={permitida} />}
+            : <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={irA} puedeVerSeccion={permitida} esAdmin={(roleName ?? "").toUpperCase() === "ADMINISTRADOR"} />}
         </div>
       </section>
     </main>
