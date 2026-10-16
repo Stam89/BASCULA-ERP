@@ -12527,6 +12527,35 @@ Motivo (obligatorio):`, "");
 
   // Despachar y cobrar: el pedido se convierte en venta real (inventario +
   // caja o crédito) en una sola operación del servidor.
+  // 📲 Transferencias / cheques por confirmar (de la operación activa).
+  const [porConfirmar, setPorConfirmar] = useState<Array<{ id: string; monto: number; por_confirmar: string; por_confirmar_desde: string | null; cliente: string | null; order_number: string | null }>>([]);
+  const [confirmandoId, setConfirmandoId] = useState<string | null>(null);
+  function cargarPorConfirmar() {
+    apiGet<typeof porConfirmar>("/receivable/por-confirmar").then(setPorConfirmar).catch(() => undefined);
+  }
+  useEffect(() => { if (activeTab === "Caja" && authUser) cargarPorConfirmar(); }, [activeTab, activeAccionistaId, authUser]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function confirmarTransferencia(t: { id: string; monto: number; cliente: string | null; por_confirmar: string }, llego: boolean) {
+    const registerId = dashboard.current_cash_register?.id;
+    const quien = `${t.por_confirmar === "CHECK" ? "el cheque" : "la transferencia"} de ${t.cliente ?? "el cliente"} (${money(Number(t.monto))})`;
+    if (llego && !registerId) { addToast("Abre la caja para registrar la transferencia que llegó.", "error"); return; }
+    if (!window.confirm(llego ? `¿Confirmas que llegó ${quien}? Entra a la caja por el banco.` : `¿${quien} NO llegó? Queda en Por Cobrar como deuda del cliente.`)) return;
+    setConfirmandoId(t.id);
+    try {
+      if (llego) {
+        await apiPost(`/receivable/${t.id}/pay`, { amount: round2(Number(t.monto)), cash_register_id: registerId, concepto: "Transferencia confirmada", medio_pago: "BANCO" });
+        addToast(`✅ Llegó ${quien}: entró a la caja`, "success");
+        if (registerId) await refreshCaja(registerId);
+      } else {
+        await apiPost(`/receivable/${t.id}/no-llego`, {});
+        addToast(`Queda en Por Cobrar: ${quien}`, "warn");
+      }
+      cargarPorConfirmar();
+      refreshReceivables().catch(() => undefined);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo registrar", "error");
+    } finally { setConfirmandoId(null); }
+  }
+
   async function despacharPedido(order: SalesOrder) {
     // Flujo de 2 pasos: no se puede despachar sin haber confirmado la preparación.
     if (!order.prepared_at) {
@@ -12539,12 +12568,13 @@ Motivo (obligatorio):`, "");
       return;
     }
     // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
+    // Transferencia / cheque: no entra a la caja al despachar; queda «por confirmar» hasta que el de caja vea que llegó.
+    const sinCaja = metodo === "CREDIT" || metodo === "TRANSFER" || metodo === "CHECK";
     const esDelActivo = !order.accionista_id || order.accionista_id === activeAccionistaId;
-    const registerId = esDelActivo
+    const registerId = sinCaja ? undefined : esDelActivo
       ? dashboard.current_cash_register?.id
-      : metodo === "CREDIT" ? undefined
-        : (await apiGet<{ id: string } | null>("/cash/registers/current", optsPedido(order)).catch(() => null))?.id;
-    if (metodo !== "CREDIT" && !registerId) {
+      : (await apiGet<{ id: string } | null>("/cash/registers/current", optsPedido(order)).catch(() => null))?.id;
+    if (!sinCaja && !registerId) {
       addToast(esDelActivo ? "Abre una caja para cobrar, o despacha a crédito"
         : `${order.accionista_name ?? "El socio"} no tiene caja abierta: ábrela o despacha a crédito`, "error");
       return;
@@ -12582,16 +12612,18 @@ Motivo (obligatorio):`, "");
     if (m.conFlete && (!m.activoId || !(total > 0))) { addToast("Elige el carro y el valor del flete (o marca que no lo lleva Transporte).", "error"); return; }
     setFleteModal({ ...m, busy: true });
     try {
-      const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null }>(`/orders/${m.order.id}/deliver`, {
+      const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null; por_confirmar?: string | null }>(`/orders/${m.order.id}/deliver`, {
         payment_method: m.metodo,
-        cash_register_id: m.metodo === "CREDIT" ? undefined : m.registerId,
+        cash_register_id: m.registerId || undefined,
         warehouse_id: finishedWarehouse.id,
         created_by: authUser?.id,
         flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined
       }, optsPedido(m.order));
       setFleteModal(null);
       addToast(`Pedido ${m.order.order_number} despachado → venta ${result.sale.sale_number}${m.esDelActivo ? "" : ` (${m.order.accionista_name})`}`
-        + (result.flete ? ` · Flete ${money(result.flete.monto)} a Transporte (${result.flete.activo_nombre})` : ""), "success");
+        + (result.flete ? ` · Flete ${money(result.flete.monto)} a Transporte (${result.flete.activo_nombre})` : "")
+        + (result.por_confirmar ? ` · 📲 ${result.por_confirmar === "CHECK" ? "Cheque" : "Transferencia"} POR CONFIRMAR: entra a la caja cuando el de caja confirme que llegó` : ""), "success");
+      cargarPorConfirmar();
       await refreshCustomersAndSales();
       await refresh();
       if (m.registerId && m.esDelActivo) await refreshCaja(m.registerId);
@@ -18885,6 +18917,26 @@ Motivo (obligatorio):`, "");
                           <span aria-hidden="true">↑</span> Entró dinero
                         </button>
                       </div>
+
+                      {/* 📲 Transferencias / cheques de pedidos despachados que aún no se confirman. */}
+                      {porConfirmar.length > 0 && (
+                        <div className="cjx-confirmar">
+                          <div className="cjx-confirmar__t">📲 Transferencias por confirmar <span>({porConfirmar.length})</span></div>
+                          <small className="muted">Pedidos despachados que pagaron por banco. Revisa en el banco y confirma cuando llegue: recién ahí entra a la caja.</small>
+                          {porConfirmar.map((t) => (
+                            <div key={t.id} className="cjx-confirmar__fila">
+                              <span>
+                                <b>{t.cliente ?? "Cliente"}</b> · {money(Number(t.monto))}
+                                <small>{t.por_confirmar === "CHECK" ? "Cheque" : "Transferencia"}{t.order_number ? ` · pedido ${t.order_number}` : ""}{t.por_confirmar_desde ? ` · desde ${new Date(t.por_confirmar_desde).toLocaleDateString("es-EC")}` : ""}</small>
+                              </span>
+                              <span className="cjx-confirmar__btns">
+                                <button type="button" className="primary" disabled={confirmandoId === t.id} onClick={() => confirmarTransferencia(t, true)}>✅ Llegó</button>
+                                <button type="button" disabled={confirmandoId === t.id} onClick={() => confirmarTransferencia(t, false)}>❌ No llegó</button>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
 
                       {/* Accesos a la vista (antes escondidos en «Acciones rápidas» y «Opciones»). */}
                       <div className="cjx-accesos">

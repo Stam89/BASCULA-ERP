@@ -732,8 +732,11 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     flete: z.object({ activo_id: z.string().uuid(), monto: z.coerce.number().positive().max(100000) }).optional()
   }).parse(req.body);
   if (body.flete) validarFleteVenta(body.flete);
+  // TRANSFERENCIA / CHEQUE: el dinero no se da por recibido al despachar. La cuenta del pedido queda «por confirmar»
+  // y entra a la caja cuando el de caja confirma que llegó (Caja › Transferencias por confirmar).
+  const porConfirmar = body.payment_method === "TRANSFER" || body.payment_method === "CHECK" ? body.payment_method : null;
 
-  if (body.payment_method !== "CREDIT" && !body.cash_register_id) {
+  if (body.payment_method !== "CREDIT" && !porConfirmar && !body.cash_register_id) {
     throw new ApiError(400, "Abre una caja para cobrar el pedido (o despáchalo a crédito).");
   }
 
@@ -751,7 +754,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       throw new ApiError(409, "Confirma la preparación del pedido (📦 Confirmar Preparación) antes de despacharlo.");
     }
     // El cobro entra a una caja ABIERTA del mismo socio dueño del pedido.
-    if (body.payment_method !== "CREDIT" && body.cash_register_id) {
+    if (body.payment_method !== "CREDIT" && !porConfirmar && body.cash_register_id) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
     }
 
@@ -768,8 +771,9 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       accionistaId,
       {
         customer_id: order.rows[0].customer_id,
-        cash_register_id: body.cash_register_id,
-        payment_method: body.payment_method,
+        cash_register_id: porConfirmar ? undefined : body.cash_register_id,
+        // Por confirmar se registra como a crédito (sin ingreso a caja); la cuenta queda marcada.
+        payment_method: porConfirmar ? "CREDIT" : body.payment_method,
         sack_weight_lb: 100,
         created_by: body.created_by,
         // La 'Cantidad' del pedido YA está en QUINTALES (estandarización). NO se
@@ -794,13 +798,16 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     //  · cobrado ahora  -> se salda y el dinero entra a la caja.
     //  · a crédito      -> sigue viva, ahora enlazada a la venta.
     if (order.rows[0].receivable_id) {
-      if (body.payment_method === "CREDIT") {
+      if (body.payment_method === "CREDIT" || porConfirmar) {
         await client.query(
           `UPDATE accounts_receivable
            SET sale_id = $2,
-               description = REPLACE(description, ' (pendiente de despacho)', ' — despachado a crédito')
+               description = REPLACE(description, ' (pendiente de despacho)', $3),
+               por_confirmar = $4, por_confirmar_desde = CASE WHEN $4::text IS NULL THEN NULL ELSE now() END
            WHERE id = $1`,
-          [order.rows[0].receivable_id, sale.id]
+          [order.rows[0].receivable_id, sale.id,
+           porConfirmar ? (porConfirmar === "CHECK" ? " — despachado, cheque por confirmar" : " — despachado, transferencia por confirmar") : " — despachado a crédito",
+           porConfirmar]
         );
       } else {
         // El dinero ya entró a la caja dentro de crearVenta; aquí solo se
@@ -816,6 +823,13 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       }
     }
 
+    // Pedido viejo sin cuenta propia: la venta a crédito creó la suya; se marca por confirmar.
+    if (!order.rows[0].receivable_id && porConfirmar) {
+      await client.query(
+        "UPDATE accounts_receivable SET por_confirmar = $2, por_confirmar_desde = now() WHERE sale_id = $1 AND status <> 'CANCELLED'",
+        [sale.id, porConfirmar]
+      );
+    }
     await client.query(
       "UPDATE sales_orders SET status = 'DELIVERED', sale_id = $2, delivered_at = now() WHERE id = $1",
       [req.params.id, sale.id]
@@ -861,7 +875,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
     // solo se registra la venta y, si aplica, el CARGO financiero por empaque.
 
-    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete };
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete, por_confirmar: porConfirmar };
   });
 
   res.json(result);

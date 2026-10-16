@@ -42,8 +42,13 @@ try {
     exigir(await api("POST", `/orders/${p.id}/deliver`, { payment_method: metodo, cash_register_id: cajaC.id, warehouse_id: bod }, ceyro, SOBRE), `B. despachar con ${metodo}`);
     return ultimo(cajaC.id);
   };
-  const vT = await vender("TRANSFER");
-  check(vT.medio === "BANCO" && vT.a === 30, "B1. venta por transferencia → entra al BANCO (antes entraba como efectivo)", vT);
+  // Desde 2026-10-16 un pedido por transferencia queda «por confirmar» al despacharlo; al confirmar entra al BANCO.
+  await vender("TRANSFER");
+  const pc = (await api("GET", "/receivable/por-confirmar", undefined, ceyro)).data;
+  const t1 = pc[pc.length - 1];
+  exigir(await api("POST", `/receivable/${t1.id}/pay`, { amount: t1.monto, cash_register_id: cajaC.id, medio_pago: "BANCO" }, ceyro, SOBRE), "B0. confirmar que llegó la transferencia");
+  const vT = await ultimo(cajaC.id);
+  check(vT.medio === "BANCO" && vT.a === 30, "B1. venta por transferencia (confirmada) → entra al BANCO", vT);
   const vE = await vender("CASH");
   check(vE.medio === "EFECTIVO", "B2. venta en efectivo → efectivo", vE);
 

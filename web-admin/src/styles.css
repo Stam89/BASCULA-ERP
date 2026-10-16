@@ -6206,3 +6206,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   .basManual__actions { padding: 12px 14px 16px; }
   .basManual__actions > button { min-width: 0; }
 }
+
+/* Caja › Transferencias por confirmar (pedidos pagados por banco) */
+.cjx-confirmar { display: grid; gap: 8px; margin: 0 0 14px; padding: 12px 14px; border: 1.5px solid #f59e0b; border-radius: 12px; background: #fffbeb; }
+.cjx-confirmar__t { font-weight: 800; color: #92400e; }
+.cjx-confirmar__t span { font-weight: 600; }
+.cjx-confirmar__fila { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 0; border-top: 1px solid #fde68a; }
+.cjx-confirmar__fila small { display: block; color: var(--c-muted); font-size: 12px; }
+.cjx-confirmar__btns { display: flex; gap: 6px; }
+.cjx-confirmar__btns button { padding: 8px 12px; font-weight: 700; }

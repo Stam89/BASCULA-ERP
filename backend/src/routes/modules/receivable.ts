@@ -303,6 +303,34 @@ receivableRouter.post("/comprar-producto", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// 📲 Transferencias / cheques de pedidos despachados que el de caja aún no confirma.
+receivableRouter.get("/por-confirmar", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const r = await pool.query(
+    `SELECT ar.id, ar.balance::float AS monto, ar.por_confirmar, ar.por_confirmar_desde, ar.description,
+            c.full_name AS cliente, o.order_number
+       FROM accounts_receivable ar
+       LEFT JOIN customers c ON c.id = ar.customer_id
+       LEFT JOIN sales_orders o ON o.receivable_id = ar.id
+      WHERE ar.accionista_id = $1 AND ar.por_confirmar IS NOT NULL AND ar.status IN ('CONFIRMED', 'PARTIAL') AND ar.balance > 0.005
+      ORDER BY ar.por_confirmar_desde`,
+    [accionistaId]
+  );
+  res.json(r.rows);
+}));
+// «No llegó»: deja de estar por confirmar y queda como cualquier cuenta por cobrar (a crédito).
+receivableRouter.post("/:id/no-llego", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const r = await pool.query(
+    `UPDATE accounts_receivable SET por_confirmar = NULL,
+            description = REPLACE(REPLACE(description, 'transferencia por confirmar', 'transferencia NO llegó (queda por cobrar)'), 'cheque por confirmar', 'cheque NO llegó (queda por cobrar)')
+      WHERE id = $1 AND accionista_id = $2 AND por_confirmar IS NOT NULL RETURNING id`,
+    [req.params.id, accionistaId]
+  );
+  if (!r.rowCount) throw new ApiError(404, "Esa cuenta no está por confirmar.");
+  res.json({ ok: true });
+}));
+
 // POST registrar pago de cuenta por cobrar
 receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
   const body = z.object({
@@ -334,8 +362,9 @@ receivableRouter.post("/:id/pay", asyncRoute(async (req, res) => {
     const newBalance = Math.max(0, round2(current - body.amount));
     const newStatus  = newBalance < 0.01 ? "PAID" : "PARTIAL";
 
+    // Confirmada (o cobrada): ya no está «por confirmar».
     await client.query(
-      "UPDATE accounts_receivable SET balance=$2, status=$3 WHERE id=$1",
+      "UPDATE accounts_receivable SET balance=$2, status=$3, por_confirmar = CASE WHEN $2 < 0.01 THEN NULL ELSE por_confirmar END WHERE id=$1",
       [req.params.id, newBalance, newStatus]
     );
 
@@ -446,7 +475,7 @@ export async function cobrarCuentasEnGrupo(client: PoolClient, auth: Authenticat
       if (restante <= 0.005) break;
       const abono = round2(Math.min(restante, Number(c.balance)));
       const nuevo = Math.max(0, round2(Number(c.balance) - abono));
-      await client.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1",
+      await client.query("UPDATE accounts_receivable SET balance = $2, status = $3, por_confirmar = CASE WHEN $2 < 0.01 THEN NULL ELSE por_confirmar END WHERE id = $1",
         [c.id, nuevo, nuevo < 0.01 ? "PAID" : "PARTIAL"]);
       desglose.push({ id: c.id, monto: abono });
       restante = round2(restante - abono);
