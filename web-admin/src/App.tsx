@@ -19528,7 +19528,7 @@ Motivo (obligatorio):`, "");
                               <div className="alertBox" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.5 }}>
                                 Para pagarle a un agricultor hay que elegir <b>qué se le paga</b> (así baja su deuda). ¿No aparece?
                                 <br />• Si es plata <b>adelantada</b> por cáscara que va a entregar → <button type="button" className="vdTarifaLink" onClick={() => setCajaSubTab("anticipo")}>💸 Anticipos</button>
-                                <br />• Si se le debía <b>desde antes del 15/10</b> → agrégalo en Administración › Saldos iniciales (Por pagar) y vuelve aquí
+                                <br />• Si se le debía <b>desde antes del 15/10</b> → agrégalo en {isAdmin ? <button type="button" className="vdTarifaLink" onClick={() => irATarjeta("📥 Saldos iniciales")}>⚙️ Configuración › 💰 Contabilidad › 📥 Saldos iniciales</button> : "Configuración › Contabilidad › Saldos iniciales (lo hace el administrador)"} (Por pagar) y vuelve aquí
                                 <br />• Si es de una cáscara <b>de hoy</b> → primero hazle su liquidación
                               </div>
                             )}
