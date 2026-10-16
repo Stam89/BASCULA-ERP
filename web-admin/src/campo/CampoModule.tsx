@@ -266,10 +266,12 @@ function AlertasCampo({ onIr, version }: { onIr?: (s: CampoSeccion) => void; ver
   );
 }
 
-export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion }: {
+export default function CampoModule({ section = "caja", nombre, matrizName = "Matriz", onNombreChange, onIrSeccion, puedeVerSeccion }: {
   section?: CampoSeccion; nombre?: string; matrizName?: string; onNombreChange?: (n: string) => void;
   /** Cambia de sección del menú de Transporte (p. ej. de la caja al Estado de Resultados). */
   onIrSeccion?: (s: CampoSeccion) => void;
+  /** Secciones que el usuario puede abrir (para no mostrar accesos que no le sirven). */
+  puedeVerSeccion?: (s: CampoSeccion) => boolean;
 }) {
   const [flash, setFlash] = useState<{ text: string; kind: "ok" | "err" } | null>(null);
   const notify = (text: string, kind: "ok" | "err" = "ok") => { setFlash({ text, kind }); setTimeout(() => setFlash(null), 3500); };
@@ -279,7 +281,8 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   const [cuentas, setCuentas] = useState<Cuenta[]>([]);
   const [operadores, setOperadores] = useState<Operador[]>([]);
   const [servicios, setServicios] = useState<Servicio[]>([]);
-  const [cajaTab, setCajaTab] = useState<"ingreso" | "egreso" | "transferencia" | "cierres">("ingreso");
+  // «libro» = solo los movimientos (como la Caja de la piladora); los formularios se abren con los botones grandes.
+  const [cajaTab, setCajaTab] = useState<"libro" | "ingreso" | "egreso" | "transferencia" | "cierres">("libro");
   const [sesion, setSesion] = useState<SesionResp | null>(null);
   const [modalCaja, setModalCaja] = useState<"" | "abrir" | "cerrar">("");
   const [menuCaja, setMenuCaja] = useState(false);
@@ -449,95 +452,91 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
     );
   }
 
-  // section === "caja" · mismo formato que la Caja Principal (cj-*): encabezado,
-  // tarjetas de saldo, barra de acciones y luego el formulario y el libro.
+  // section === "caja" · mismo formato que la Caja de la piladora (cjx-*): saldo arriba, dos botones grandes
+  // «Salió / Entró dinero», accesos y el libro de movimientos. Mismas funciones de Transporte de siempre.
   const cajaAbierta = !!sesion?.activa;
   const arqueo = sesion?.activa?.arqueo;
-  const accionesCaja: Array<["ingreso" | "egreso" | "transferencia", string]> = [["ingreso", "➕ Ingreso"], ["egreso", "➖ Egreso"], ["transferencia", "⇄ Transferencia"]];
+  const ver = (x: CampoSeccion) => !puedeVerSeccion || puedeVerSeccion(x);
+  const icoCuenta = (n: string) => n === "CAJA" ? "💵" : n === "BANCO" ? "🏦" : n === "CRUCE PILADORA" ? "🔁" : "📁";
+  const irA = (t: typeof cajaTab) => { setMenuCaja(false); setCajaTab((x) => (x === t && t !== "libro" ? "libro" : t)); };
   return (
     <section className="panelGrid">
       <div style={{ gridColumn: "1 / -1", minWidth: 0 }}>
-        {/* Encabezado */}
-        <div className="cj-head">
-          <div>
-            <h2 className="cj-title">💰 Caja · {nombre ?? "Transporte y Cosechadora"}</h2>
-            <p className="cj-sub">
+        {/* Saldo compacto: cuánto hay, en qué cuenta y lo de la sesión. Lo poco usado va en «Más». */}
+        <div className="cjx-hero">
+          <div style={{ minWidth: 0 }}>
+            <p className="cjx-sub">
               {cajaAbierta
-                ? <><span className="cj-live" /> Caja abierta por {sesion!.activa!.usuario_nombre ?? "—"} · desde {new Date(sesion!.activa!.fecha_apertura).toLocaleString("es-EC", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</>
-                : <><span className="cj-live cj-live--off" /> Caja cerrada · ábrela para registrar ingresos y egresos en efectivo</>}
+                ? <><span className="cj-live" /> {nombre ?? "Transporte y Cosechadora"} · abierta por {sesion!.activa!.usuario_nombre ?? "—"} el {new Date(sesion!.activa!.fecha_apertura).toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}</>
+                : <><span className="cj-live cj-live--off" /> {nombre ?? "Transporte y Cosechadora"} · caja cerrada: ábrela para registrar ingresos y egresos</>}
+            </p>
+            <div className="cjx-saldo">{money(totalDisponible)}</div>
+            <p className="cjx-sub">
+              {cuentas.map((c) => (
+                <span key={c.id} style={{ whiteSpace: "nowrap" }}>{icoCuenta(c.nombre)} {c.nombre === "CRUCE PILADORA" ? "Cruce (no se suma)" : c.nombre === "CAJA" ? "Gaveta" : c.nombre} <b className={c.saldo < 0 ? "cj-neg" : undefined}>{money(c.saldo)}</b> · </span>
+              )).flatMap((el) => [el, " "])}
+              {cajaAbierta && <>entró <b className="cj-pos">+{money(arqueo?.ingresos ?? 0)}</b> · salió <b className="cj-neg">−{money(arqueo?.egresos ?? 0)}</b>
+                <span className="cjx-ini"> · inicial {money(arqueo?.saldo_inicial ?? 0)}</span></>}
             </p>
           </div>
-          {!cajaAbierta && <button type="button" className="cj-btn cj-btn--primary" onClick={() => setModalCaja("abrir")}>🔓 Abrir caja</button>}
+          <div className="cj-dd">
+            {!cajaAbierta && <button type="button" className="cj-btn cj-btn--primary" style={{ marginRight: 6 }} onClick={() => setModalCaja("abrir")}>🔓 Abrir caja</button>}
+            <button type="button" className={`cj-btn ${menuCaja ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={menuCaja} onClick={() => setMenuCaja((m) => !m)}>
+              Más <span className="cj-caret">▾</span>
+            </button>
+            {menuCaja && (
+              <div className="cj-menu cj-menu--right" role="menu">
+                <button type="button" role="menuitem" className={`cj-menu-item ${cajaTab === "cierres" ? "is-current" : ""}`} onClick={() => irA("cierres")}>
+                  <span className="cj-menu-ico">📋</span><span><span className="cj-menu-label">Cierres de caja</span><span className="cj-menu-hint">Historial de aperturas y arqueos</span></span>
+                </button>
+                {onIrSeccion && ver("reportes") && (
+                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); onIrSeccion("reportes"); }}>
+                    <span className="cj-menu-ico">📊</span><span><span className="cj-menu-label">Reportes</span><span className="cj-menu-hint">Saldos, por cobrar y por máquina</span></span>
+                  </button>
+                )}
+                <div className="cj-menu-sep" />
+                {cajaAbierta ? (
+                  <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setMenuCaja(false); setModalCaja("cerrar"); }}>
+                    <span className="cj-menu-ico">🔒</span><span className="cj-menu-label">Cerrar / arquear caja</span>
+                  </button>
+                ) : (
+                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); setModalCaja("abrir"); }}>
+                    <span className="cj-menu-ico">🔓</span><span className="cj-menu-label">Abrir caja</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Lo de todos los días: dos botones grandes. */}
+        <div className="cjx-big">
+          <button type="button" className={`cjx-big__btn is-out ${cajaTab === "egreso" ? "is-on" : ""}`} onClick={() => irA("egreso")}>
+            <span aria-hidden="true">↓</span> Salió dinero
+          </button>
+          <button type="button" className={`cjx-big__btn is-in ${cajaTab === "ingreso" ? "is-on" : ""}`} onClick={() => irA("ingreso")}>
+            <span aria-hidden="true">↑</span> Entró dinero
+          </button>
         </div>
 
         <AlertasCampo onIr={onIrSeccion} version={libroVersion} />
 
-        {/* Tarjetas de saldo */}
-        <div className="cj-kpis">
-          <div className="cj-kpi cj-kpi--hero">
-            <div className="cj-kpi-label">Disponible</div>
-            <div className="cj-kpi-value">{money(totalDisponible)}</div>
-            <div className="cj-kpi-hint">Caja + bancos + otros (sin el cruce interno)</div>
-          </div>
-          <div className="cj-kpi">
-            <div className="cj-kpi-label"><span className="cj-ico cj-ico--in">⬆</span>Ingresos</div>
-            <div className="cj-kpi-value cj-pos">+{money(arqueo?.ingresos ?? 0)}</div>
-            <div className="cj-kpi-hint">{cajaAbierta ? "Entradas en efectivo de la sesión" : "Sin sesión abierta"}</div>
-          </div>
-          <div className="cj-kpi">
-            <div className="cj-kpi-label"><span className="cj-ico cj-ico--out">⬇</span>Egresos</div>
-            <div className="cj-kpi-value cj-neg">-{money(arqueo?.egresos ?? 0)}</div>
-            <div className="cj-kpi-hint">{cajaAbierta ? "Salidas en efectivo de la sesión" : "Sin sesión abierta"}</div>
-          </div>
-          <div className="cj-kpi">
-            <div className="cj-kpi-label"><span className="cj-ico cj-ico--base">◎</span>Saldos por cuenta</div>
-            <div className="cj-kpi-value">{money(arqueo?.saldo_inicial ?? 0)}</div>
-            <div className="cj-kpi-hint">Saldo inicial de la caja</div>
-            <div className="cj-kpi-split">
-              {cuentas.map((c) => (
-                <span key={c.id}>{c.nombre === "CAJA" ? "💵" : c.nombre === "BANCO" ? "🏦" : c.nombre === "CRUCE PILADORA" ? "🔁" : "📁"} {c.nombre} <b className={c.saldo < 0 ? "cj-neg" : undefined}>{money(c.saldo)}</b></span>
-              ))}
+        {/* Accesos de Transporte (lo que antes estaba en la barra y en «Opciones»). */}
+        <div className="cjx-accesos">
+          {onIrSeccion && (["servicios", "mantenimiento", "partes"] as const).some(ver) && (
+            <div className="cjx-grupo">
+              <span className="cjx-grupo__t">Equipos</span>
+              {ver("servicios") && <button type="button" onClick={() => onIrSeccion("servicios")}>🚜 Servicios (cosecha y flete)</button>}
+              {ver("mantenimiento") && <button type="button" onClick={() => onIrSeccion("mantenimiento")}>🔧 Mantenimiento</button>}
+              {ver("partes") && <button type="button" onClick={() => onIrSeccion("partes")}>📝 Partes diarios</button>}
             </div>
-          </div>
-        </div>
-
-        {/* Barra de acciones */}
-        <div className="cj-toolbar">
-          <div className="cj-toolbar-group">
-            {accionesCaja.map(([v, label]) => (
-              <button key={v} type="button" className={`cj-btn ${v === "ingreso" ? "cj-btn--primary" : ""} ${cajaTab === v ? "is-on is-open" : ""}`} onClick={() => setCajaTab(v)}>{label}</button>
-            ))}
-            {cajaTab === "cierres" && <button type="button" className="cj-btn cj-btn--ghost" onClick={() => setCajaTab("ingreso")}>📋 Ver movimientos</button>}
-          </div>
-          <div className="cj-toolbar-group">
-            {onIrSeccion && <button type="button" className="cj-btn" onClick={() => onIrSeccion("resultados")}>📈 Estado de resultados</button>}
-            <div className="cj-dd">
-              <button type="button" className={`cj-btn ${menuCaja ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={menuCaja} onClick={() => setMenuCaja((m) => !m)}>
-                ⚙️ Opciones <span className="cj-caret">▾</span>
-              </button>
-              {menuCaja && (
-                <div className="cj-menu cj-menu--right" role="menu">
-                  <button type="button" role="menuitem" className={`cj-menu-item ${cajaTab === "cierres" ? "is-current" : ""}`} onClick={() => { setMenuCaja(false); setCajaTab("cierres"); }}>
-                    <span className="cj-menu-ico">📋</span><span><span className="cj-menu-label">Cierres de caja</span><span className="cj-menu-hint">Historial de aperturas y arqueos</span></span>
-                  </button>
-                  {onIrSeccion && (
-                    <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); onIrSeccion("reportes"); }}>
-                      <span className="cj-menu-ico">📊</span><span><span className="cj-menu-label">Reportes</span><span className="cj-menu-hint">Saldos, por cobrar y por máquina</span></span>
-                    </button>
-                  )}
-                  <div className="cj-menu-sep" />
-                  {cajaAbierta ? (
-                    <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setMenuCaja(false); setModalCaja("cerrar"); }}>
-                      <span className="cj-menu-ico">🔒</span><span className="cj-menu-label">Cerrar / arquear caja</span>
-                    </button>
-                  ) : (
-                    <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setMenuCaja(false); setModalCaja("abrir"); }}>
-                      <span className="cj-menu-ico">🔓</span><span className="cj-menu-label">Abrir caja</span>
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+          )}
+          <div className="cjx-grupo">
+            <span className="cjx-grupo__t">Otros registros</span>
+            <button type="button" className={cajaTab === "transferencia" ? "is-on" : ""} onClick={() => irA("transferencia")}>⇄ Pasar entre cuentas</button>
+            {onIrSeccion && ver("vales") && <button type="button" onClick={() => onIrSeccion("vales")}>🧾 Vales</button>}
+            {onIrSeccion && ver("resultados") && <button type="button" onClick={() => onIrSeccion("resultados")}>📈 Estado de resultados</button>}
+            {cajaTab !== "libro" && <button type="button" onClick={() => irA("libro")}>📋 Movimientos</button>}
           </div>
         </div>
         {flashEl}
@@ -3372,7 +3371,7 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
         <div className="content">
           {secciones.length === 0 || !permitida(seccion)
             ? <p className="muted">No tienes ninguna sección de {nombre} asignada. Pide acceso a un administrador.</p>
-            : <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={irA} />}
+            : <CampoModule section={seccion} nombre={nombre} matrizName={matrizName} onNombreChange={onNombreChange} onIrSeccion={irA} puedeVerSeccion={permitida} />}
         </div>
       </section>
     </main>
