@@ -19512,16 +19512,26 @@ Motivo (obligatorio):`, "");
                       );
                     })()}
                     {CASH_REUSE[movCategory] === "agricultor" && (() => {
-                      const liqs = cashPayables.filter((p) => p.liquidation_number);
+                      // Todo lo que se le debe a un agricultor: sus liquidaciones y lo que se debía desde antes del arranque.
+                      const liqs = cashPayables.filter((p) => (p.liquidation_number || p.farmer_id) && !p.entre_socios && Number(p.balance) > 0.005);
                       return (
                         <label style={{ display: "block", marginBottom: 16 }}>
-                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Vincular liquidación pendiente (opcional)</span>
-                          <select value={movPayableId} onChange={(e: any) => setMovPayableId(e.target.value)} style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                            <option value="">— Sin vincular (movimiento simple) —</option>
-                            {liqs.map((p) => <option key={p.id} value={p.id}>{p.farmer_name} · Liq {p.liquidation_number} · saldo {money(Number(p.balance))}</option>)}
+                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>¿Qué deuda se le paga? *</span>
+                          <select value={movPayableId} onChange={(e: any) => setMovPayableId(e.target.value)}
+                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: `1px solid ${movPayableId ? "#d1d5db" : "#dc2626"}`, fontSize: 13 }}>
+                            <option value="">— Elige la deuda del agricultor —</option>
+                            {liqs.map((p) => <option key={p.id} value={p.id}>{p.farmer_name} · {p.liquidation_number ? `Liq ${p.liquidation_number}` : "deuda anterior"} · saldo {money(Number(p.balance))}</option>)}
                           </select>
-                          {liqs.length === 0 && <small className="muted" style={{ display: "block", marginTop: 4 }}>Sin liquidaciones pendientes de este accionista.</small>}
-                          {movPayableId && <small className="muted" style={{ display: "block", marginTop: 4 }}>✔ Se abonará a la liquidación y se descontará de tu caja (un solo asiento).</small>}
+                          {movPayableId
+                            ? <small className="muted" style={{ display: "block", marginTop: 4 }}>✔ Se abonará a esa deuda y se descontará de tu caja (un solo asiento).</small>
+                            : (
+                              <div className="alertBox" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.5 }}>
+                                Para pagarle a un agricultor hay que elegir <b>qué se le paga</b> (así baja su deuda). ¿No aparece?
+                                <br />• Si es plata <b>adelantada</b> por cáscara que va a entregar → <button type="button" className="vdTarifaLink" onClick={() => setCajaSubTab("anticipo")}>💸 Anticipos</button>
+                                <br />• Si se le debía <b>desde antes del 15/10</b> → agrégalo en Administración › Saldos iniciales (Por pagar) y vuelve aquí
+                                <br />• Si es de una cáscara <b>de hoy</b> → primero hazle su liquidación
+                              </div>
+                            )}
                         </label>
                       );
                     })()}
