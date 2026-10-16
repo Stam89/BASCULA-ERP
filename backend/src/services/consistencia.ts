@@ -135,8 +135,17 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Caja", nombre: "Reversas: cada movimiento se reversa a lo sumo una vez", sql: `SELECT reversal_of FROM cash_movements WHERE reversal_of IS NOT NULL GROUP BY reversal_of HAVING count(*) > 1` },
   // ── Inventario / ventas ──
   // (Los sacos pueden quedar en negativo A PROPÓSITO: es la señal «la matriz debe comprar sacos» de Sacos por comprar.)
-  { modulo: "Inventario", nombre: "Inventario: sin existencias negativas por producto/bodega/socio/propiedad", sql: `
-    SELECT s.product_id, s.warehouse_id, s.accionista_id, sum(s.quantity)::float q FROM inventory_stock s GROUP BY s.product_id, s.warehouse_id, s.accionista_id, s.ownership HAVING sum(s.quantity) < -0.005` },
+  // Un negativo DECLARADO en el arranque (Saldos iniciales: «arroz que se debe», con su motivo) es correcto mientras
+  // no pase de lo declarado; solo se marca lo que quede MÁS negativo que eso.
+  { modulo: "Inventario", nombre: "Inventario: sin existencias negativas por producto/bodega/socio/propiedad (salvo el arroz que se debe declarado en el arranque)", sql: `
+    SELECT s.product_id, s.warehouse_id, s.accionista_id, sum(s.quantity)::float q FROM inventory_stock s
+     GROUP BY s.product_id, s.warehouse_id, s.accionista_id, s.ownership
+    HAVING sum(s.quantity) < -0.005
+       AND sum(s.quantity) < COALESCE((
+             SELECT sum(m.quantity) FROM inventory_movements m
+              WHERE m.reference_type = 'saldo_inicial' AND m.quantity < 0 AND m.product_id = s.product_id
+                AND m.warehouse_id = s.warehouse_id AND m.accionista_id IS NOT DISTINCT FROM s.accionista_id
+                AND m.ownership = s.ownership), 0) - 0.005` },
   { modulo: "Ventas", nombre: "Ventas: total = suma de sus líneas", sql: `
     SELECT s.id, s.total_amount::float t, sum(i.total)::float l FROM sales s JOIN sale_items i ON i.sale_id = s.id
      WHERE s.sale_status <> 'CANCELLED' GROUP BY s.id HAVING abs(s.total_amount - sum(i.total)) > 0.02` },
