@@ -8225,6 +8225,8 @@ export function App() {
 
   // Venta, salida de inventario, cliente e ingreso de Caja se escriben juntos en
   // el backend. Si una validación falla, la transacción completa se revierte.
+  // «¿De quién es el arroz?» en Venta Detalle de la caja de la Matriz: "" = de esta caja; si no, el socio dueño.
+  const [ventaDetalleDueno, setVentaDetalleDueno] = useState("");
   async function registrarVentaDetalle(v: VentaDetalleRegistro): Promise<boolean> {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
@@ -8243,9 +8245,11 @@ export function App() {
         ? `${money(v.total)} = ${librasStr} lb @ $${v.precioLibra.enReal()}/lb`
       : `${librasStr} lb @ $${v.precioLibra.enReal()}/lb`;
 
-    let venta: { customer_name: string };
+    const duenoVenta = esMatrizActiva && ventaDetalleDueno ? ventaDetalleDueno : undefined;
+    let venta: { customer_name: string; dueno?: string; se_lo_debes?: number };
     try {
-      venta = await apiPost<{ customer_name: string }>("/sales/retail", {
+      venta = await apiPost<{ customer_name: string; dueno?: string; se_lo_debes?: number }>("/sales/retail", {
+        dueno_id: duenoVenta,
         cash_register_id: registerId,
         product_id: v.product_id,
         warehouse_id: finishedWarehouse.id,
@@ -8268,7 +8272,8 @@ export function App() {
     setPreciosLibraPorProducto(nuevosPrecios);
     try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
-    addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb`, "success");
+    addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb` +
+      (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario y se lo debes (${money(venta.se_lo_debes ?? v.total)})` : ""), "success");
     // Ticket térmico 80mm (comprobante de mostrador).
     printTicketVentaDetalle({
       producto: v.producto,
@@ -19906,6 +19911,23 @@ Motivo (obligatorio):`, "");
                 {cajaSubTab === "venta_detalle" && cajaEsMixta && (
                   <div className="cj-card" style={{ padding: "10px 14px", marginBottom: 10 }}>
                     <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
+                  </div>
+                )}
+                {cajaSubTab === "venta_detalle" && esMatrizActiva && sociosDelGasto.length > 0 && (
+                  <div className={`cj-dequien ${ventaDetalleDueno ? "is-socio" : ""}`}>
+                    <span className="cj-dequien__tit">¿De quién es el arroz?</span>
+                    <div className="cj-dequien__ops">
+                      <button type="button" className={`cj-dequien__op ${!ventaDetalleDueno ? "is-on" : ""}`} onClick={() => setVentaDetalleDueno("")}>🏭 De {matrizName || "la Matriz"}</button>
+                      {sociosDelGasto.map((a) => (
+                        <button key={a.id} type="button" className={`cj-dequien__op ${ventaDetalleDueno === a.id ? "is-on" : ""}`} onClick={() => setVentaDetalleDueno(a.id)}>🤝 De {a.name}</button>
+                      ))}
+                    </div>
+                    {ventaDetalleDueno && (
+                      <small className="cj-dequien__info">
+                        El arroz sale del inventario de <b>{sociosDelGasto.find((a) => a.id === ventaDetalleDueno)?.name}</b> y la venta es suya.
+                        El dinero entra a esta caja y {matrizName} queda debiéndoselo (se descuenta solo cuando {matrizName} pague algo por él).
+                      </small>
+                    )}
                   </div>
                 )}
                 {cajaSubTab === "venta_detalle" && (

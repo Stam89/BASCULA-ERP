@@ -665,6 +665,11 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
 
     // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
     if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
+    // Venta detalle de arroz de OTRO socio cobrada en esta caja: la venta se anula y el arroz vuelve a su dueño.
+    if (m.category === "COBRO_POR_SOCIO" && m.reference_type === "sales" && m.reference_id) {
+      await client.query("DELETE FROM inventory_movements WHERE reference_type = 'sales' AND reference_id = $1 AND movement = 'OUT'", [m.reference_id]);
+      await client.query("UPDATE sales SET sale_status = 'CANCELLED' WHERE id = $1", [m.reference_id]);
+    }
     // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
     if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.

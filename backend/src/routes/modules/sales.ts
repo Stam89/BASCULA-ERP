@@ -13,6 +13,7 @@ import { round2 } from "../../utils/rice-formulas.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
+import { dinero, notificar } from "../../services/notificaciones.js";
 
 export const salesRouter = Router();
 
@@ -93,6 +94,9 @@ const retailSaleInputSchema = z.object({
   mode: z.enum(["DOLARES", "LIBRA", "QQ"]),
   input_amount: z.number().positive(),
   medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+  // «¿De quién es el arroz?»: la caja (casi siempre la Matriz) vende arroz de OTRO socio. La venta y el inventario son
+  // de ese socio; el dinero entra a esta caja (COBRO_POR_SOCIO) y esta caja queda debiéndoselo (cobro_por_socio).
+  dueno_id: z.string().uuid().optional(),
   product_name: z.string().trim().min(1).max(180),
   buyer: z.object({
     full_name: z.string().trim().min(2).max(180),
@@ -108,9 +112,51 @@ const retailSaleInputSchema = z.object({
 salesRouter.post("/retail", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = retailSaleInputSchema.parse(req.body);
+  const dueno = body.dueno_id && body.dueno_id !== accionistaId ? body.dueno_id : null;
   const result = await inTransaction(async (client) => {
-    const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
     const unitPriceQq = Math.round((body.total_amount / body.quantity_qq) * 10000) / 10000;
+    if (dueno) {
+      await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+      const socio = (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [dueno])).rows[0];
+      if (!socio) throw new ApiError(404, "El socio dueño del arroz no existe o está inactivo.");
+      const cajero = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
+      const cliente = await resolverClienteVentaDetalle(client, body.buyer, dueno);
+      // La venta y la salida de inventario son del DUEÑO (sin caja suya: el dinero no entró a su caja).
+      const venta = await crearVenta(client, dueno, {
+        customer_id: cliente.id,
+        payment_method: "CASH",
+        sack_weight_lb: 100,
+        description: `Venta detalle ${body.product_name} · ${cliente.full_name} (cobró ${cajero})`,
+        items: [{ product_id: body.product_id, warehouse_id: body.warehouse_id, quantity: body.quantity_qq, unit_price: unitPriceQq }]
+      });
+      const total = round2(Number(venta.total_amount));
+      const caja = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
+      const medio = caja?.tipo === "BANCO" ? "BANCO" : caja?.tipo === "MIXTO" ? (body.medio ?? "EFECTIVO") : "EFECTIVO";
+      const mov = await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
+         VALUES ($1, 'INCOME', 'COBRO_POR_SOCIO', 'sales', $2, $3, $4, $5) RETURNING id`,
+        [body.cash_register_id, venta.id, total, `Venta detalle de ${socio.name}: ${body.product_name} · ${cliente.full_name} (se lo debes)`, medio]
+      );
+      const movId = mov.rows[0].id;
+      await client.query(
+        `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+        [dueno, movId, `${cajero} cobró tu venta detalle: ${body.product_name} · ${cliente.full_name}`, total]
+      );
+      await client.query(
+        `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+         VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+        [accionistaId, movId, `Cobraste una venta detalle de ${socio.name}: ${body.product_name} · ${cliente.full_name}`, total]
+      );
+      await notificar(client, {
+        accionistaId: dueno, tipo: "PAGO",
+        titulo: `${cajero} vendió arroz tuyo`,
+        mensaje: `${cajero} vendió ${body.product_name} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario y ${cajero} te lo debe (Por Cobrar).`,
+        monto: total, referenciaTipo: "sales", referenciaId: venta.id
+      });
+      return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name, dueno: socio.name, se_lo_debes: total };
+    }
+    const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
     const venta = await crearVenta(client, accionistaId, {
       customer_id: cliente.id,
       cash_register_id: body.cash_register_id,
