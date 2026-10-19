@@ -1082,6 +1082,9 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
   const body = z.object({
     lot_id: z.string().uuid(),
     drying_report_id: z.string().uuid().optional(),
+    // 🔗 PILAR JUNTOS: otros túneles secos del MISMO socio cuyo arroz se mezcló antes de entrar a la piladora
+    // (pedido del dueño 2026-10-19). Entran a este mismo proceso: suman su cáscara y sus lotes quedan pilados.
+    drying_report_ids_extra: z.array(z.string().uuid()).max(6).default([]),
     process_type: z.string().default("PILADO"),
     ownership: z.enum(["OWNED", "MAQUILA", "SERVICE_ONLY"]),
     input_product_id: z.string().uuid(),
@@ -1100,6 +1103,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       net_weight_kg: string | number;
       quintals: string | number;
       weighing_ticket_id: string | null;
+      drying_report_id?: string;
     }> = [];
 
     if (body.drying_report_id) {
@@ -1123,13 +1127,19 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       const alreadyProcessed = await client.query(
         `SELECT *
          FROM processing_batches
-         WHERE drying_report_id = $1 AND status <> 'CANCELLED'
+         WHERE (drying_report_id = $1 OR id IN (SELECT processing_batch_id FROM processing_batch_drying_lots WHERE drying_report_id = $1))
+           AND status <> 'CANCELLED'
          ORDER BY started_at ASC
          LIMIT 1`,
         [body.drying_report_id]
       );
       if (alreadyProcessed.rowCount) {
         const abierto = alreadyProcessed.rows[0];
+        // Entró JUNTO con otro túnel (pilar juntos): no se pila aparte.
+        if (abierto.drying_report_id && abierto.drying_report_id !== body.drying_report_id) {
+          const t = (await client.query("SELECT tunnel_number FROM drying_tunnel_reports WHERE id = $1", [abierto.drying_report_id])).rows[0];
+          throw new ApiError(409, `El arroz de este túnel ya entró a la pilada junto con la secadora ${t?.tunnel_number ?? "?"}.`);
+        }
         if (abierto.finished_at) {
           throw new ApiError(409, "Este tunel ya fue cerrado");
         }
@@ -1153,6 +1163,41 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       dryingLots = linkedLots.rows;
       lotId = drying.rows[0].lot_id;
       inputQuantity = Number(drying.rows[0].input_weight_kg);
+
+      // 🔗 Túneles que se pilan JUNTO con este: mismo socio, mismo tipo de arroz y misma clase (propio / servicio).
+      const extras = [...new Set(body.drying_report_ids_extra)].filter((x) => x !== body.drying_report_id);
+      if (extras.length) {
+        const clase = async (dryingLotId: string) => {
+          const r = (await client.query("SELECT accionista_id, operation_type, is_maquila FROM lots WHERE id = $1", [dryingLotId])).rows[0];
+          return { acc: r?.accionista_id ?? null, servicio: loteEsMaquila({ operation_type: r?.operation_type, is_maquila: r?.is_maquila }) };
+        };
+        const base = await clase(lotId);
+        const tipo = (t: unknown) => (String(t ?? "0.11").toUpperCase() === "CORRIENTE" ? "CORRIENTE" : "0.11");
+        for (const extraId of extras) {
+          const ex = (await client.query("SELECT * FROM drying_tunnel_reports WHERE id = $1 FOR UPDATE", [extraId])).rows[0];
+          if (!ex) throw new ApiError(404, "Uno de los túneles para pilar juntos no existe.");
+          const nombre = `el túnel ${ex.tunnel_number ?? "?"}`;
+          if (ex.status !== "COMPLETED") throw new ApiError(400, `Finaliza primero el secado de ${nombre} para pilarlo junto.`);
+          const usado = (await client.query(
+            `SELECT 1 FROM processing_batches b
+              WHERE b.status <> 'CANCELLED'
+                AND (b.drying_report_id = $1 OR b.id IN (SELECT processing_batch_id FROM processing_batch_drying_lots WHERE drying_report_id = $1))
+              LIMIT 1`, [extraId]
+          )).rowCount;
+          if (usado) throw new ApiError(409, `El arroz de ${nombre} ya entró a otra pilada.`);
+          if (tipo(ex.rice_type) !== tipo(drying.rows[0].rice_type)) throw new ApiError(409, `${nombre} es de otro tipo de arroz (0.11 / corriente): no se pueden pilar juntos.`);
+          const c = await clase(ex.lot_id);
+          if (c.acc !== base.acc) throw new ApiError(409, `${nombre} es de otro socio: solo se pilan juntos lotes del mismo socio.`);
+          if (c.servicio !== base.servicio) throw new ApiError(409, `${nombre} es de servicio y el otro es propio (o al revés): no se pueden pilar juntos.`);
+          const lotesEx = (await client.query(
+            `SELECT lot_id, lot_code, farmer_name, net_weight_kg, quintals, weighing_ticket_id
+               FROM drying_tunnel_report_lots WHERE drying_report_id = $1 ORDER BY created_at ASC`, [extraId]
+          )).rows;
+          if (!lotesEx.length) throw new ApiError(400, `${nombre} no tiene lotes vinculados.`);
+          dryingLots.push(...lotesEx.map((l) => ({ ...l, drying_report_id: extraId })));
+          inputQuantity += Number(ex.input_weight_kg ?? 0);
+        }
+      }
     } else {
       // Candado sobre el lote: serializa dos clics seguidos en Finalizar, para
       // que el segundo espere y vea el proceso del primero en vez de abrir otro.
@@ -1251,7 +1296,7 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             batch.rows[0].id,
-            body.drying_report_id,
+            linkedLot.drying_report_id ?? body.drying_report_id,
             linkedLot.lot_id,
             linkedLot.lot_code,
             linkedLot.farmer_name,

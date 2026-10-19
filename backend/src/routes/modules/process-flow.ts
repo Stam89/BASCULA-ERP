@@ -429,7 +429,7 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
+              SELECT 1 FROM processing_batches b WHERE (b.drying_report_id = d.id OR b.id IN (SELECT jl.processing_batch_id FROM processing_batch_drying_lots jl WHERE jl.drying_report_id = d.id)) AND b.finished_at IS NOT NULL
             ) AS is_processed,
             -- Ya tiene un "Proceso guardado (en curso)": borrador en milling_drafts
             -- o un batch abierto (sin finalizar). Se usa para SACARLO del selector de
@@ -438,7 +438,7 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
             (EXISTS (
               SELECT 1 FROM milling_drafts md WHERE md.drying_report_id = d.id
             ) OR EXISTS (
-              SELECT 1 FROM processing_batches b2 WHERE b2.drying_report_id = d.id AND b2.finished_at IS NULL AND b2.status <> 'CANCELLED'
+              SELECT 1 FROM processing_batches b2 WHERE (b2.drying_report_id = d.id OR b2.id IN (SELECT jl.processing_batch_id FROM processing_batch_drying_lots jl WHERE jl.drying_report_id = d.id)) AND b2.finished_at IS NULL AND b2.status <> 'CANCELLED'
             )) AS has_draft,
             -- Tipo del LOTE PRINCIPAL del secado (el que se pila): fuente de la
             -- herencia "¿es Servicio de Pilada (maquila)?" en Producción.
@@ -1457,7 +1457,7 @@ processFlowRouter.get("/lots/:lotId", asyncRoute(async (req, res) => {
     pool.query(
       `SELECT d.*,
               EXISTS (
-                SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
+                SELECT 1 FROM processing_batches b WHERE (b.drying_report_id = d.id OR b.id IN (SELECT jl.processing_batch_id FROM processing_batch_drying_lots jl WHERE jl.drying_report_id = d.id)) AND b.finished_at IS NOT NULL
               ) AS is_processed,
               COALESCE(
                 jsonb_agg(
@@ -2208,7 +2208,7 @@ async function getDryingReportById(client: PoolClient, dryingId: string) {
   const result = await client.query(
     `SELECT d.*,
             EXISTS (
-              SELECT 1 FROM processing_batches b WHERE b.drying_report_id = d.id AND b.finished_at IS NOT NULL
+              SELECT 1 FROM processing_batches b WHERE (b.drying_report_id = d.id OR b.id IN (SELECT jl.processing_batch_id FROM processing_batch_drying_lots jl WHERE jl.drying_report_id = d.id)) AND b.finished_at IS NOT NULL
             ) AS is_processed,
             COALESCE(
               jsonb_agg(

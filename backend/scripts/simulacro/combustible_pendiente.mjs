@@ -15,6 +15,10 @@ try {
   // Escenario fijo SOLO en la copia: lo que estaba en proceso sale del alcance; quedan las 2 últimas partidas del Motor 1
   // (una por túnel) como una corrida EN PROCESO sin combustible, y otra partida vieja se guarda para la corrida nueva.
   await q("UPDATE drying_tunnel_reports SET motor_number = NULL WHERE status = 'IN_PROGRESS'");
+  // El combustible ya registrado del Motor 1 en la base real se quita SOLO en la copia (el escenario parte de cero).
+  await q("UPDATE drying_tunnel_reports SET motor_fuel_id = NULL, gas_costo_total = 0, diesel_costo = 0 WHERE motor_number = 1");
+  await q("DELETE FROM motor_fuel_partes WHERE motor_fuel_id IN (SELECT id FROM motor_fuel_records WHERE motor_number = 1)").catch(() => undefined);
+  await q("DELETE FROM motor_fuel_records WHERE motor_number = 1");
   const ult = await q(`SELECT DISTINCT ON (tunnel_number) id, tunnel_number FROM drying_tunnel_reports
                         WHERE motor_number = 1 AND tunnel_number IN (1, 2) ORDER BY tunnel_number, COALESCE(filled_at, created_at) DESC`);
   check(ult.length === 2, "0. hay dos túneles del Motor 1 para la prueba", ult);

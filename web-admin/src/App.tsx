@@ -4300,6 +4300,24 @@ export function App() {
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
     [dryingReports, productionDryingId]
   );
+  // 🔗 PILAR JUNTOS: otros túneles secos del mismo socio cuyo arroz se mezcló antes de la piladora.
+  const [productionDryingExtras, setProductionDryingExtras] = useState<string[]>([]);
+  const esServicioDeSecado = (report: DryingTunnelReport) => (report.lots ?? []).some((l) => {
+    const o = l as { operation_type?: string | null; is_maquila?: boolean | null; lot_code?: string | null };
+    return esServicioPiladaOp(o.operation_type, o.is_maquila, o.lot_code);
+  });
+  const tipoArrozSecado = (report: DryingTunnelReport) => (report.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11");
+  // Candidatos: misma lista de túneles listos (ya es del socio activo), mismo tipo de arroz y misma clase (propio/servicio).
+  const juntosDisponibles = useMemo(() => {
+    if (!selectedProductionDrying) return [] as DryingTunnelReport[];
+    return productionDryingReports.filter((r) => r.id !== selectedProductionDrying.id
+      && tipoArrozSecado(r) === tipoArrozSecado(selectedProductionDrying)
+      && esServicioDeSecado(r) === esServicioDeSecado(selectedProductionDrying));
+  }, [productionDryingReports, selectedProductionDrying]); // eslint-disable-line react-hooks/exhaustive-deps
+  const juntosElegidos = useMemo(
+    () => juntosDisponibles.filter((r) => productionDryingExtras.includes(r.id)),
+    [juntosDisponibles, productionDryingExtras]
+  );
   // Lotes de arroz seco disponibles en bodega para pilar directo. La fuente es el
   // endpoint /lots/dry-in-storage, que ya aplica el filtro ESTRICTO (secado
   // terminado + en bodega + sin procesar); NO se listan lotes en secadora ni sin
@@ -4328,11 +4346,13 @@ export function App() {
     return {
       lot_id: selectedProductionDrying.lot_id,
       rice_type: selectedProductionDrying.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11",
-      entrada_qq: Number(selectedProductionDrying.total_quintals ?? 0),
+      entrada_qq: round2(Number(selectedProductionDrying.total_quintals ?? 0) + juntosElegidos.reduce((s, r) => s + Number(r.total_quintals ?? 0), 0)),
       drying_report_id: selectedProductionDrying.id as string | undefined,
-      etiqueta: `Secadora ${selectedProductionDrying.tunnel_number}`
+      etiqueta: juntosElegidos.length
+        ? `Secadoras ${[selectedProductionDrying, ...juntosElegidos].map((r) => r.tunnel_number).join(" + ")} (pilados juntos)`
+        : `Secadora ${selectedProductionDrying.tunnel_number}`
     };
-  }, [productionSource, selectedStockLot, selectedProductionDrying]);
+  }, [productionSource, selectedStockLot, selectedProductionDrying, juntosElegidos]);
   const millingPiladoTotalQq = useMemo(
     () => (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).reduce((sum, entry) => sum + entry.quantityQq, 0),
     [millingPiladoEntries]
@@ -11545,6 +11565,7 @@ export function App() {
 
   function updateProductionDryingId(value: string) {
     setProductionDryingId(value);
+    setProductionDryingExtras([]);
     setMillingYields(null);
     // Trae del servidor el proceso guardado de ese túnel, si existe.
     loadDraftFor(value).catch((error) => {
@@ -11684,7 +11705,7 @@ export function App() {
     const effEntries = flushPendingPiladoEntry();
     if (!effEntries) return;
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
-      report: millingReport,
+      report: { ...millingReport, juntos: productionDryingExtras },
       pilado_entries: effEntries
     });
     await loadMillingDrafts();
@@ -11695,7 +11716,7 @@ export function App() {
     setMillingPiladoEntries([]);
     setMillingYields(null);
     setMillingDraftSavedAt(null);
-    setProductionDryingId("");
+    setProductionDryingId(""); setProductionDryingExtras([]);
     addToast("Proceso guardado. El formulario quedó limpio: retómalo desde «Procesos guardados» con Continuar / Finalizar lote.", "success");
   }
 
@@ -11714,7 +11735,7 @@ export function App() {
       if (!r.ok) throw new Error("No se pudo descartar el proceso guardado");
       // Optimista: quítalo de la lista al instante.
       setMillingDrafts((prev) => prev.filter((x) => x.drying_report_id !== d.drying_report_id));
-      if (productionDryingId === d.drying_report_id) setProductionDryingId("");
+      if (productionDryingId === d.drying_report_id) setProductionDryingId(""); setProductionDryingExtras([]);
       addToast(`Proceso del lote ${d.lot_code ?? ""} descartado. El lote vuelve a estar disponible.`, "success");
       await loadMillingDrafts();
       await refresh(); // recarga dryingReports → has_draft se apaga y el lote reaparece
@@ -12080,6 +12101,8 @@ Motivo (obligatorio):`, "");
       return;
     }
     const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`);
+    const juntosGuardados = (d?.report as { juntos?: unknown } | undefined)?.juntos;
+    setProductionDryingExtras(Array.isArray(juntosGuardados) ? juntosGuardados.map(String) : []);
     if (d) {
       const savedReport = { ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) };
       let savedEntries = Array.isArray(d.pilado_entries) ? d.pilado_entries : [];
@@ -12161,11 +12184,14 @@ Motivo (obligatorio):`, "");
     const KG_PER_QQ = 45.359237;
     const inputKg = productionSource === "stock"
       ? totalCascara * KG_PER_QQ
-      : Number(selectedProductionDrying?.input_weight_kg ?? totalCascara * KG_PER_QQ);
+      : juntosElegidos.length
+        ? [selectedProductionDrying, ...juntosElegidos].reduce((s, r) => s + Number(r?.input_weight_kg ?? Number(r?.total_quintals ?? 0) * KG_PER_QQ), 0)
+        : Number(selectedProductionDrying?.input_weight_kg ?? totalCascara * KG_PER_QQ);
 
     const batch = await apiPost<{ id: string }>("/processing-batches", {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
+      drying_report_ids_extra: productionSource === "stock" ? [] : juntosElegidos.map((r) => r.id),
       process_type: "PILADO",
       ownership: "OWNED",
       input_product_id: inputProduct.id,
@@ -12248,7 +12274,7 @@ Motivo (obligatorio):`, "");
     if (src.drying_report_id) {
       await apiFetch(`/processing-batches/drafts/${src.drying_report_id}`, { method: "DELETE" }).catch(() => undefined);
     }
-    setProductionDryingId("");
+    setProductionDryingId(""); setProductionDryingExtras([]);
     setProductionStockLotId("");
     setMillingDraftSavedAt(null);
     // Nómina + stock quedaron registrados en la misma transacción del cierre.
@@ -12410,7 +12436,7 @@ Motivo (obligatorio):`, "");
         ? "Maquila cerrada: productos en custodia y cuenta por cobrar creada"
         : "Produccion cerrada: inventario y rendimiento actualizados"
     );
-    setProductionDryingId("");
+    setProductionDryingId(""); setProductionDryingExtras([]);
     await refresh();
   }
 
@@ -16554,7 +16580,7 @@ Motivo (obligatorio):`, "");
                 </label>
                 <label className={productionSource === "stock" ? "isActive" : ""}>
                   <input type="radio" name="prodSource" checked={productionSource === "stock"} style={{ width: "auto" }}
-                    onChange={() => { setProductionSource("stock"); setProductionDryingId(""); }} />
+                    onChange={() => { setProductionSource("stock"); setProductionDryingId(""); setProductionDryingExtras([]); }} />
                   <span><strong>Desde Stock</strong><small>Bodega de arroz seco</small></span>
                 </label>
               </div>
@@ -16579,12 +16605,30 @@ Motivo (obligatorio):`, "");
                     </select>
                   </label>
                   {selectedProductionDrying ? (
+                    <>
                     <div className="totalBox dryerTotalBox">
                       <span>Total cascara desde Secadoras</span>
                       <strong>{Number(selectedProductionDrying.total_quintals ?? 0).enReal()} QQ</strong>
                       <small>Secadora {selectedProductionDrying.tunnel_number} - {selectedProductionDrying.lots.length} lote(s)</small>
                       <small>{selectedProductionDrying.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).enReal()} QQ)`).join(" + ")}</small>
+                      {juntosElegidos.length > 0 && (
+                        <small style={{ fontWeight: 700 }}>🔗 + {juntosElegidos.map((r) => `Secadora ${r.tunnel_number} (${Number(r.total_quintals ?? 0).enReal()} QQ)`).join(" + ")} = {Number(millingSource?.entrada_qq ?? 0).enReal()} QQ en total</small>
+                      )}
                     </div>
+                    {juntosDisponibles.length > 0 && (
+                    <div style={{ padding: "10px 12px", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 8, display: "grid", gap: 6 }}>
+                      <strong style={{ fontSize: 13 }}>🔗 ¿Se mezcló con el arroz de otro túnel? Pílalos juntos</strong>
+                      <small className="muted">Marca los túneles (del mismo socio y el mismo tipo de arroz) que se juntaron antes de entrar a la piladora. Se registra una sola pilada con la cáscara de todos.</small>
+                      {juntosDisponibles.map((r) => (
+                        <label key={r.id} style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, margin: 0, cursor: "pointer" }}>
+                          <input type="checkbox" style={{ width: "auto" }} checked={productionDryingExtras.includes(r.id)}
+                            onChange={(e) => { setMillingYields(null); setProductionDryingExtras((x) => e.target.checked ? [...x, r.id] : x.filter((y) => y !== r.id)); }} />
+                          <span>Secadora {r.tunnel_number} · {Number(r.total_quintals ?? 0).enReal()} QQ · {(r.lots ?? []).map((l) => l.lot_code).filter(Boolean).join(", ")}</span>
+                        </label>
+                      ))}
+                    </div>
+                    )}
+                    </>
                   ) : (
                     <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
                       <strong>No hay secadoras finalizadas sin procesar.</strong>
