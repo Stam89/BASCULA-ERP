@@ -4302,6 +4302,9 @@ export function App() {
   );
   // 🔗 PILAR JUNTOS: otros túneles secos del mismo socio cuyo arroz se mezcló antes de la piladora.
   const [productionDryingExtras, setProductionDryingExtras] = useState<string[]>([]);
+  // Selector como el de Secadoras: lista con casillas → «➕ Agregar al lote» → secadoras utilizadas (con Quitar).
+  const [prodPickerOpen, setProdPickerOpen] = useState(false);
+  const [prodPick, setProdPick] = useState<string[]>([]);
   const esServicioDeSecado = (report: DryingTunnelReport) => (report.lots ?? []).some((l) => {
     const o = l as { operation_type?: string | null; is_maquila?: boolean | null; lot_code?: string | null };
     return esServicioPiladaOp(o.operation_type, o.is_maquila, o.lot_code);
@@ -11563,6 +11566,32 @@ export function App() {
     setMillingYields(null);
   }
 
+  // Agrega las secadoras marcadas: la primera es la principal (su proceso guardado se carga) y las demás se pilan
+  // junto con ella si son del mismo tipo de arroz y la misma clase (propio / servicio).
+  function agregarSecadorasProduccion() {
+    const marcadas = productionDryingReports.filter((r) => prodPick.includes(r.id));
+    if (marcadas.length === 0) { addToast("Marca una o varias secadoras de la lista.", "error"); return; }
+    const base = selectedProductionDrying ?? marcadas[0];
+    const otras = marcadas.filter((r) => r.id !== base.id);
+    const compatibles = otras.filter((r) => tipoArrozSecado(r) === tipoArrozSecado(base) && esServicioDeSecado(r) === esServicioDeSecado(base));
+    if (!selectedProductionDrying) updateProductionDryingId(base.id);
+    setProductionDryingExtras((x) => [...new Set([...(selectedProductionDrying ? x : []), ...compatibles.map((r) => r.id)])]);
+    if (compatibles.length < otras.length) addToast("Algunas secadoras no se agregaron: son de otro tipo de arroz o de otra clase (propio / servicio).", "warn");
+    setProdPick([]);
+    setProdPickerOpen(false);
+    setMillingYields(null);
+  }
+  function quitarSecadoraProduccion(id: string) {
+    setMillingYields(null);
+    if (id === productionDryingId) {
+      const resto = productionDryingExtras.filter((x) => x !== id);
+      setProductionDryingId(resto[0] ?? "");
+      setProductionDryingExtras(resto.slice(1));
+    } else {
+      setProductionDryingExtras((x) => x.filter((y) => y !== id));
+    }
+  }
+
   function updateProductionDryingId(value: string) {
     setProductionDryingId(value);
     setProductionDryingExtras([]);
@@ -12102,7 +12131,7 @@ Motivo (obligatorio):`, "");
     }
     const d = await apiGet<MillingDraft | null>(`/processing-batches/drafts/${dryingId}`);
     const juntosGuardados = (d?.report as { juntos?: unknown } | undefined)?.juntos;
-    setProductionDryingExtras(Array.isArray(juntosGuardados) ? juntosGuardados.map(String) : []);
+    if (Array.isArray(juntosGuardados)) setProductionDryingExtras((cur) => [...new Set([...cur, ...juntosGuardados.map(String)])]);
     if (d) {
       const savedReport = { ...defaultMillingReport, ...(d.report as Partial<MillingReportState>) };
       let savedEntries = Array.isArray(d.pilado_entries) ? d.pilado_entries : [];
@@ -16587,57 +16616,77 @@ Motivo (obligatorio):`, "");
 
               {productionSource === "drying" ? (
                 <>
-                  <label>
-                    <span>Secadora desde Secadoras</span>
-                    <select value={productionDryingId} onChange={(event) => updateProductionDryingId(event.target.value)} required>
-                      <option value="">Seleccione</option>
-                      {productionDryingReports.map((report) => {
-                        const esServ = (report.lots ?? []).some((l) => {
-                          const o = l as { operation_type?: string | null; is_maquila?: boolean | null; lot_code?: string | null };
-                          return esServicioPiladaOp(o.operation_type, o.is_maquila, o.lot_code);
-                        });
-                        return (
-                          <option key={report.id} value={report.id}>
-                            Secadora {report.tunnel_number} - {report.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} - {Number(report.total_quintals ?? 0).enReal()} QQ{esServ ? " · 🔧 SERV. PILADA" : ""}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </label>
-                  {selectedProductionDrying ? (
-                    <>
-                    <div className="totalBox dryerTotalBox">
-                      <span>Total cascara desde Secadoras</span>
-                      <strong>{Number(selectedProductionDrying.total_quintals ?? 0).enReal()} QQ</strong>
-                      <small>Secadora {selectedProductionDrying.tunnel_number} - {selectedProductionDrying.lots.length} lote(s)</small>
-                      <small>{selectedProductionDrying.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} (${Number(lot.quintals ?? 0).enReal()} QQ)`).join(" + ")}</small>
-                      {juntosElegidos.length > 0 && (
-                        <small style={{ fontWeight: 700 }}>🔗 + {juntosElegidos.map((r) => `Secadora ${r.tunnel_number} (${Number(r.total_quintals ?? 0).enReal()} QQ)`).join(" + ")} = {Number(millingSource?.entrada_qq ?? 0).enReal()} QQ en total</small>
-                      )}
-                    </div>
-                    {juntosDisponibles.length > 0 && (
-                    <div style={{ padding: "10px 12px", border: "1px solid #bfdbfe", background: "#eff6ff", borderRadius: 8, display: "grid", gap: 6 }}>
-                      <strong style={{ fontSize: 13 }}>🔗 ¿Se mezcló con el arroz de otro túnel? Pílalos juntos</strong>
-                      <small className="muted">Marca los túneles (del mismo socio y el mismo tipo de arroz) que se juntaron antes de entrar a la piladora. Se registra una sola pilada con la cáscara de todos.</small>
-                      {juntosDisponibles.map((r) => (
-                        <label key={r.id} style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, margin: 0, cursor: "pointer" }}>
-                          <input type="checkbox" style={{ width: "auto" }} checked={productionDryingExtras.includes(r.id)}
-                            onChange={(e) => { setMillingYields(null); setProductionDryingExtras((x) => e.target.checked ? [...x, r.id] : x.filter((y) => y !== r.id)); }} />
-                          <span>Secadora {r.tunnel_number} · {Number(r.total_quintals ?? 0).enReal()} QQ · {(r.lots ?? []).map((l) => l.lot_code).filter(Boolean).join(", ")}</span>
-                        </label>
-                      ))}
-                    </div>
-                    )}
-                    </>
-                  ) : (
-                    <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
-                      <strong>No hay secadoras finalizadas sin procesar.</strong>
-                      <p style={{ margin: "4px 0 0" }}>
-                        Ve a la pestaña <strong>Secadoras</strong>, finaliza un secado y vuelve aquí. Si ya guardaste un proceso,
-                        aparecerá arriba en <strong>Procesos guardados</strong>; presiona <em>Continuar / Finalizar lote</em>.
-                      </p>
-                    </div>
-                  )}
+                  {(() => {
+                    const usadas = selectedProductionDrying ? [selectedProductionDrying, ...juntosElegidos] : [];
+                    const libresProd = productionDryingReports.filter((r) => !usadas.some((u) => u.id === r.id));
+                    const base = selectedProductionDrying;
+                    const tipoTxt = (r: DryingTunnelReport) => (tipoArrozSecado(r) === "CORRIENTE" ? "Corriente" : "0.11");
+                    return (
+                      <>
+                        <div>
+                          <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Secadoras finalizadas <span className="muted" style={{ fontWeight: 400 }}>(una, o varias si el arroz se mezcló)</span></span>
+                          <button type="button" className="btnSecondary" aria-expanded={prodPickerOpen} onClick={() => setProdPickerOpen((v) => !v)}
+                            style={{ width: "100%", minHeight: 42, padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", textAlign: "left" }}>
+                            <span>{prodPick.length > 0 ? `${prodPick.length} secadora(s) marcada(s)` : "Seleccionar una o varias secadoras"}</span>
+                            <span aria-hidden="true">{prodPickerOpen ? "▲" : "▼"}</span>
+                          </button>
+                          {prodPickerOpen && (
+                            <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)", marginTop: 6 }}>
+                              {libresProd.map((r) => {
+                                const compatible = !base || (tipoArrozSecado(r) === tipoArrozSecado(base) && esServicioDeSecado(r) === esServicioDeSecado(base));
+                                const checked = prodPick.includes(r.id);
+                                return (
+                                  <label key={r.id} style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: compatible ? "pointer" : "not-allowed", opacity: compatible ? 1 : 0.55 }}>
+                                    <input type="checkbox" disabled={!compatible} checked={checked}
+                                      onChange={() => setProdPick((x) => checked ? x.filter((y) => y !== r.id) : [...x, r.id])}
+                                      style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
+                                    <span style={{ fontSize: 13, lineHeight: 1.35 }}>
+                                      <strong>Secadora {r.tunnel_number}</strong> · {tipoTxt(r)} · {Number(r.total_quintals ?? 0).enReal()} QQ{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}
+                                      <small style={{ display: "block", color: "var(--c-muted)" }}>{(r.lots ?? []).map((l) => `${l.lot_code ?? ""} ${l.farmer_name ?? ""}`.trim()).join(" + ")}</small>
+                                      {!compatible && <small style={{ display: "block", color: "#b45309" }}>No se puede juntar: es de otro tipo de arroz o de otra clase (propio / servicio)</small>}
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                              {libresProd.length === 0 && <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay más secadoras finalizadas sin pilar.</div>}
+                            </div>
+                          )}
+                        </div>
+                        <button type="button" className="btnSecondary" onClick={agregarSecadorasProduccion}
+                          style={{ padding: "8px 14px", borderRadius: 8, fontWeight: 700, marginTop: 4 }}>
+                          ➕ Agregar al lote ({prodPick.length})
+                        </button>
+                        <section className="lotSelector">
+                          <span>Secadoras utilizadas</span>
+                          {usadas.length === 0 && <p className="muted">Agrega una o varias secadoras desde el selector. Si el arroz de varias se mezcló antes de la piladora, agrégalas todas: se pilan juntas en una sola pilada.</p>}
+                          {usadas.map((r) => (
+                            <div className="usedLotRow" key={r.id}>
+                              <div>
+                                <strong>Secadora {r.tunnel_number} · {tipoTxt(r)}{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}</strong>
+                                <small>{(r.lots ?? []).map((l) => `${l.lot_code ?? ""} · ${l.farmer_name ?? "Sin agricultor"} (${Number(l.quintals ?? 0).enReal()} QQ)`).join(" + ")}</small>
+                              </div>
+                              <button type="button" onClick={() => quitarSecadoraProduccion(r.id)}>Quitar</button>
+                            </div>
+                          ))}
+                        </section>
+                        {selectedProductionDrying ? (
+                          <div className="totalBox dryerTotalBox">
+                            <span>Total cascara desde Secadoras</span>
+                            <strong>{Number(millingSource?.entrada_qq ?? 0).enReal()} QQ</strong>
+                            <small>{usadas.length} secadora(s) · {usadas.reduce((n, r) => n + (r.lots ?? []).length, 0)} lote(s){usadas.length > 1 ? " · 🔗 se pilan juntas en una sola pilada" : ""}</small>
+                          </div>
+                        ) : productionDryingReports.length === 0 ? (
+                          <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
+                            <strong>No hay secadoras finalizadas sin procesar.</strong>
+                            <p style={{ margin: "4px 0 0" }}>
+                              Ve a la pestaña <strong>Secadoras</strong>, finaliza un secado y vuelve aquí. Si ya guardaste un proceso,
+                              aparecerá arriba en <strong>Procesos guardados</strong>; presiona <em>Continuar / Finalizar lote</em>.
+                            </p>
+                          </div>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                 </>
               ) : (
                 <>
