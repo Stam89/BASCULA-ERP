@@ -2456,6 +2456,10 @@ export function App() {
   const [secadoraAbierta, setSecadoraAbierta] = useState<"TENDAL" | 1 | 2 | null>(null);
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
   const [fuelModalOpen, setFuelModalOpen] = useState(false);
+  // ⏳ Secados finalizados sin combustible (el informe llega después) y el que se está completando.
+  const [combustiblePendiente, setCombustiblePendiente] = useState<Array<{ id: string; motor_number: 1 | 2; created_at: string; total_quintals: number; tuneles: number[]; inicio: string | null; fin: string | null; lotes: string | null }>>([]);
+  const [completarCombustibleId, setCompletarCombustibleId] = useState<string | null>(null);
+  const [sinCombustibleBusy, setSinCombustibleBusy] = useState(false);
   // Confirmación previa al cierre: conserva exactamente el formulario/túnel que
   // originó la acción y no ejecuta ninguna escritura hasta aceptar el modal.
   const [dryingFinalizeConfirm, setDryingFinalizeConfirm] = useState<{
@@ -10681,6 +10685,7 @@ export function App() {
       apiGet<TunnelStatusRow[]>("/process-flow/drying/tunnels-status").catch(() => [] as TunnelStatusRow[])
     ]);
     setMotorActiveReports(rows);
+    apiGet<typeof combustiblePendiente>("/process-flow/drying/combustible-pendiente").then(setCombustiblePendiente).catch(() => undefined);
     // Un túnel ocupado por otro accionista no se puede llenar: se bloquea en el formulario.
     const occupied: Record<number, string> = {};
     for (const r of tunnelRows) {
@@ -10975,6 +10980,67 @@ export function App() {
     await refresh();
     await loadMotorActive();
     return fuel;
+  }
+
+  // ⏳ Finalizar sin combustible: libera los túneles; el combustible queda pendiente para cuando llegue el informe.
+  async function finalizarSinCombustible() {
+    if (sinCombustibleBusy) return;
+    if (!window.confirm(`¿Finalizar el secado del Motor ${motorActivo} SIN el combustible?\n\nLos túneles quedan libres para llenarlos otra vez. El combustible queda PENDIENTE: lo registras cuando llegue el informe (aviso «⛽ Combustible pendiente» en Secadoras).`)) return;
+    setSinCombustibleBusy(true);
+    try {
+      const r = await apiPost<{ finalized: number; tuneles: number[]; total_quintals: number }>(`/process-flow/drying/motor/${motorActivo}/finalizar-sin-combustible`, { created_by: authUser?.id });
+      setFuelModalOpen(false);
+      setEditingDryingReport(null);
+      addToast(`Secado del Motor ${motorActivo} finalizado (túnel ${r.tuneles.join(", ")} · ${r.total_quintals.enReal()} QQ). Túneles libres. ⛽ Combustible pendiente: regístralo cuando llegue el informe.`, "success");
+      await refresh();
+      await loadMotorActive();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo finalizar", "error");
+    } finally { setSinCombustibleBusy(false); }
+  }
+
+  function abrirCompletarCombustible(p: { id: string; motor_number: 1 | 2 }) {
+    setMotorActivo(p.motor_number);
+    setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
+    setCompletarCombustibleId(p.id);
+    setFuelModalOpen(true);
+  }
+
+  // Completa el combustible de una corrida ya finalizada: el costo va SOLO a sus túneles.
+  async function completarCombustiblePendiente() {
+    const id = completarCombustibleId;
+    if (!id) return;
+    if (combustibleBloqueado) {
+      setMessage("Configura el precio del combustible en Configuración → Precio del combustible antes de registrar (evita un gasto en $0).");
+      return;
+    }
+    if (!combustibleConsumo || !(combustibleTotal > 0)) { addToast("Ingresa los medidores del combustible del motor.", "error"); return; }
+    const pend = combustiblePendiente.find((x) => x.id === id);
+    const fuel = await apiPost<RepartoCombustible>(`/process-flow/drying/motor-fuel/${id}/completar`, {
+      gas_bombona_inicio: Number(gasForm.bombona_inicio || 0),
+      gas_bombona_fin: Number(gasForm.bombona_fin || 0),
+      gas_cilindro_cantidad: Number(gasForm.cilindro_cantidad || 0),
+      diesel_inicio: Number(gasForm.diesel_inicio || 0),
+      diesel_fin: Number(gasForm.diesel_fin || 0),
+      created_by: authUser?.id
+    });
+    const consumo = { bombona: gasBombonaTotal, cilindros: Number(gasForm.cilindro_cantidad || 0), diesel: dieselTotal };
+    setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
+    setCompletarCombustibleId(null);
+    setFuelModalOpen(false);
+    const partidas = (fuel.reparto ?? []).map((p) => ({ tunel: p.tunel ?? 0, lote: pend?.lotes ?? "—", socio: null, qq: Number(p.quintales) || 0, gas: Number(p.gas) || 0, diesel: Number(p.diesel) || 0 }))
+      .sort((a, b) => a.tunel - b.tunel);
+    setCostoSecadoFinal({
+      motor: pend?.motor_number ?? motorActivo,
+      fecha: pend?.fin ?? new Date().toISOString(),
+      qq: round2(partidas.reduce((a, p) => a + p.qq, 0)),
+      gas: round2(partidas.reduce((a, p) => a + p.gas, 0)),
+      diesel: round2(partidas.reduce((a, p) => a + p.diesel, 0)),
+      consumo,
+      partidas
+    });
+    await refresh();
+    await loadMotorActive();
   }
 
   // El modal solo se abre cuando el backend confirma que este es el último túnel
@@ -14557,6 +14623,22 @@ Motivo (obligatorio):`, "");
                 </button>
               </nav>
             </div>
+            {secadorasVista === "operacion" && combustiblePendiente.length > 0 && (
+              <div className="alertBox" style={{ gridColumn: "1 / -1", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", display: "grid", gap: 8 }}>
+                <strong>⛽ Combustible pendiente ({combustiblePendiente.length})</strong>
+                <small>Secados ya finalizados a los que les falta el combustible. Regístralo cuando llegue el informe: el costo se reparte solo entre esos túneles.</small>
+                {combustiblePendiente.map((p) => (
+                  <div key={p.id} style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, borderTop: "1px solid #fed7aa", paddingTop: 8 }}>
+                    <span>
+                      <b>Motor {p.motor_number}</b> · túnel {(p.tuneles ?? []).join(", ")} · {Number(p.total_quintals).enReal()} QQ
+                      {p.fin ? ` · terminó ${new Date(p.fin).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}
+                      {p.lotes ? <small style={{ display: "block", color: "#7c2d12" }}>Lotes: {p.lotes}</small> : null}
+                    </span>
+                    {canEdit("Secadoras") && <button type="button" className="primary" onClick={() => abrirCompletarCombustible(p)}>⛽ Registrar combustible</button>}
+                  </div>
+                ))}
+              </div>
+            )}
             {secadorasVista === "guardia" && (
             <div className="card" style={{ gridColumn: "1 / -1", padding: 16, border: "1px solid #bae6fd", background: "#f0f9ff" }}>
               <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
@@ -15164,24 +15246,44 @@ Motivo (obligatorio):`, "");
 
             {/* Modal: combustible del motor + cierre (los inputs solo aquí, al final) */}
             {fuelModalOpen && (
-              <div className="modalOverlay" onClick={() => setFuelModalOpen(false)}>
+              <div className="modalOverlay" onClick={() => { setFuelModalOpen(false); setCompletarCombustibleId(null); }}>
                 <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 620, width: "100%" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
-                    <h3 style={{ marginTop: 0 }}>⛽ Combustible y cierre — Motor {motorActivo}</h3>
-                    <button type="button" onClick={() => setFuelModalOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                    <h3 style={{ marginTop: 0 }}>{completarCombustibleId ? `⛽ Combustible pendiente — Motor ${motorActivo}` : `⛽ Combustible y cierre — Motor ${motorActivo}`}</h3>
+                    <button type="button" onClick={() => { setFuelModalOpen(false); setCompletarCombustibleId(null); }} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
                   </div>
                   <div className="alertBox" style={{ background: "#fff7ed", border: "1px solid #fed7aa", color: "#9a3412", marginBottom: 10 }}>
-                    <strong>Este es el último túnel.</strong> Por favor, registre el combustible para apagar el motor.
+                    {completarCombustibleId
+                      ? <>Este secado ya se finalizó. Escribe el combustible del informe: el costo se reparte solo entre <strong>sus</strong> túneles.</>
+                      : <><strong>Este es el último túnel.</strong> Por favor, registre el combustible para apagar el motor. Si el informe del combustible todavía no llega, puedes <strong>finalizar sin combustible</strong> y registrarlo después.</>}
                   </div>
                   {renderFuelFieldset()}
-                  <div className="buttonRow" style={{ marginTop: 14 }}>
-                    <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
-                      disabled={combustibleBloqueado}
-                      title={combustibleBloqueado ? "Configura el precio del combustible en Configuración → Precio del combustible (evita guardar un gasto en $0)" : undefined}
-                      onClick={() => { if (validarFinalizarSecado()) setFuelConfirmOpen(true); }}>
-                      ✅ Confirmar y Finalizar Secado
-                    </button>
-                    <button type="button" onClick={() => setFuelModalOpen(false)}>Cancelar</button>
+                  <div className="buttonRow" style={{ marginTop: 14, flexWrap: "wrap" }}>
+                    {completarCombustibleId ? (
+                      <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
+                        disabled={combustibleBloqueado || fuelConfirmBusy}
+                        onClick={() => {
+                          setFuelConfirmBusy(true);
+                          completarCombustiblePendiente()
+                            .catch((error) => addToast(error instanceof Error ? error.message : "No se pudo registrar", "error"))
+                            .finally(() => setFuelConfirmBusy(false));
+                        }}>
+                        {fuelConfirmBusy ? "Guardando…" : "✅ Registrar combustible"}
+                      </button>
+                    ) : (
+                      <>
+                        <button type="button" className="primary" style={{ background: "var(--c-success)", fontWeight: 800 }}
+                          disabled={combustibleBloqueado}
+                          title={combustibleBloqueado ? "Configura el precio del combustible en Configuración → Precio del combustible (evita guardar un gasto en $0)" : undefined}
+                          onClick={() => { if (validarFinalizarSecado()) setFuelConfirmOpen(true); }}>
+                          ✅ Confirmar y Finalizar Secado
+                        </button>
+                        <button type="button" disabled={sinCombustibleBusy} onClick={() => { finalizarSinCombustible().catch(() => undefined); }}>
+                          {sinCombustibleBusy ? "Finalizando…" : "⏳ Finalizar sin combustible (lo registro después)"}
+                        </button>
+                      </>
+                    )}
+                    <button type="button" onClick={() => { setFuelModalOpen(false); setCompletarCombustibleId(null); }}>Cancelar</button>
                   </div>
                 </div>
               </div>

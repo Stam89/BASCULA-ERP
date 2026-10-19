@@ -644,7 +644,22 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       throw new ApiError(409, "El motor no tiene secados pendientes de combustible: llena y registra primero las secadoras.");
     }
     if (body.finalize) assertDryingHoursForCompletion(reports.rows);
+    return repartirCombustibleMotor(client, body, reports.rows, null);
+  });
 
+  res.status(201).json(result);
+}));
+
+type LecturaCombustible = {
+  motor_number: number; gas_bombona_inicio: number; gas_bombona_fin: number; gas_cilindro_cantidad: number;
+  diesel_inicio: number; diesel_fin: number; finalize: boolean; created_by?: string;
+};
+type SecadoParaCombustible = { id: string; tunnel_number: number | null; total_quintals: unknown; dry_start_at: unknown; dry_end_at: unknown; drying_hours: unknown };
+
+// Calcula el combustible del motor y lo reparte entre `rows` (sus secados). Con `pendienteId` completa el registro
+// que quedó pendiente al finalizar sin combustible; si no, crea uno nuevo.
+async function repartirCombustibleMotor(client: PoolClient, body: LecturaCombustible, rows: SecadoParaCombustible[], pendienteId: string | null) {
+    const reports = { rows };
     const totalQq = reports.rows.reduce((s, r) => s + Number(r.total_quintals), 0);
     if (totalQq <= 0) throw new ApiError(409, "Los secados del motor no tienen quintales registrados.");
 
@@ -654,25 +669,34 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       throw new ApiError(400, "No hay consumo que registrar: revisa los medidores y los precios en Configuración → Tarifas.");
     }
 
-    const record = await client.query(
-      `INSERT INTO motor_fuel_records
-       (motor_number, gas_bombona_inicio, gas_bombona_fin, gas_cilindro_cantidad,
-        diesel_inicio, diesel_fin, gas_bombona_precio, gas_cilindro_precio, diesel_precio,
-        gas_costo, diesel_costo, costo_total, total_quintals, created_by, gas_bombona_kg_por_punto, reparto_metodo)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-       RETURNING *`,
-      [
-        body.motor_number, body.gas_bombona_inicio, body.gas_bombona_fin, body.gas_cilindro_cantidad,
-        body.diesel_inicio, body.diesel_fin, c.precioBombona, c.precioCilindro, c.precioDiesel,
-        c.costoTotal, c.dieselCosto, costoTotal, totalQq, body.created_by ?? null, c.kgPorPunto,
-        pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at, fin: r.dry_end_at }))).metodo
-      ]
-    );
+    const valores = [
+      body.motor_number, body.gas_bombona_inicio, body.gas_bombona_fin, body.gas_cilindro_cantidad,
+      body.diesel_inicio, body.diesel_fin, c.precioBombona, c.precioCilindro, c.precioDiesel,
+      c.costoTotal, c.dieselCosto, costoTotal, totalQq, body.created_by ?? null, c.kgPorPunto,
+      pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at as string | null, fin: r.dry_end_at as string | null }))).metodo
+    ];
+    const record = pendienteId
+      ? await client.query(
+        `UPDATE motor_fuel_records
+            SET motor_number = $1, gas_bombona_inicio = $2, gas_bombona_fin = $3, gas_cilindro_cantidad = $4,
+                diesel_inicio = $5, diesel_fin = $6, gas_bombona_precio = $7, gas_cilindro_precio = $8, diesel_precio = $9,
+                gas_costo = $10, diesel_costo = $11, costo_total = $12, total_quintals = $13,
+                created_by = COALESCE($14, created_by), gas_bombona_kg_por_punto = $15, reparto_metodo = $16, pendiente = false
+          WHERE id = $17 RETURNING *`,
+        [...valores, pendienteId])
+      : await client.query(
+        `INSERT INTO motor_fuel_records
+         (motor_number, gas_bombona_inicio, gas_bombona_fin, gas_cilindro_cantidad,
+          diesel_inicio, diesel_fin, gas_bombona_precio, gas_cilindro_precio, diesel_precio,
+          gas_costo, diesel_costo, costo_total, total_quintals, created_by, gas_bombona_kg_por_punto, reparto_metodo)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         RETURNING *`,
+        valores);
 
     // Reparto por TIEMPO COMPARTIDO del quemador (utils/reparto-combustible.ts, con pruebas): mientras
     // los túneles secan juntos, esas horas se dividen por QQ; las horas en que un túnel sigue solo, las
     // paga él. Sin horas en algún túnel → solo por QQ. El último se lleva el residuo del redondeo.
-    const { pesos } = pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at, fin: r.dry_end_at })));
+    const { pesos } = pesosPorTiempoCompartido(reports.rows.map((r) => ({ qq: Number(r.total_quintals), inicio: r.dry_start_at as string | null, fin: r.dry_end_at as string | null })));
     const gasPartes = repartirPorPeso(c.costoTotal, pesos);
     const dieselPartes = repartirPorPeso(c.dieselCosto, pesos);
     const partes = reports.rows.map((r, i) => ({
@@ -747,8 +771,100 @@ processFlowRouter.post("/drying/motor-fuel", asyncRoute(async (req, res) => {
       costo_por_qq: round2(costoTotal / totalQq),
       finalized: body.finalize ? partes.length : 0
     };
-  });
+}
 
+// ⏳ FINALIZAR SIN COMBUSTIBLE: cierra la corrida del motor (todos sus túneles ya con hora final) aunque el informe
+// del combustible no haya llegado. Los túneles quedan libres para llenarse otra vez; la corrida queda en un registro
+// del motor «pendiente» (costo 0) que se completa después con POST /drying/motor-fuel/:id/completar.
+processFlowRouter.post("/drying/motor/:motor/finalizar-sin-combustible", asyncRoute(async (req, res) => {
+  const motor = Number(req.params.motor);
+  if (motor !== 1 && motor !== 2) throw new ApiError(400, "Motor inválido");
+  const body = z.object({ created_by: z.string().uuid().optional() }).parse(req.body ?? {});
+  const result = await inTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, motor]);
+    const reports = (await client.query(
+      `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at, d.status
+         FROM drying_tunnel_reports d
+        WHERE ${SECADOS_PENDIENTES_COMBUSTIBLE}
+        ORDER BY d.created_at
+        FOR UPDATE`,
+      [motor]
+    )).rows;
+    if (!reports.length) throw new ApiError(409, "El motor no tiene secados para finalizar.");
+    assertDryingHoursForCompletion(reports);
+    const ids = reports.map((r) => String(r.id));
+    const totalQq = round2(reports.reduce((s, r) => s + Number(r.total_quintals), 0));
+    const rec = (await client.query(
+      `INSERT INTO motor_fuel_records (motor_number, total_quintals, created_by, pendiente)
+       VALUES ($1, $2, $3, true) RETURNING id`,
+      [motor, totalQq, body.created_by ?? null]
+    )).rows[0];
+    await client.query(
+      "UPDATE drying_tunnel_reports SET status = 'COMPLETED', motor_fuel_id = $2 WHERE id = ANY($1::uuid[])",
+      [ids, rec.id]
+    );
+    await client.query(
+      `UPDATE lot_process_reports p
+       SET report_data = p.report_data || jsonb_build_object('status', 'COMPLETED')
+       FROM drying_tunnel_report_lots dl
+       WHERE dl.process_report_id = p.id
+         AND dl.drying_report_id = ANY($1::uuid[])`,
+      [ids]
+    );
+    // Lo mismo que al finalizar con combustible: botada, cobro del servicio y jornal del secador.
+    for (const r of reports.filter((x) => x.status !== "COMPLETED")) {
+      await autoGenerarPagosCuadrillaDeSecado(client, r.id, body.created_by ?? null);
+      await autoCobrarSecadoServicio(client, r.id);
+      await autoGenerarPagoSecador(client, r.id);
+    }
+    return {
+      motor_fuel_id: rec.id, motor_number: motor, finalized: ids.length, total_quintals: totalQq,
+      tuneles: [...new Set(reports.map((r) => Number(r.tunnel_number)))].sort()
+    };
+  });
+  res.status(201).json(result);
+}));
+
+// Corridas finalizadas que esperan su combustible (para avisar y completarlo).
+processFlowRouter.get("/drying/combustible-pendiente", asyncRoute(async (_req, res) => {
+  const r = await pool.query(
+    `SELECT m.id, m.motor_number, m.created_at, m.total_quintals::float AS total_quintals,
+            array_agg(DISTINCT d.tunnel_number ORDER BY d.tunnel_number) AS tuneles,
+            min(d.dry_start_at) AS inicio, max(d.dry_end_at) AS fin,
+            string_agg(DISTINCT l.lot_code, ', ') AS lotes
+       FROM motor_fuel_records m
+       JOIN drying_tunnel_reports d ON d.motor_fuel_id = m.id
+       LEFT JOIN lots l ON l.id = d.lot_id
+      WHERE m.pendiente
+      GROUP BY m.id
+      ORDER BY m.created_at`
+  );
+  res.json(r.rows);
+}));
+
+// Completa el combustible de una corrida que se finalizó sin él: reparte el costo SOLO entre sus túneles.
+processFlowRouter.post("/drying/motor-fuel/:id/completar", asyncRoute(async (req, res) => {
+  const body = z.object({
+    gas_bombona_inicio: z.number().nonnegative().default(0),
+    gas_bombona_fin: z.number().nonnegative().default(0),
+    gas_cilindro_cantidad: z.number().nonnegative().default(0),
+    diesel_inicio: z.number().nonnegative().default(0),
+    diesel_fin: z.number().nonnegative().default(0),
+    created_by: z.string().uuid().optional()
+  }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const rec = (await client.query("SELECT id, motor_number, pendiente FROM motor_fuel_records WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    if (!rec) throw new ApiError(404, "Registro de combustible no encontrado.");
+    if (!rec.pendiente) throw new ApiError(409, "Ese combustible ya fue registrado.");
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71002, Number(rec.motor_number)]);
+    const reports = (await client.query(
+      `SELECT d.id, d.tunnel_number, d.total_quintals, d.dry_start_at, d.dry_end_at, d.drying_hours
+         FROM drying_tunnel_reports d WHERE d.motor_fuel_id = $1 ORDER BY d.created_at FOR UPDATE`,
+      [rec.id]
+    )).rows;
+    if (!reports.length) throw new ApiError(409, "Ese registro no tiene secados.");
+    return repartirCombustibleMotor(client, { ...body, motor_number: Number(rec.motor_number), finalize: false }, reports, String(rec.id));
+  });
   res.status(201).json(result);
 }));
 

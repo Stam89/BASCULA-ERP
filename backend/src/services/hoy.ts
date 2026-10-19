@@ -272,7 +272,8 @@ export async function reunirDatos(
     const sinComb = (await db.query(
       `SELECT DISTINCT d.motor_number AS motor
          FROM drying_tunnel_reports d LEFT JOIN lots l ON l.id = d.lot_id
-        WHERE d.status = 'COMPLETED' AND d.motor_fuel_id IS NULL AND d.motor_number IN (1, 2)
+        WHERE d.status = 'COMPLETED' AND d.motor_number IN (1, 2)
+          AND (d.motor_fuel_id IS NULL OR d.motor_fuel_id IN (SELECT id FROM motor_fuel_records WHERE pendiente))
           AND COALESCE(d.dry_method, 'TUNEL') <> 'TENDAL' ${filtroLote} ORDER BY 1`,
       params
     )).rows.map((r) => Number(r.motor));
