@@ -12,6 +12,7 @@ import { basculaSyncRouter } from "./routes/modules/bascula-sync.js";
 import { verifyToken } from "./auth/jwt.js";
 import { verifyUploadSignature } from "./auth/upload-sign.js";
 import { env } from "./config/env.js";
+import { origenPermitido } from "./services/acceso-seguro.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,7 +33,12 @@ app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false 
 
 // CORS acotable por CORS_ORIGINS (ver config/env.ts). Sin esa variable, se
 // permite cualquier origen como antes (no rompe la red local ni la app móvil).
-app.use(cors(env.corsOrigins.length > 0 ? { origin: env.corsOrigins } : {}));
+// Sin CORS_ORIGINS: solo el dominio público (PUBLIC_URL / erp.ceyroerp.com), la misma PC y la red del local.
+// Una página ajena no puede usar el ERP desde el navegador de alguien. La app Android y la báscula no son
+// navegadores: no les afecta.
+app.use(cors(env.corsOrigins.length > 0
+  ? { origin: env.corsOrigins }
+  : { origin: (origin, cb) => cb(null, origenPermitido(origin, env.publicUrl)) }));
 app.use(express.json({ limit: "2mb" }));
 // Efectivo o banco de la operación (cobros, pagos, ventas): ver http/medio-pago.ts.
 app.use(medioPagoMiddleware);

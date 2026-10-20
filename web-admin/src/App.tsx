@@ -27277,9 +27277,25 @@ Motivo (obligatorio):`, "");
   );
 }
 
+// Equipos que el administrador pidió «recordar» tras verificar con el código del correo (token por usuario).
+const EQUIPOS_KEY = "bascula-erp:equipos-confiables";
+function equipoConfiable(usuario: string): string | undefined {
+  try { return (JSON.parse(localStorage.getItem(EQUIPOS_KEY) || "{}") as Record<string, string>)[usuario.trim().toLowerCase()]; } catch { return undefined; }
+}
+function guardarEquipoConfiable(usuario: string, token: string) {
+  try {
+    const m = JSON.parse(localStorage.getItem(EQUIPOS_KEY) || "{}") as Record<string, string>;
+    m[usuario.trim().toLowerCase()] = token;
+    localStorage.setItem(EQUIPOS_KEY, JSON.stringify(m));
+  } catch { /* almacenamiento no disponible */ }
+}
+
 function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
   // forgot = pedir el código al correo de recuperación; reset = código + clave nueva.
-  const [mode, setMode] = useState<"loading" | "login" | "bootstrap" | "forgot" | "reset">("loading");
+  // codigo = el administrador entra desde internet en un equipo nuevo: código de 6 dígitos que llegó a su correo.
+  const [mode, setMode] = useState<"loading" | "login" | "bootstrap" | "forgot" | "reset" | "codigo">("loading");
+  const [desafio, setDesafio] = useState<{ id: string; enviado_a: string } | null>(null);
+  const [recordarEquipo, setRecordarEquipo] = useState(true);
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -27316,6 +27332,21 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
         setMode("reset");
         return;
       }
+      if (mode === "codigo" && desafio) {
+        const r = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[]; password_weak?: boolean; dispositivo?: string }>(
+          "/auth/login/verificar",
+          { desafio_id: desafio.id, codigo: codigo.trim(), recordar: recordarEquipo, descripcion: navigator.userAgent.slice(0, 200) }
+        );
+        if (r.dispositivo) guardarEquipoConfiable(username, r.dispositivo);
+        if (r.password_weak) {
+          try { sessionStorage.setItem("bascula-erp:clave-corta", "1"); } catch { /* almacenamiento no disponible */ }
+        }
+        const { dispositivo: _d, ...sesion } = r;
+        localStorage.setItem(authStorageKey, JSON.stringify(sesion));
+        ensureActiveAccionista(r.accionistas);
+        onLogin(r.user);
+        return;
+      }
       if (mode === "reset") {
         if (password !== password2) { setError("Las dos claves no coinciden."); return; }
         const r = await apiPost<{ message: string }>("/auth/reset-password", { username: username.trim(), code: codigo.trim(), password });
@@ -27326,7 +27357,16 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
       }
       const result = mode === "bootstrap"
         ? await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/bootstrap", { name: fullName, username, password, recovery_email: email.trim() || undefined })
-        : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[]; password_weak?: boolean }>("/auth/login", { username, password });
+        : await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[]; password_weak?: boolean; requiere_codigo?: boolean; desafio_id?: string; enviado_a?: string }>(
+          "/auth/login", { username, password, dispositivo: equipoConfiable(username) });
+      const verif = result as { requiere_codigo?: boolean; desafio_id?: string; enviado_a?: string };
+      if (verif.requiere_codigo && verif.desafio_id) {
+        setDesafio({ id: verif.desafio_id, enviado_a: verif.enviado_a ?? "tu correo" });
+        setCodigo("");
+        setAviso(`Por seguridad, como entras desde internet en un equipo nuevo, te enviamos un código de 6 dígitos a ${verif.enviado_a ?? "tu correo"}.`);
+        setMode("codigo");
+        return;
+      }
       // Clave de menos de 8: al entrar se pide cambiarla (ver claveModal en App).
       if ("password_weak" in result && result.password_weak) {
         try { sessionStorage.setItem("bascula-erp:clave-corta", "1"); } catch { /* almacenamiento no disponible */ }
@@ -27345,6 +27385,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
     mode === "bootstrap" ? "Bienvenido. Crea el usuario administrador para comenzar."
     : mode === "forgot" ? "Recuperar clave · te enviamos un código a tu correo de recuperación"
     : mode === "reset" ? "Escribe el código que llegó a tu correo y elige una clave nueva"
+    : mode === "codigo" ? "Verificación del administrador"
     : "Piladora de arroz · Inicia sesión para continuar";
 
   return (
@@ -27377,7 +27418,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                 />
               </label>
             )}
-            <label>
+            {mode !== "codigo" && <label>
               <span>Usuario</span>
               <input
                 type="text"
@@ -27389,7 +27430,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                 autoComplete="username"
                 autoFocus={mode === "login" || mode === "forgot"}
               />
-            </label>
+            </label>}
             {mode === "bootstrap" && (
               <label>
                 <span>Correo de recuperación (opcional)</span>
@@ -27403,7 +27444,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                 />
               </label>
             )}
-            {mode === "reset" && (
+            {(mode === "reset" || mode === "codigo") && (
               <label>
                 <span>Código de 6 dígitos</span>
                 <input
@@ -27420,7 +27461,13 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
                 />
               </label>
             )}
-            {mode !== "forgot" && (
+            {mode === "codigo" && (
+              <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 8, cursor: "pointer" }}>
+                <input type="checkbox" style={{ width: "auto" }} checked={recordarEquipo} onChange={(e) => setRecordarEquipo(e.target.checked)} />
+                <span style={{ margin: 0 }}>Recordar este equipo (no volver a pedir el código aquí)</span>
+              </label>
+            )}
+            {mode !== "forgot" && mode !== "codigo" && (
               <label>
                 <span>{mode === "reset" ? "Clave nueva" : "Clave"}</span>
                 <input
@@ -27448,7 +27495,8 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
               </label>
             )}
             <button className="primary" disabled={busy}>
-              {mode === "forgot" ? (busy ? "Enviando…" : "Enviar código")
+              {mode === "codigo" ? (busy ? "Verificando…" : "Verificar e ingresar")
+                : mode === "forgot" ? (busy ? "Enviando…" : "Enviar código")
                 : mode === "reset" ? (busy ? "Cambiando…" : "Cambiar clave")
                 : busy ? "Ingresando…" : mode === "bootstrap" ? "Crear administrador e ingresar" : "Ingresar"}
             </button>
@@ -27461,8 +27509,8 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
             {mode === "reset" && (
               <button type="button" className="loginLink" onClick={() => irA("forgot")}>Pedir otro código</button>
             )}
-            {(mode === "forgot" || mode === "reset") && (
-              <button type="button" className="loginLink" onClick={() => irA("login")}>← Volver al inicio de sesión</button>
+            {(mode === "forgot" || mode === "reset" || mode === "codigo") && (
+              <button type="button" className="loginLink" onClick={() => { setDesafio(null); irA("login"); }}>← Volver al inicio de sesión</button>
             )}
             {mode === "bootstrap" && (
               <p className="loginHint">Este paso solo aparece la primera vez, cuando aún no existen usuarios.</p>

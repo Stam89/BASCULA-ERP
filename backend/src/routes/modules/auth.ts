@@ -13,6 +13,14 @@ import {
   LimitadorVentana, codigoCoincide, enmascararCorreo, generarCodigo, hashCodigo, mensajeCodigo, normalizarCorreo
 } from "../../services/recuperacion-clave.js";
 import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { claveEsDebil, hashToken, mensajeCodigoIngreso, nuevoTokenDispositivo, problemaDeClave, vieneDeInternet } from "../../services/acceso-seguro.js";
+
+/** Claves nuevas: además del mínimo, se rechazan las obvias. */
+function exigirClaveSegura(clave: string | undefined, usuario?: string | null): void {
+  if (clave === undefined) return;
+  const p = problemaDeClave(clave, usuario);
+  if (p) throw new ApiError(400, p);
+}
 
 export const authRouter = Router();
 
@@ -130,6 +138,7 @@ authRouter.post("/users", requireAuth, requireAdmin, asyncRoute(async (req, res)
     // trabajar, así que se pide desde la creación.
     accionista_ids: z.array(z.string().uuid()).default([])
   }).parse(req.body);
+  exigirClaveSegura(body.password, body.username);
 
   const recoveryEmail = correoDelBody(body.recovery_email) ?? null;
   const duplicate = await pool.query("SELECT 1 FROM users WHERE username = $1", [body.username]);
@@ -197,6 +206,7 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
     is_active: z.boolean().optional(),
     allowed_modules: z.array(z.string()).optional()
   }).parse(req.body);
+  exigirClaveSegura(body.password, body.username ?? (await pool.query("SELECT username FROM users WHERE id = $1", [req.params.id])).rows[0]?.username);
 
   if (Object.values(body).every((v) => v === undefined)) {
     throw new ApiError(400, "Nada que actualizar.");
@@ -404,6 +414,7 @@ authRouter.post("/bootstrap", asyncRoute(async (req, res) => {
     password: z.string().min(8, "La clave debe tener al menos 8 caracteres."),
     recovery_email: z.string().max(160).optional()
   }).parse(req.body);
+  exigirClaveSegura(body.password, body.username);
   const recoveryEmail = correoDelBody(body.recovery_email) ?? null;
 
   await ensureUserColumns();
@@ -518,14 +529,104 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
     role_name: user.role_name,
     allowed_modules: user.allowed_modules ?? []
   };
+  const claveDebil = claveEsDebil(body.password, user.username);
   const accionistas = await accionistasForUser(publicUser.id, publicUser.role_name);
+
+  // 🔐 ADMINISTRADOR entrando DESDE INTERNET (Cloudflare) en un equipo que no recordó: código al correo.
+  // En la PC / red del local no se pide; sin correo configurado tampoco (para no dejarlo fuera).
+  if (publicUser.role_name === "ADMINISTRADOR" && vieneDeInternet(req.headers) && user.recovery_email && correoConfigurado()) {
+    const disp = typeof req.body?.dispositivo === "string" ? String(req.body.dispositivo).slice(0, 128) : "";
+    const confiable = disp
+      ? (await pool.query(
+          "UPDATE dispositivos_confiables SET last_used_at = now() WHERE user_id = $1 AND token_hash = $2 RETURNING id",
+          [user.id, hashToken(disp)]
+        )).rowCount
+      : 0;
+    if (!confiable) {
+      const reciente = (await pool.query(
+        "SELECT count(*)::int n FROM login_verificaciones WHERE user_id = $1 AND created_at > now() - interval '1 hour'", [user.id]
+      )).rows[0].n;
+      if (reciente >= 8) throw new ApiError(429, "Se pidieron demasiados códigos. Espera un rato o entra desde la PC del local.");
+      const codigo = generarCodigo();
+      await pool.query("UPDATE login_verificaciones SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
+      const desafio = (await pool.query(
+        `INSERT INTO login_verificaciones (user_id, code_hash, expires_at, clave_debil, ip)
+         VALUES ($1, $2, now() + interval '10 minutes', $3, $4) RETURNING id`,
+        [user.id, hashCodigo(env.jwtSecret, user.id, codigo), claveDebil, ip]
+      )).rows[0];
+      try {
+        await enviarCorreo({ to: user.recovery_email, ...mensajeCodigoIngreso({ nombreNegocio: await nombreDelNegocio(), nombreUsuario: user.name, codigo, minutos: 10 }) });
+      } catch (err) {
+        console.error(`[verificacion] No se pudo enviar el código a ${enmascararCorreo(user.recovery_email)}: ${(err as Error).message}`);
+        throw new ApiError(503, "No se pudo enviar el código de verificación a tu correo. Intenta de nuevo o entra desde la PC del local.");
+      }
+      res.json({ requiere_codigo: true, desafio_id: desafio.id, enviado_a: enmascararCorreo(user.recovery_email) });
+      return;
+    }
+  }
 
   res.json({
     token: signToken(publicUser),
     user: publicUser,
     accionistas,
-    // Claves de menos de 8 (creadas antes de la regla): el panel pide cambiarla.
-    password_weak: body.password.length < 8
+    // Clave corta u obvia (creada antes de las reglas): el panel pide cambiarla.
+    password_weak: claveDebil
+  });
+}));
+
+// Segundo paso del ingreso del administrador desde internet: el código que llegó al correo.
+authRouter.post("/login/verificar", asyncRoute(async (req, res) => {
+  await ensureUserColumns();
+  const ip = req.ip ?? "desconocida";
+  const limite = limiteFallosCodigo.bloqueado(ip);
+  if (limite.bloqueado) throw new ApiError(429, `Demasiados intentos fallidos. Espera ${limite.minutos} minuto(s) y vuelve a intentar.`);
+  const body = z.object({
+    desafio_id: z.string().uuid(),
+    codigo: z.string().trim().regex(/^\d{6}$/, "El código tiene 6 dígitos."),
+    recordar: z.boolean().default(false),
+    descripcion: z.string().max(200).optional()
+  }).parse(req.body);
+  const falla = (): never => { limiteFallosCodigo.registrar(ip); throw new ApiError(400, "Código incorrecto o vencido. Vuelve a ingresar tu usuario y clave para recibir otro."); };
+  const d = (await pool.query(
+    "SELECT * FROM login_verificaciones WHERE id = $1 AND used_at IS NULL AND expires_at > now()", [body.desafio_id]
+  )).rows[0];
+  if (!d || d.intentos >= 5) return falla();
+  if (!codigoCoincide(env.jwtSecret, d.user_id, body.codigo, d.code_hash)) {
+    await pool.query(
+      "UPDATE login_verificaciones SET intentos = intentos + 1, used_at = CASE WHEN intentos + 1 >= 5 THEN now() ELSE used_at END WHERE id = $1",
+      [d.id]
+    );
+    return falla();
+  }
+  const usado = await pool.query("UPDATE login_verificaciones SET used_at = now() WHERE id = $1 AND used_at IS NULL RETURNING id", [d.id]);
+  if (!usado.rowCount) return falla();
+  const user = (await pool.query(
+    `SELECT u.*, r.name AS role_name FROM users u LEFT JOIN roles r ON r.id = u.role_id WHERE u.id = $1 AND u.is_active = true`, [d.user_id]
+  )).rows[0];
+  if (!user) return falla();
+  limiteFallosCodigo.limpiar(ip);
+  const publicUser = {
+    id: user.id,
+    username: user.username,
+    name: user.name,
+    role_id: user.role_id,
+    role_name: user.role_name,
+    allowed_modules: user.allowed_modules ?? []
+  };
+  let dispositivo: string | undefined;
+  if (body.recordar) {
+    dispositivo = nuevoTokenDispositivo();
+    await pool.query(
+      "INSERT INTO dispositivos_confiables (user_id, token_hash, descripcion, last_used_at) VALUES ($1, $2, $3, now())",
+      [user.id, hashToken(dispositivo), (body.descripcion ?? String(req.headers["user-agent"] ?? "")).slice(0, 200)]
+    );
+  }
+  res.json({
+    token: signToken(publicUser),
+    user: publicUser,
+    accionistas: await accionistasForUser(publicUser.id, publicUser.role_name),
+    password_weak: Boolean(d.clave_debil),
+    dispositivo
   });
 }));
 
@@ -544,6 +645,7 @@ authRouter.put("/me/password", requireAuth, asyncRoute(async (req, res) => {
     password: z.string().min(8, "La clave nueva debe tener al menos 8 caracteres.").max(200)
   }).parse(req.body);
   if (body.password === body.current_password) throw new ApiError(400, "La clave nueva debe ser distinta de la actual.");
+  exigirClaveSegura(body.password, user.username);
 
   const actual = await pool.query("SELECT password_hash FROM users WHERE id = $1 AND is_active = true", [user.id]);
   if (!actual.rowCount || !(await bcrypt.compare(body.current_password, actual.rows[0].password_hash))) {
@@ -647,6 +749,7 @@ authRouter.post("/reset-password", asyncRoute(async (req, res) => {
     code: z.string().trim().regex(/^\d{6}$/, "El código tiene 6 dígitos."),
     password: z.string().min(8, "La clave debe tener al menos 8 caracteres.").max(200)
   }).parse(req.body);
+  exigirClaveSegura(body.password, body.username);
 
   const falla = (): never => {
     limiteFallosCodigo.registrar(ip);
