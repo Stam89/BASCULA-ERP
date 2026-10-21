@@ -17649,15 +17649,23 @@ Motivo (obligatorio):`, ""));
               })}
             </div>
             {avisoSoloLectura("Ventas", ventasView)}
-            {/* SalesSessionSwitcher: socio que vende (inventario del pedido). No afecta la Cola de Despachos. */}
+            {/* SalesSessionSwitcher: socio que vende (inventario del pedido). En la Cola de Despachos NO se muestra:
+                la cola y las ventas realizadas siguen al socio elegido en el menú (CEYRO = todos; un socio = solo los suyos). */}
+            {ventasView === "despachos" ? (
+              <div className="colaDeQuien">
+                {esMatrizActiva
+                  ? <>📦 Estás en <strong>{matrizName}</strong>: ves los pedidos pendientes de <strong>todos</strong> los socios.</>
+                  : <>👤 Estás en <strong>{activeAccionista?.name ?? "el socio"}</strong>: solo ves <strong>sus</strong> pedidos. Para ver los de todos, cambia a {matrizName} en el menú.</>}
+              </div>
+            ) : (
             <div className="ventaSesionBarra">
               <SalesSessionSwitcher
                 socios={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
                 valor={ventaSocioId} activoGlobalId={activeAccionistaId} cargando={ventaCargando}
                 bloqueado={pedidoEditando ? "Termina o cancela la edición del pedido para cambiar de socio" : null}
                 onCambio={cambiarSocioVenta} />
-              {ventasView === "despachos" && <small className="muted">La cola muestra los pedidos de todos los socios.</small>}
             </div>
+            )}
 
             {ventasView === "nuevo" && (
             <>
@@ -18334,10 +18342,17 @@ Motivo (obligatorio):`, ""));
                 )}
               </div>
 
-            {/* Historial de ventas (incluye Guía de Remisión por venta despachada) */}
+            {/* Historial de ventas (incluye Guía de Remisión por venta despachada). Siempre visible (igual en celular y PC):
+                sin ventas del socio activo muestra un aviso en vez de desaparecer. */}
+            {sales.length === 0 && (
+              <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
+                <h3 style={{ marginTop: 0, marginBottom: 6 }}>📊 Ventas realizadas</h3>
+                <p className="muted" style={{ margin: 0 }}>{activeAccionista?.name ?? "Este socio"} todavía no tiene ventas despachadas.</p>
+              </div>
+            )}
             {sales.length > 0 && (
               <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
-                <h3 style={{ marginTop: 0, marginBottom: 12 }}>📊 Ventas realizadas</h3>
+                <h3 style={{ marginTop: 0, marginBottom: 12 }}>📊 Ventas realizadas <small className="muted" style={{ fontWeight: 600 }}>· {activeAccionista?.name}</small></h3>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>

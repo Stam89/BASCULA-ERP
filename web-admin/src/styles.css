@@ -6347,3 +6347,6 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .invx__kardex { justify-self: start; margin-top: 4px; padding: 3px 10px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-size: 12px; font-weight: 700; cursor: pointer; }
 .invx__kardex:hover { border-color: #0f766e; color: #0f766e; }
 .kdx__totales { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+
+/* Cola de Despachos: de quién son los pedidos que se ven (sigue al socio del menú). */
+.colaDeQuien { grid-column: 1 / -1; font-size: 13px; color: #1e3a8a; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 8px 12px; }
