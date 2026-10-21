@@ -99,7 +99,10 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
 // Cada pedido trae su dueño y el stock propio del dueño de los productos que pide
 // (para la pista de picking). Las acciones sobre un pedido se envían en nombre de
 // su dueño (X-Accionista-Id), así siguen validando permisos y caja de ese socio.
-ordersRouter.get("/cola-global", asyncRoute(async (_req, res) => {
+// Desde 2026-10-21: TODOS solo en la MATRIZ (ahí trabaja bodega); en un socio, solo SUS pedidos.
+ordersRouter.get("/cola-global", asyncRoute(async (req, res) => {
+  const activo = (req as AuthenticatedRequest).accionistaId ?? null;
+  const soloDe = activo && activo !== (await getMatrizId()) ? activo : null;
   const result = await pool.query(
     `SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone,
             c.identification AS customer_identification, c.address AS customer_address,
@@ -153,9 +156,10 @@ ordersRouter.get("/cola-global", asyncRoute(async (_req, res) => {
      FROM sales_orders o
      JOIN customers c ON c.id = o.customer_id
      JOIN accionistas a ON a.id = o.accionista_id
-     WHERE o.status = 'PENDING'
+     WHERE o.status = 'PENDING' AND ($1::uuid IS NULL OR o.accionista_id = $1::uuid)
      ORDER BY o.delivery_date NULLS LAST, o.created_at
-     LIMIT 500`
+     LIMIT 500`,
+    [soloDe]
   );
   res.json(result.rows);
 }));
