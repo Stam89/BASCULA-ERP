@@ -19693,9 +19693,9 @@ Motivo (obligatorio):`, ""));
                           setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 80);
                         };
                         const codigosVisibles = new Set(visibles.map((c) => c.codigo));
-                        const cxcPendientes = movType === "INCOME"
-                          ? accountsReceivable.filter((ar) => Number(ar.balance) > 0.001 && !["PAID", "CANCELLED"].includes(String(ar.status ?? "")))
-                          : [];
+                        // Los COBROS de clientes ya no salen aquí: se hacen en Por Cobrar, que mueve la caja (pedido del dueño
+                        // 2026-10-21: la lista larga de «Cobro: …» estorbaba al tocar el buscador).
+                        const cxcPendientes: typeof accountsReceivable = [];
                         // Palabras con que se busca cada categoría además de su nombre (p. ej. «piladora» → Mantenimiento).
                         const areasMant = maintAreas.map((a) => a.toLowerCase()).join(", ");
                         const PALABRAS: Record<string, string> = {
@@ -19757,6 +19757,13 @@ Motivo (obligatorio):`, ""));
                                       setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 80);
                                     }
                                   }} />
+                                {movType === "INCOME" && (
+                                  <small className="muted" style={{ display: "block", marginTop: 4 }}>
+                                    ¿Cobro de un cliente o abono de una deuda? Hazlo en{" "}
+                                    <button type="button" className="btnGhost" style={{ padding: 0, fontWeight: 700, textDecoration: "underline" }}
+                                      onClick={() => { void irATab("Por Cobrar"); }}>Por Cobrar</button>: ahí se baja la cuenta y entra a la caja.
+                                  </small>
+                                )}
                                 {sugeridas.length > 0 && (
                                   <div className="cjBuscaChips" aria-label={recientes.length ? "Recientes" : "Frecuentes"}>
                                     <small>{recientes.length ? "Recientes:" : "Frecuentes:"}</small>
