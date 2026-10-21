@@ -245,10 +245,10 @@ export async function reunirDatos(
 ): Promise<DatosHoy> {
   const acc = ctx.accionistaId;
 
-  const dow = await seguro("dia", 0, async () =>
+  const dow$ = seguro("dia", 0, async () =>
     Number((await db.query("SELECT extract(dow FROM (now() AT TIME ZONE 'America/Guayaquil'))::int AS d")).rows[0].d));
 
-  const caja = await seguro("caja", { abierta: true, diasAbierta: 0 }, async () => {
+  const caja$ = seguro("caja", { abierta: true, diasAbierta: 0 }, async () => {
     const r = (await db.query(
       `SELECT ((now() AT TIME ZONE 'America/Guayaquil')::date - (opened_at AT TIME ZONE 'America/Guayaquil')::date)::int AS dias
          FROM cash_registers WHERE status = 'OPEN' AND accionista_id = $1
@@ -258,7 +258,7 @@ export async function reunirDatos(
     return r ? { abierta: true, diasAbierta: Math.max(0, Number(r.dias)) } : { abierta: false, diasAbierta: 0 };
   });
 
-  const tuneles = await seguro("tuneles", { enProceso: [], motoresSinCombustible: [] }, async () => {
+  const tuneles$ = seguro("tuneles", { enProceso: [], motoresSinCombustible: [] }, async () => {
     const filtroLote = ctx.esMatriz ? "" : "AND l.accionista_id = $1";
     const params = ctx.esMatriz ? [] : [acc];
     const enProceso = (await db.query(
@@ -280,7 +280,7 @@ export async function reunirDatos(
     return { enProceso, motoresSinCombustible: sinComb };
   });
 
-  const nomina = await seguro("nomina", { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 }, async () => {
+  const nomina$ = seguro("nomina", { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 }, async () => {
     if (!ctx.esMatriz) return { aplica: false, monto: 0, personas: 0, bajadasSinNombre: 0, nombresPorRevisar: 0 };
     const r = (await db.query(
       `WITH p AS (
@@ -304,9 +304,9 @@ export async function reunirDatos(
     )).rows[0];
     return { n: Number(r.n), monto: Number(r.monto) };
   });
-  const [cxc, cxp] = await Promise.all([vencidas("accounts_receivable"), vencidas("accounts_payable")]);
+  const cxcxp$ = Promise.all([vencidas("accounts_receivable"), vencidas("accounts_payable")]);
 
-  const pedidos = await seguro("pedidos", { pendientes: 0, paraHoy: 0 }, async () => {
+  const pedidos$ = seguro("pedidos", { pendientes: 0, paraHoy: 0 }, async () => {
     const r = (await db.query(
       `SELECT COUNT(*)::int AS pendientes,
               COUNT(*) FILTER (WHERE delivery_date IS NOT NULL AND delivery_date <= (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS para_hoy
@@ -316,7 +316,7 @@ export async function reunirDatos(
     return { pendientes: Number(r.pendientes), paraHoy: Number(r.para_hoy) };
   });
 
-  const prestamos = await seguro("prestamos", { vencidas: [], proximas: [] } as NonNullable<DatosHoy["prestamos"]>, async () => {
+  const prestamos$ = seguro("prestamos", { vencidas: [], proximas: [] } as NonNullable<DatosHoy["prestamos"]>, async () => {
     const filas = (await db.query(
       `SELECT p.banco, to_char(q.fecha_vencimiento, 'YYYY-MM-DD') AS fecha, (q.capital + q.interes + q.otros)::float AS monto,
               (q.fecha_vencimiento - (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS dias
@@ -333,20 +333,25 @@ export async function reunirDatos(
   });
 
   // Documentos de la flota: solo cuando el accionista activo es la Matriz (ahí vive Transporte).
-  const documentosFlota = await seguro("documentos-flota", { vencidos: [], proximos: [] } as NonNullable<DatosHoy["documentosFlota"]>, async () => {
+  const documentosFlota$ = seguro("documentos-flota", { vencidos: [], proximos: [] } as NonNullable<DatosHoy["documentosFlota"]>, async () => {
     return ctx.esMatriz ? await documentosPorVencer(db) : { vencidos: [], proximos: [] };
   });
 
-  const puesta = ctx.esAdmin
-    ? await seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
-    : { aplica: false, faltantes: [] as string[] };
+  const puesta$ = ctx.esAdmin
+    ? seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
+    : Promise.resolve({ aplica: false, faltantes: [] as string[] });
 
-  const integridad = ctx.esAdmin
-    ? await seguro<{ problemas: number; nombres: string[] } | undefined>("integridad", undefined, async () => {
+  const integridad$ = ctx.esAdmin
+    ? seguro<{ problemas: number; nombres: string[] } | undefined>("integridad", undefined, async () => {
       const r = await resumenIntegridad();
       return { problemas: r.problemas, nombres: r.nombres };
     })
-    : undefined;
+    : Promise.resolve(undefined);
+
+  // Todas las consultas son independientes: corren al mismo tiempo (antes una tras otra, ~1.3 s; auditoría fase 5).
+  const [dow, caja, tuneles, nomina, [cxc, cxp], pedidos, prestamos, documentosFlota, puesta, integridad] = await Promise.all([
+    dow$, caja$, tuneles$, nomina$, cxcxp$, pedidos$, prestamos$, documentosFlota$, puesta$, integridad$
+  ]);
 
   return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, ...(integridad ? { integridad } : {}) };
 }

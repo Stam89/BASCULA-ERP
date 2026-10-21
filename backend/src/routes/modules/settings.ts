@@ -36,16 +36,32 @@ function resolveBackupDir(): string {
 function listBackups() {
   const dir = resolveBackupDir();
   if (!fs.existsSync(dir)) return { directory: dir, backups: [] as Array<{ name: string; size_kb: number; created_at: string }> };
+  // El nombre ya trae la fecha (bascula-erp_AAAA-MM-DDTHH-MM-SS.dump): se ordena por nombre y se consulta el tamaño
+  // solo de los 15 que se muestran. Leer los 30 archivos de OneDrive tardaba ~1.5 s (auditoría fase 5).
   const backups = fs
     .readdirSync(dir)
     .filter((f) => f.startsWith("bascula-erp_") && f.endsWith(".dump"))
+    .sort((a, b) => b.localeCompare(a))
+    .slice(0, 15)
     .map((f) => {
       const st = fs.statSync(path.join(dir, f));
       return { name: f, size_kb: Math.max(1, Math.round(st.size / 1024)), created_at: st.mtime.toISOString() };
-    })
-    .sort((a, b) => b.name.localeCompare(a.name))
-    .slice(0, 15);
+    });
   return { directory: dir, backups };
+}
+
+// Para la revisión de «Estado del sistema» basta con saber el último respaldo: se recuerda 1 minuto.
+let ultimoRespaldoCache: { at: number; valor: string | undefined } | null = null;
+function ultimoRespaldoRapido(): string | undefined {
+  if (ultimoRespaldoCache && Date.now() - ultimoRespaldoCache.at < 60_000) return ultimoRespaldoCache.valor;
+  const dir = resolveBackupDir();
+  let valor: string | undefined;
+  if (fs.existsSync(dir)) {
+    const ultimo = fs.readdirSync(dir).filter((f) => f.startsWith("bascula-erp_") && f.endsWith(".dump")).sort((a, b) => b.localeCompare(a))[0];
+    if (ultimo) valor = fs.statSync(path.join(dir, ultimo)).mtime.toISOString();
+  }
+  ultimoRespaldoCache = { at: Date.now(), valor };
+  return valor;
 }
 
 let tableReady: Promise<void> | null = null;
@@ -200,7 +216,7 @@ export async function calcularPuestaEnMarcha() {
   const firebaseKey = (process.env.FIREBASE_KEY || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "scripts", "firebase-key.json")).trim();
   const firebaseKeyExists = Boolean(firebaseKey) && fs.existsSync(firebaseKey);
   // Antigüedad del último respaldo (horas); null si no existe ninguno.
-  const ultimoRespaldo = listBackups().backups[0]?.created_at;
+  const ultimoRespaldo = ultimoRespaldoRapido();
   const respaldoHoras = ultimoRespaldo ? (Date.now() - new Date(ultimoRespaldo).getTime()) / 3600000 : null;
   const checks = [
     {
@@ -665,5 +681,6 @@ settingsRouter.post("/backup", requireAdmin, asyncRoute(async (_req, res) => {
       else reject(new ApiError(500, `El respaldo falló (código ${code}). ${stderr.slice(-300)}`));
     });
   });
+  ultimoRespaldoCache = null; // el respaldo recién hecho se ve al instante en «Estado del sistema»
   res.json(listBackups());
 }));

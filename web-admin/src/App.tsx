@@ -9,13 +9,11 @@ import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./comp
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
-import { ResultadoMensual, type GanaOperacion } from "./components/ResultadoMensual";
+import type { GanaOperacion } from "./components/ResultadoMensual";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosMovimientosRecientes, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
-import { PrestamosBancarios } from "./components/PrestamosBancarios";
 import { BuscadorCombo, type OpcionCombo } from "./components/BuscadorCombo";
-import { SaldosIniciales } from "./components/SaldosIniciales";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -24,19 +22,13 @@ import { CruceSocios } from "./components/CruceSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
-import { ParametrosContables } from "./components/ParametrosContables";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
-import { ResumenDiarioConfig } from "./components/ResumenDiarioConfig";
-import { ControlIntegridad } from "./components/ControlIntegridad";
-import { FomentoIntereses } from "./components/FomentoIntereses";
-import { CierresMes } from "./components/CierresMes";
 import { InventarioExistencias, type GrupoStock } from "./components/InventarioExistencias";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
 import { armarTiles } from "./inicio/tiles";
 import type { Destino as DestinoAsistente } from "./asistente/pasos";
-import { CatalogoProductos } from "./components/CatalogoProductos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
@@ -44,7 +36,6 @@ import { BuscadorGlobal, type Filtro } from "./components/BuscadorGlobal";
 import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
 import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
-import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
@@ -57,6 +48,28 @@ const CampoWorkspace = React.lazy(importarConRecarga(async () => {
 }));
 const ReportReadOnlyViews = React.lazy(importarConRecarga(() => import("./reports/ReportReadOnlyViews")));
 const FinancialOverview = React.lazy(importarConRecarga(() => import("./finance/FinancialOverview")));
+
+// Pantallas que se abren poco (Configuración, Contabilidad, Préstamos, Gana…): se descargan recién al abrirlas, así
+// la app abre más rápido en el celular (auditoría fase 5). La primera vez muestran «Cargando…» un instante.
+function perezoso<C extends React.ComponentType<any>>(cargar: () => Promise<C>) { // eslint-disable-line @typescript-eslint/no-explicit-any
+  const Diferido = React.lazy(importarConRecarga(async () => ({ default: await cargar() })));
+  return function Perezoso(props: React.ComponentProps<C>) {
+    return (
+      <React.Suspense fallback={<div className="muted" style={{ padding: 12 }}>Cargando…</div>}>
+        <Diferido {...props} />
+      </React.Suspense>
+    );
+  };
+}
+const ResultadoMensual = perezoso(() => import("./components/ResultadoMensual").then((m) => m.ResultadoMensual));
+const PrestamosBancarios = perezoso(() => import("./components/PrestamosBancarios").then((m) => m.PrestamosBancarios));
+const SaldosIniciales = perezoso(() => import("./components/SaldosIniciales").then((m) => m.SaldosIniciales));
+const ParametrosContables = perezoso(() => import("./components/ParametrosContables").then((m) => m.ParametrosContables));
+const ResumenDiarioConfig = perezoso(() => import("./components/ResumenDiarioConfig").then((m) => m.ResumenDiarioConfig));
+const ControlIntegridad = perezoso(() => import("./components/ControlIntegridad").then((m) => m.ControlIntegridad));
+const FomentoIntereses = perezoso(() => import("./components/FomentoIntereses").then((m) => m.FomentoIntereses));
+const CierresMes = perezoso(() => import("./components/CierresMes").then((m) => m.CierresMes));
+const CatalogoProductos = perezoso(() => import("./components/CatalogoProductos").then((m) => m.CatalogoProductos));
 
 /** Rubros de gasto operativo sugeridos para el datalist de Subcategoría en Caja.
  *  Estandarizan las etiquetas que luego se vuelven filas del Consolidado Mensual
@@ -7581,6 +7594,8 @@ export function App() {
     setFomentoMosaicoImporting(true);
     try {
       const buf = await file.arrayBuffer();
+      // La librería de Excel se descarga solo cuando se usa (la app abre más rápido en el celular).
+      const XLSX = await import("xlsx");
       const wb = XLSX.read(buf, { type: "array", cellDates: true });
       if (!wb.SheetNames.length) throw new Error("El archivo no tiene hojas.");
       const hojas: HojaMosaico[] = wb.SheetNames.map((nombre, i) => {
@@ -7651,7 +7666,8 @@ export function App() {
   }
 
   // Descarga la PLANTILLA PLANA (espejo de los cuadros del cliente) para copy-paste.
-  function descargarPlantillaFomentos() {
+  async function descargarPlantillaFomentos() {
+    const XLSX = await import("xlsx");
     const headers = ["CLIENTE", "CUADRAS", "LIMITE", "No", "Fecha inicial", "Fecha final", "Dias", "Mes", "VALOR", "GASTO ADMINISTRATIVO", "ES_SALDO_ANTERIOR (SI/NO)"];
     // Fila de ejemplo (se puede borrar): un cliente con una entrega normal y una de saldo anterior.
     const ej1 = ["Juan Perez", 2.5, 2000, 1, "2026-01-15", "", "", "", 100, "", "NO"];

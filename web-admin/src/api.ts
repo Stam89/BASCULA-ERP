@@ -99,8 +99,24 @@ export async function apiOk(path: string, init: RequestInit = {}, opts?: Opcione
   return response;
 }
 
+// Lecturas IGUALES al mismo tiempo (misma ruta y misma sesión/accionista) comparten una sola consulta al servidor:
+// varias partes de una pantalla pedían lo mismo 2 o 3 veces al abrirla (auditoría fase 5). Cada quien lee su propia
+// copia de la respuesta, así que nadie comparte objetos. Al terminar, la siguiente lectura vuelve a ir al servidor.
+const lecturasEnCamino = new Map<string, Promise<Response>>();
+
 export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
-  const response = await conConexion(fetch(`${API_URL}/api/v1${path}`, { headers: authHeaders(opts) }));
+  const url = `${API_URL}/api/v1${path}`;
+  const headers = authHeaders(opts);
+  const clave = `${url} ${JSON.stringify(headers)}`;
+  let compartida = lecturasEnCamino.get(clave);
+  if (!compartida) {
+    const nueva = conConexion(fetch(url, { headers }));
+    compartida = nueva;
+    lecturasEnCamino.set(clave, nueva);
+    const quitar = () => { if (lecturasEnCamino.get(clave) === nueva) lecturasEnCamino.delete(clave); };
+    nueva.then(quitar, quitar);
+  }
+  const response = (await compartida).clone();
   return parseResponse<T>(response);
 }
 
