@@ -7,7 +7,9 @@ import { useEffect, useMemo, useState } from "react";
 // marcas en que está empacado ese arroz (y la tarjeta de resumen «Marcas» abre todas).
 
 // `alla` = parte que quedó donde el proveedor; `quantity` es únicamente el stock físico en la piladora.
-export type FilaStock = { product_name: string; quantity: number | string; unit: string; alla?: number };
+// `por_despachar` = ya salió del inventario al confirmar la preparación de un pedido que aún no se despacha
+// (sigue en bodega, comprometido): físico en bodega = quantity + por_despachar.
+export type FilaStock = { product_name: string; quantity: number | string; unit: string; alla?: number; por_despachar?: number; pedidos_por_despachar?: string };
 export type GrupoStock = {
   clave: string;
   titulo: string;
@@ -138,6 +140,11 @@ export function InventarioExistencias({ grupos, empacados, onKardex }: {
                       <span className="invx__barra2" aria-hidden="true"><i style={{ width: `${estado === "cero" ? 0 : Math.max(4, (Math.abs(cant) / maximo) * 100)}%` }} /></span>
                       <span className={`invx__chip invx__chip--${estado}`}>{TEXTO_ESTADO[estado]}</span>
                       {num(f.alla ?? 0) > 0.0005 && <span className="invx__alla">🏭 {cant.enReal()} en piladora · 📍 {num(f.alla ?? 0).enReal()} fuera de piladora</span>}
+                      {num(f.por_despachar ?? 0) > 0.0005 && (
+                        <span className="invx__pd" title={f.pedidos_por_despachar ? `Pedidos: ${f.pedidos_por_despachar}` : undefined}>
+                          🚚 {num(f.por_despachar ?? 0).enReal()} {f.unit} preparados por despachar · físico en bodega {(cant + num(f.por_despachar ?? 0)).enReal()} {f.unit}
+                        </span>
+                      )}
                       {calidad && (
                         <span className="invx__verMarcas">
                           🛍️ {marcas.length ? `Empacado en ${marcas.length} ${marcas.length === 1 ? "marca" : "marcas"} · ${marcas.reduce((s, m) => s + num(m.cantidad), 0).enReal()} QQ` : "Sin marcas registradas"} <b>Ver ›</b>

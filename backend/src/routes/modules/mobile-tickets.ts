@@ -556,7 +556,7 @@ mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (r
 
 // 🗑️ Quitar un ticket de los pendientes (se borró en la app de báscula, era de prueba o está repetido) y ↩️ restaurarlo.
 // No se borra: deja de contar como pendiente y sigue en «Todos». Solo si no se ingresó ni liquidó.
-mobileTicketsRouter.post("/:id/quitar", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/quitar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const r = await pool.query(
@@ -568,7 +568,7 @@ mobileTicketsRouter.post("/:id/quitar", requireAuth, resolveAccionista, exigirEs
   if (!r.rowCount) throw new ApiError(409, "Ese ticket ya se ingresó, se liquidó o ya estaba quitado.");
   res.json({ ok: true, numero: r.rows[0].numero });
 }));
-mobileTicketsRouter.post("/:id/restaurar", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/restaurar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const r = await pool.query(
     "UPDATE mobile_synced_tickets SET quitado_at = NULL, quitado_motivo = NULL, quitado_por = NULL WHERE id = $1 AND quitado_at IS NOT NULL RETURNING id",
     [req.params.id]

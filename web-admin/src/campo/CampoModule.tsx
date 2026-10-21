@@ -5,7 +5,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { apiFetch, apiGet, apiOk, apiPost, apiPut } from "../api";
+import { apiFetch, apiGet, apiOk, apiPost, apiPut, esAdministrador } from "../api";
 
 // PATCH a la maquinaria (campo_activos): el endpoint es PATCH (no PUT).
 async function patchMaquina(id: string, body: unknown): Promise<void> {
@@ -1981,7 +1981,7 @@ Motivo (obligatorio):`, ""));
                   {pend
                     ? <>
                         <button type="button" className="primary" onClick={() => setLiquidando(v)}>🧾 Liquidar / Rendir</button>{" "}
-                        <button type="button" title="Si el vale se entregó mal (monto o persona equivocados), devuelve el dinero a la cuenta" onClick={() => anularVale(v)}>↩ Anular</button>
+                        {esAdministrador() && <button type="button" title="Si el vale se entregó mal (monto o persona equivocados), devuelve el dinero a la cuenta" onClick={() => anularVale(v)}>↩ Anular</button>}
                       </>
                     : <span className="chip ok">Liquidado</span>}
                 </td>
@@ -2501,7 +2501,7 @@ function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: stri
                   </tr>
                   {expandido === g.clave && <tr><td colSpan={8} style={{ padding: 8, background: "var(--c-surface-2)" }}>
                     <table className="cajaTable" style={{ margin: 0 }}><thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Original</th><th className="num">Pagado</th><th className="num">Pendiente</th><th></th></tr></thead><tbody>
-                      {g.cuentas.map((c) => <tr key={c.id}><td>{c.fecha?.slice(0, 10)}</td><td>{c.concepto || "—"}</td><td className="num">{money(c.monto)}</td><td className="num">{money(c.pagado)}</td><td className="num"><b>{money(c.saldo)}</b></td><td>{c.pagado <= 0.005 && <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} onClick={() => eliminar(c)}>🗑️</button>}</td></tr>)}
+                      {g.cuentas.map((c) => <tr key={c.id}><td>{c.fecha?.slice(0, 10)}</td><td>{c.concepto || "—"}</td><td className="num">{money(c.monto)}</td><td className="num">{money(c.pagado)}</td><td className="num"><b>{money(c.saldo)}</b></td><td>{c.pagado <= 0.005 && esAdministrador() && <button type="button" className="btnSecondary" style={{ color: "#b91c1c" }} onClick={() => eliminar(c)}>🗑️</button>}</td></tr>)}
                     </tbody></table>
                   </td></tr>}
                 </Fragment>
@@ -3158,7 +3158,7 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
             {data!.banco.map((b) => (
               <div key={b.id}>
                 <span>Al arrancar había en el banco <b>{money(b.monto)}</b> <small className="muted">(al {String(b.fecha).slice(0, 10)})</small></span>
-                <button type="button" className="btnSecondary" disabled={busy} onClick={async () => (await quitar(`/campo/saldos-iniciales/banco/${b.id}`, money(b.monto)))}>🗑 Quitar</button>
+                {esAdministrador() && <button type="button" className="btnSecondary" disabled={busy} onClick={async () => (await quitar(`/campo/saldos-iniciales/banco/${b.id}`, money(b.monto)))}>🗑 Quitar</button>}
               </div>
             ))}
           </div>
@@ -3190,7 +3190,7 @@ function TablaSaldos({ filas, vacio, movidoTxt }: {
               <td className="num">{money(f.monto)}</td>
               <td className="num" style={{ color: "#15803d" }}>{money(f.movido)}</td>
               <td className="num" style={{ fontWeight: 700 }}>{money(f.saldo)}</td>
-              <td>{f.quitar && <button type="button" className="btnGhost" title="Quitar (se cargó por error)" onClick={f.quitar}>🗑</button>}</td>
+              <td>{f.quitar && esAdministrador() && <button type="button" className="btnGhost" title="Quitar (se cargó por error)" onClick={f.quitar}>🗑</button>}</td>
             </tr>
           ))}
         </tbody>

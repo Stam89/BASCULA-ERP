@@ -3,7 +3,7 @@
 // máquina sale de la flota real (campo_activos); el operador se copia del activo
 // pero queda editable. Mantiene los estilos de CajaModule.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { apiFetch, apiGet, apiPost } from "../api";
+import { apiFetch, apiGet, apiPost, esAdministrador } from "../api";
 import { hoyLocal, money } from "../format";
 import { useAutoRefresh } from "./autoRefresh";
 import { ClienteSearchInput } from "../components/ClienteSearchInput";
@@ -323,16 +323,16 @@ export default function PartesModule() {
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button type="button" className="btnSecondary" onClick={() => setCobrando(p)}>💵 Cobrar</button>
                         <button type="button" className="btnSecondary" onClick={() => setEditando(p)}>✏️ Editar</button>
-                        <button type="button" className="btnSecondary" onClick={() => anular(p)}>🗑️ Anular</button>
+                        {esAdministrador() && <button type="button" className="btnSecondary" onClick={() => anular(p)}>🗑️ Anular</button>}
                       </div>
                     ) : (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                         <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
                           title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Editar el precio por QQ / monto total del cobro"}
                           onClick={() => setEditandoTarifa(p)}>✏️ Tarifa</button>
-                        <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
+                        {esAdministrador() && <button type="button" className="btnSecondary" disabled={p.servicio_estado !== "pendiente"}
                           title={p.servicio_estado !== "pendiente" ? "El cobro ya tiene abonos; reversa los abonos en Caja primero." : "Anular el cobro y volver a Por cobrar"}
-                          onClick={() => descobrar(p)}>↩️ Des-cobrar</button>
+                          onClick={() => descobrar(p)}>↩️ Des-cobrar</button>}
                       </div>
                     )}
                   </td>

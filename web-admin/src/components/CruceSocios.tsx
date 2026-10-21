@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { apiGet, apiPost } from "../api";
+import { apiGet, apiPost, esAdministrador } from "../api";
 import { money } from "../format";
 import { confirmar, pedirTexto } from "./Dialogo";
 
@@ -124,7 +124,7 @@ export function CruceSocios({ accionistas, activoId, avisar, onCambio }: {
                 {historial.map((c) => (
                   <div key={c.id} className={`cruceSoc__fila ${c.anulado_at ? "is-anulado" : ""}`}>
                     <span>{new Date(c.created_at).toLocaleDateString("es-EC")} · {c.contraparte} · <strong>{money(c.monto)}</strong>{c.nota ? ` · ${c.nota}` : ""}{c.anulado_at ? " · anulado" : ""}</span>
-                    {!c.anulado_at && <button type="button" className="btnGhost" disabled={busy} onClick={() => void anular(c)}>Anular</button>}
+                    {!c.anulado_at && esAdministrador() && <button type="button" className="btnGhost" disabled={busy} onClick={() => void anular(c)}>Anular</button>}
                   </div>
                 ))}
               </details>

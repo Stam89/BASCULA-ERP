@@ -14,6 +14,16 @@ const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://l
 const authStorageKey = "bascula-erp:auth";
 const activeAccionistaKey = "bascula-erp:active-accionista";
 
+/** ¿La sesión es del ADMINISTRADOR? Solo él ve anular / eliminar / reabrir / revertir (el backend también lo exige). */
+export function esAdministrador(): boolean {
+  try {
+    const raw = localStorage.getItem(authStorageKey);
+    return (raw ? (JSON.parse(raw) as { user?: { role_name?: string | null } }).user?.role_name : null) === "ADMINISTRADOR";
+  } catch {
+    return false;
+  }
+}
+
 export function getActiveAccionistaId(): string | null {
   return localStorage.getItem(activeAccionistaKey);
 }

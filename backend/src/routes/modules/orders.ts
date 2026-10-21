@@ -662,6 +662,10 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
     }).optional()
   }).parse(req.body);
   if (body.alla_ya_llego?.flete) validarFleteRegreso(body.alla_ya_llego.flete as FleteEnvejecido);
+  // ↩ Revertir una preparación devuelve arroz y sacos al inventario: solo el administrador (2026-10-21).
+  if (!body.prepared && (req as AuthenticatedRequest).user?.role_name !== "ADMINISTRADOR") {
+    throw new ApiError(403, "Solo el administrador puede revertir la preparación de un pedido.");
+  }
 
   let sacos: ResultadoSacos | null = null;
   let retirosAlla: RetiroAlla[] = [];
@@ -957,7 +961,7 @@ ordersRouter.put("/:id/flete", asyncRoute(async (req, res) => {
   res.json({ ok: true, flete: out });
 }));
 
-ordersRouter.delete("/:id/flete", asyncRoute(async (req, res) => {
+ordersRouter.delete("/:id/flete", requireAdmin, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const out = await inTransaction(async (client) => {
     const order = (await client.query(
@@ -1079,7 +1083,7 @@ ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, r
   res.json({ ok: true, ...out });
 }));
 
-ordersRouter.post("/:id/cancel", asyncRoute(async (req, res) => {
+ordersRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
     const order = await client.query(

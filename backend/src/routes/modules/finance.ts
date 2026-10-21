@@ -424,7 +424,7 @@ financeRouter.post("/bank/statements", asyncRoute(async (req, res) => {
 }));
 
 /** Elimina un extracto cargado por error (sus líneas y cruces); los movimientos de caja no se tocan. */
-financeRouter.delete("/bank/statements/:id", asyncRoute(async (req, res) => {
+financeRouter.delete("/bank/statements/:id", requireAdmin, asyncRoute(async (req, res) => {
   const accionistaId = accionista(req as AuthenticatedRequest);
   const r = await inTransaction(async (client) => {
     const st = await client.query(

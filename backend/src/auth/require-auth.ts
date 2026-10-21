@@ -398,9 +398,10 @@ export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS") {
     ).then((fresh) => {
       const row = fresh.rows[0];
       if (!row || !row.is_active) { next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.")); return; }
-      if (row.role_name === "ADMINISTRADOR" || (row.allowed_modules ?? []).includes(`PERM:${permiso}`)) { next(); return; }
+      // Anular / eliminar / reabrir: SOLO el administrador (pedido del dueño 2026-10-21); el permiso especial ya no basta.
+      if (row.role_name === "ADMINISTRADOR" || (permiso !== "ANULAR" && (row.allowed_modules ?? []).includes(`PERM:${permiso}`))) { next(); return; }
       next(new ApiError(403, permiso === "ANULAR"
-        ? "No tienes permiso para anular o eliminar registros. Pide el permiso «Anular / Eliminar» a un administrador."
+        ? "Solo el administrador puede anular, eliminar o reabrir registros."
         : "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador."));
     }, next);
   };

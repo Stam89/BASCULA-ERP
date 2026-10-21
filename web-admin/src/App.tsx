@@ -24,7 +24,7 @@ import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type 
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
 import { CorreoRecuperacionModal } from "./components/CorreoRecuperacion";
 import { ConfigCorreoClaves } from "./components/ConfigCorreoClaves";
-import { InventarioExistencias, type GrupoStock } from "./components/InventarioExistencias";
+import { InventarioExistencias, type FilaStock, type GrupoStock } from "./components/InventarioExistencias";
 import { AsistenteArranque } from "./asistente/AsistenteArranque";
 import { InicioSimple, type Insignia } from "./inicio/InicioSimple";
 import { armarTiles } from "./inicio/tiles";
@@ -1791,7 +1791,6 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
   { label: "PERMISOS ESPECIALES", rows: [
-    { key: "PERM:ANULAR", label: "Permitir Anular / Eliminar registros" },
     { key: "PERM:EDITAR_PRECIOS", label: "Permitir Editar Precios y Tarifas" },
   ] },
 ];
@@ -3958,6 +3957,8 @@ export function App() {
   // Inventario como dashboard: el cuadre vive en un modal y el kardex en un drawer.
   const [cuadreOpen, setCuadreOpen] = useState(false);
   const [kardexOpen, setKardexOpen] = useState(false);
+  // 🚚 Lo preparado que aún no se despacha (ya salió del inventario, pero sigue en bodega).
+  const [porDespachar, setPorDespachar] = useState<Array<{ product_name: string; qq: number; numeros: string }>>([]);
   // 📄 Kardex por producto (2026-10-21): producto + bodega + período; saldo después de cada movimiento.
   type KardexProducto = { product_id: string; code: string; name: string; unit: string; warehouse_id: string; warehouse_name: string; warehouse_type: string; saldo: number; movimientos: number };
   type KardexMov = { id: string; created_at: string; movement: string; cantidad: number; nombre: string; detalle: string | null; notes: string | null; warehouse_name: string; lot_code: string | null; saldo: number };
@@ -4920,7 +4921,9 @@ export function App() {
   // El administrador siempre puede. Un operador solo si su accionista activo se lo
   // concede en Config → Control de Usuarios (tabla matriz de permisos).
   const activeAllowedPerms = new Set(activeAccionista?.allowed_modules ?? []);
-  const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
+  // Anular, eliminar, reabrir, revertir o cancelar: SOLO el administrador (pedido del dueño 2026-10-21). El antiguo
+  // permiso especial «Anular / Eliminar» ya no se puede dar a otros usuarios.
+  const canAnular = isAdmin;
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
   // Nivel VER vs EDITAR por módulo (accionista activo): el nombre plano = Ver,
   // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
@@ -5997,6 +6000,16 @@ export function App() {
       addToast(`Error al cargar selección: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     }
   }
+
+  useEffect(() => {
+    if (activeTab !== "Inventario") return;
+    apiGet<Array<{ product_name: string; qq: number; numeros: string }>>("/inventory/por-despachar")
+      .then(setPorDespachar).catch(() => setPorDespachar([]));
+  }, [activeTab, stock, activeAccionistaId]);
+  const conPorDespachar = (filas: FilaStock[]) => filas.map((f) => {
+    const pd = porDespachar.find((x) => x.product_name === f.product_name);
+    return pd ? { ...f, por_despachar: Number(pd.qq), pedidos_por_despachar: pd.numeros } : f;
+  });
 
   async function reloadStock() {
     const rows = await apiGet<StockRow[]>("/inventory/stock").catch(() => null);
@@ -14571,7 +14584,7 @@ Motivo (obligatorio):`, ""));
                           </td>
                           <td className="bt-acc" style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                             {quitado ? (
-                              <button type="button" className="btnSecondary" onClick={() => restaurarTicketBascula(t)}>↩️ Restaurar</button>
+                              canAnular && <button type="button" className="btnSecondary" onClick={() => restaurarTicketBascula(t)}>↩️ Restaurar</button>
                             ) : <>
                             {!t.weighing_ticket_id && !liquidated && !linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); setLinkFarmerFilter(t.farmer_name || ""); }}>Vincular cliente</button>
@@ -14579,7 +14592,7 @@ Motivo (obligatorio):`, ""));
                             {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
                               <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", operation_type: "COMPRA", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
-                            {!t.weighing_ticket_id && !liquidated && (
+                            {canAnular && !t.weighing_ticket_id && !liquidated && (
                               <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} title="Se borró en la app de báscula, era de prueba o está repetido: deja de ser pendiente (no se borra)"
                                 onClick={() => quitarTicketBascula(t)}>🗑️ Quitar</button>
                             )}
@@ -16350,10 +16363,10 @@ Motivo (obligatorio):`, ""));
             {/* Panel de existencias: resumen de colores por categoría + detalle con barras y estados. */}
             <div style={{ gridColumn: "1 / -1" }}>
               <InventarioExistencias grupos={[
-                { clave: "cascara", titulo: "Cáscara", ayuda: "Arroz en cáscara recibido, antes de pilar", icono: "🌾", color: "#f59e0b", color2: "#b45309", filas: rawStockRows },
-                { clave: "terminado", titulo: "Producto terminado", ayuda: "Arroz pilado listo para vender", icono: "🍚", color: "#22c55e", color2: "#15803d", filas: finishedStockRows },
-                { clave: "marcas", titulo: "Marcas / empacados", ayuda: "Arroz empacado por marca y presentación", icono: "🛍️", color: "#a78bfa", color2: "#6d28d9", filas: packagedStockRows },
-                { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
+                { clave: "cascara", titulo: "Cáscara", ayuda: "Arroz en cáscara recibido, antes de pilar", icono: "🌾", color: "#f59e0b", color2: "#b45309", filas: conPorDespachar(rawStockRows) },
+                { clave: "terminado", titulo: "Producto terminado", ayuda: "Arroz pilado listo para vender", icono: "🍚", color: "#22c55e", color2: "#15803d", filas: conPorDespachar(finishedStockRows) },
+                { clave: "marcas", titulo: "Marcas / empacados", ayuda: "Arroz empacado por marca y presentación", icono: "🛍️", color: "#a78bfa", color2: "#6d28d9", filas: conPorDespachar(packagedStockRows) },
+                { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: conPorDespachar(byproductStockRows) },
                 ...(externalStockRows.length > 0 ? [{ clave: "externo", titulo: "Fuera de piladora", ayuda: "Producto propio que continúa donde el proveedor y todavía no está disponible en planta", icono: "📍", color: "#fb923c", color2: "#c2410c", filas: externalStockRows }] : []),
                 ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
               ] as GrupoStock[]} empacados={{ marcas: marcasEmpacadas, calidadDe: calidadDeProductoTerminado }} onKardex={(n) => abrirKardex(n)} />
@@ -18251,11 +18264,11 @@ Motivo (obligatorio):`, ""));
                         </button>
                       )}
                       {operable && <div style={{ display: "flex", gap: 8 }}>
-                        {listo && (
+                        {listo && canAnular && (
                           <button type="button" style={{ flex: 1 }} onClick={() => prepararPedido(o, false).catch((e) => addToast(e.message, "error"))} title="Volver a Pendiente por cargar">↩ Revertir</button>
                         )}
                         <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
-                        <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>
+                        {canAnular && <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>}
                       </div>}
                       <button type="button" className="btnSecondary" onClick={() => setPedidoCompartir({ data: pedidoCompartirDeOrden(o) })}
                         title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
@@ -18559,7 +18572,7 @@ Motivo (obligatorio):`, ""));
                       ) : (
                         <>
                           <button type="button" className="primary" disabled={m.busy || cobrado > 0.005} onClick={() => guardarFletePedido(false)}>{m.busy ? "Guardando…" : "Guardar flete"}</button>
-                          {Number(o.flete_monto ?? 0) > 0 && <button type="button" disabled={m.busy || cobrado > 0.005} onClick={() => guardarFletePedido(true)}>Quitar flete</button>}
+                          {canAnular && Number(o.flete_monto ?? 0) > 0 && <button type="button" disabled={m.busy || cobrado > 0.005} onClick={() => guardarFletePedido(true)}>Quitar flete</button>}
                         </>
                       )}
                       <button type="button" disabled={m.busy} onClick={() => setFleteModal(null)}>Cancelar</button>
@@ -22893,7 +22906,7 @@ Motivo (obligatorio):`, ""));
                           <button type="button" className="primary" style={{ padding: "6px 12px" }} onClick={() => openFinish(b)}>📋 Registrar reporte / recepción</button>
                         )}
                         <button type="button" className="btnGhost" onClick={() => printTicketSalidaSeleccion(b)} title="Imprimir guía de salida de bodega">🖨️ Ticket de Salida</button>
-                        <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>
+                        {canAnular && <button type="button" className="btnGhost" style={{ color: "#dc2626" }} onClick={() => cancelBatch(b.id).catch((err) => addToast(err.message, "error"))}>Cancelar</button>}
                       </div>
 
                       {finishingBatchId === b.id && (
@@ -23464,7 +23477,7 @@ Motivo (obligatorio):`, ""));
                                     ) : (
                                       <>
                                         <button type="button" className="btnGhost" onClick={() => editCuadEntry(en)}>Editar</button>
-                                        <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id, en.destino_saco === "BODEGA").catch((err) => addToast(err.message, "error"))}>Eliminar</button>
+                                        {canAnular && <button type="button" className="btnGhost" onClick={() => deleteCuadEntry(en.id, en.destino_saco === "BODEGA").catch((err) => addToast(err.message, "error"))}>Eliminar</button>}
                                       </>
                                     )}
                                   </td>

@@ -466,7 +466,7 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
 
 // Cancelar un lote EN PROCESO: devuelve las entradas al inventario y anula la
 // cuenta por pagar (solo si no se ha abonado nada).
-selectionRouter.post("/batches/:id/cancel", asyncRoute(async (req, res) => {
+selectionRouter.post("/batches/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
 
   const result = await inTransaction(async (tx) => {

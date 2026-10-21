@@ -939,7 +939,7 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-cuadrillaRouter.delete("/entries/:id", asyncRoute(async (req, res) => {
+cuadrillaRouter.delete("/entries/:id", requireAdmin, asyncRoute(async (req, res) => {
   // Los registros autogenerados NO se borran aquí: hacerlo descuadraría el
   // movimiento de origen. Se corrigen en Secadoras/Ventas según corresponda.
   const current = await pool.query("SELECT origen, tunnel_number, paid_at FROM cuadrilla_entries WHERE id = $1", [req.params.id]);

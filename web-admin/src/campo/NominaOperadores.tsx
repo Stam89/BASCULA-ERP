@@ -1,7 +1,7 @@
 // Nómina de Operadores de Campo (cosechadoras y transporte/fletes) — MATRIZ de
 // entrada masiva estilo Excel — y el mantenedor de Tarifas por operador+máquina.
 import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { apiFetch, apiGet, apiPost } from "../api";
+import { apiFetch, apiGet, apiPost, esAdministrador } from "../api";
 import { money } from "../format";
 import { confirmar, pedirTexto } from "../components/Dialogo";
 
@@ -572,7 +572,7 @@ Motivo (obligatorio):`, ""));
                   <td className="num">{money(p.monto)}</td>
                   <td>{p.cuenta_nombre ?? "—"}</td>
                   <td>{p.anulado_at ? <span title={p.anulado_motivo ?? ""}>Anulado</span> : "Pagado"}</td>
-                  <td>{!p.anulado_at && <button type="button" disabled={busy} onClick={() => anularPago(p)}>Anular</button>}</td>
+                  <td>{!p.anulado_at && esAdministrador() && <button type="button" disabled={busy} onClick={() => anularPago(p)}>Anular</button>}</td>
                 </tr>
               ))}
             </tbody>

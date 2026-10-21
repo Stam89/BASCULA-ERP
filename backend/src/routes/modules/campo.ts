@@ -1097,7 +1097,7 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
 // Anular un vale MAL ENTREGADO (monto o persona equivocados): el dinero vuelve a la cuenta con un contra-movimiento y el vale
 // deja de aparecer en pendientes. Solo si sigue pendiente de rendir (uno ya rendido tiene su ajuste: se corrige rindiéndolo).
 // La naturaleza 'reversion_vale' no cuenta como gasto ni ingreso en los reportes (un vale pendiente tampoco era gasto).
-campoRouter.post("/movimientos/:id/anular-vale", asyncRoute(async (req, res) => {
+campoRouter.post("/movimientos/:id/anular-vale", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const vale = (await client.query(
@@ -1336,7 +1336,7 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
 }));
 
 // Anular (borrar) un parte. Solo si NO tiene cobro generado (sin servicio).
-campoRouter.delete("/partes/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/partes/:id", requireAdmin, asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT estado, operador_pagado_at FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
@@ -1355,7 +1355,7 @@ campoRouter.delete("/partes/:id", asyncRoute(async (req, res) => {
 // Des-cobrar: revierte 'cobrado' → 'por_cobrar', borrando el servicio generado.
 // Solo si ese servicio NO tiene abonos (movimientos); si ya cobró algo, se rechaza
 // (primero hay que reversar los abonos en Caja/Servicios).
-campoRouter.post("/partes/:id/descobrar", asyncRoute(async (req, res) => {
+campoRouter.post("/partes/:id/descobrar", requireAdmin, asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
@@ -2009,7 +2009,7 @@ campoRouter.get("/nomina-operadores/pagos", asyncRoute(async (req, res) => {
 
 // Anular un pago de nómina: devuelve el dinero a la cuenta (contra-movimiento), deja los partes otra vez
 // «sin pagar» y devuelve los vales que ese pago había descontado. Conserva el historial (queda marcado anulado).
-campoRouter.post("/nomina-operadores/pagos/:id/anular", asyncRoute(async (req, res) => {
+campoRouter.post("/nomina-operadores/pagos/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const pago = (await client.query(
@@ -2538,7 +2538,7 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
   res.status(201).json(row);
 }));
 
-campoRouter.delete("/cxp/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/cxp/:id", requireAdmin, asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     const cxp = (await client.query("SELECT 1 FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
@@ -2889,7 +2889,7 @@ campoRouter.post("/saldos-iniciales/cobrar", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-campoRouter.delete("/saldos-iniciales/cobrar/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/saldos-iniciales/cobrar/:id", requireAdmin, asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     const s = (await client.query("SELECT id FROM campo_servicios WHERE id = $1 AND origen_tipo = $2 FOR UPDATE", [req.params.id, ORIGEN_SALDO_INICIAL])).rows[0];
     if (!s) throw new ApiError(404, "Saldo inicial no encontrado.");
@@ -2941,7 +2941,7 @@ campoRouter.post("/saldos-iniciales/banco", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-campoRouter.delete("/saldos-iniciales/banco/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/saldos-iniciales/banco/:id", requireAdmin, asyncRoute(async (req, res) => {
   const r = await pool.query("DELETE FROM campo_movimientos WHERE id = $1 AND naturaleza = $2", [req.params.id, ORIGEN_SALDO_INICIAL]);
   if (!r.rowCount) throw new ApiError(404, "Saldo inicial del banco no encontrado.");
   res.json({ ok: true });

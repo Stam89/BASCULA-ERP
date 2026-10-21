@@ -79,7 +79,9 @@ try {
   for (const [n, m, p, b] of casos) {
     check(await st(caj, m, p, b) === 403, `C. SIN el permiso especial no puede: ${n}`);
     const s = await st(cajP, m, p, b);
-    check(s !== 403, `C. CON el permiso especial ya no le da 403: ${n}`, s);
+    // Desde 2026-10-21 anular / eliminar es SOLO del administrador: el permiso especial ya no alcanza.
+    const soloAdmin = /^(anular|eliminar)/.test(n);
+    check(soloAdmin ? s === 403 : s !== 403, soloAdmin ? `C. CON el permiso especial TAMPOCO puede (solo admin): ${n}` : `C. CON el permiso especial ya no le da 403: ${n}`, s);
   }
   check(await st(caj, "PATCH", `/fomentos/${fake}`, { notes: "x" }) !== 403, "C. editar datos del fomento (sin tocar la tasa) no exige el permiso");
 

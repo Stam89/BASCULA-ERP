@@ -9,7 +9,7 @@ import { exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/ca
 import { dinero, notificar } from "../../services/notificaciones.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { anularCruce, aplicarCruce, listarCruces, resumenCruce } from "../../services/cruce-socios.js";
 import { pagarCuentasEnGrupo } from "./cash.js";
 
@@ -109,7 +109,7 @@ receivableRouter.post("/cruce-socios", asyncRoute(async (req, res) => {
   }));
   res.status(201).json(out);
 }));
-receivableRouter.post("/cruce-socios/:id/anular", asyncRoute(async (req, res) => {
+receivableRouter.post("/cruce-socios/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
   const { accionistaId } = contexto(req);
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   await inTransaction((client) => anularCruce(client, String(req.params.id), accionistaId, motivo));

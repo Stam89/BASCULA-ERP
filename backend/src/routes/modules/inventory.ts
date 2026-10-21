@@ -36,6 +36,29 @@ inventoryRouter.get("/stock", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// 🚚 POR DESPACHAR (pedido del dueño 2026-10-21): lo que ya salió del inventario al «Confirmar Preparación» pero el
+// pedido aún no se despacha. Sigue físicamente en bodega, ya comprometido: físico = existencia + por despachar.
+// Es la salida neta (OUT menos devoluciones) de los pedidos PENDIENTES ya preparados, del accionista activo.
+inventoryRouter.get("/por-despachar", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT m.product_id, p.name AS product_name,
+            ROUND(-SUM(m.quantity)::numeric, 3)::float AS qq,
+            COUNT(DISTINCT o.id)::int AS pedidos,
+            string_agg(DISTINCT o.order_number, ', ') AS numeros
+       FROM inventory_movements m
+       JOIN sales_orders o ON o.id = m.reference_id
+       JOIN products p ON p.id = m.product_id
+      WHERE m.reference_type = 'sales_order' AND m.accionista_id = $1
+        AND o.status = 'PENDING' AND o.prepared_at IS NOT NULL
+      GROUP BY m.product_id, p.name
+     HAVING -SUM(m.quantity) > 0.0005
+      ORDER BY p.name`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 inventoryRouter.get("/products", asyncRoute(async (_req, res) => {
   const result = await pool.query("SELECT * FROM products ORDER BY name ASC");
   res.json(result.rows);
