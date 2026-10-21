@@ -6245,3 +6245,60 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 @keyframes dlgEntra { from { opacity: 0; } to { opacity: 1; } }
 @media (max-width: 560px) { .dlg-campo { margin-left: 0; } .dlg-botones .dlg-btn { flex: 1 1 0; } }
 .dlg-caja.is-aviso .dlg-icono { background: #faeeda; }
+
+/* Estados financieros · barra de período (auditoría fase 4). */
+.finBar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; padding: 12px 16px; }
+.finBar .finBar__campo { display: grid; gap: 4px; margin: 0; width: auto; }
+.finBar .finBar__campo input { width: 160px; min-height: 40px; }
+.finBar__rapidos { display: inline-flex; gap: 6px; }
+.finBar__rapidos button { min-height: 36px; padding: 6px 14px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-weight: 600; cursor: pointer; }
+.finBar__rapidos button.is-on { background: #0f766e; border-color: #0f766e; color: #fff; }
+.finBar__acciones { display: inline-flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.finBar__acciones button { min-height: 40px; }
+.finBar__nota { flex-basis: 100%; font-size: 12px; }
+@media (max-width: 640px) { .finBar .finBar__campo { flex: 1 1 140px; } .finBar .finBar__campo input { width: 100%; } .finBar__acciones { margin-left: 0; width: 100%; } .finBar__acciones button { flex: 1 1 0; } }
+
+/* Fomentos · barra con filtros y menú de archivos (auditoría fase 4). */
+.fomBarra { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.fomFiltros { display: flex; flex-wrap: wrap; gap: 6px; }
+.fomFiltros button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 14px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-weight: 600; font-size: 13px; cursor: pointer; }
+.fomFiltros button.is-on { background: #0f766e; border-color: #0f766e; color: #fff; }
+.fomFiltros__n { font-size: 11.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: #f1f5f9; color: #475569; }
+.fomFiltros button.is-on .fomFiltros__n { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.fomBarra__acciones { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fomBarra__acciones > .primary, .fomBarra__acciones .btnSecondary { min-height: 38px; }
+.fomChip { font-size: 11px; color: #fff; border-radius: 999px; padding: 2px 9px; font-weight: 700; }
+.fomCupo { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.fomCupo.is-ok { background: #eaf3de; color: #27500a; }
+.fomCupo.is-agotado { background: #fcebeb; color: #791f1f; }
+
+/* Báscula en el celular: cada ticket como tarjeta con sus botones a la vista (auditoría fase 4).
+   Es la misma tabla (mismos botones y reglas); solo cambia cómo se dibuja en pantallas angostas. */
+.bt-qq__u { display: none; }
+@media (max-width: 640px) {
+  .basculaTicketsTable, .basculaTicketsTable tbody { display: block; width: 100%; }
+  .basculaTicketsTable thead { display: none; }
+  .basculaTicketsTable tr {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px 10px;
+    grid-template-areas: "num num fecha" "cli cli cli" "placa neto cal" "qq qq est" "acc acc acc";
+    border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px; margin-bottom: 10px; background: #fff;
+  }
+  .basculaTicketsTable td { display: block; border: none !important; padding: 0 !important; text-align: left !important; white-space: normal !important; min-width: 0; }
+  .basculaTicketsTable .bt-num { grid-area: num; font-size: 15px; }
+  .basculaTicketsTable .bt-fecha { grid-area: fecha; text-align: right !important; font-size: 12px; color: #64748b; }
+  .basculaTicketsTable .bt-cli { grid-area: cli; font-size: 14px; }
+  .basculaTicketsTable .bt-placa { grid-area: placa; }
+  .basculaTicketsTable .bt-neto { grid-area: neto; }
+  .basculaTicketsTable .bt-cal { grid-area: cal; }
+  .basculaTicketsTable .bt-placa, .basculaTicketsTable .bt-neto, .basculaTicketsTable .bt-cal { font-size: 13px; }
+  .basculaTicketsTable .bt-placa::before, .basculaTicketsTable .bt-neto::before, .basculaTicketsTable .bt-cal::before {
+    content: attr(data-label); display: block; font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: .3px;
+  }
+  .basculaTicketsTable .bt-bruto, .basculaTicketsTable .bt-tara { display: none; }
+  .basculaTicketsTable .bt-qq { grid-area: qq; font-size: 20px; align-self: center; }
+  .basculaTicketsTable .bt-qq__u { display: inline; font-size: 13px; font-weight: 600; color: #64748b; }
+  .basculaTicketsTable .bt-est { grid-area: est; justify-self: end; align-self: center; text-align: right !important; }
+  .basculaTicketsTable .bt-acc { grid-area: acc; display: flex !important; gap: 6px; flex-wrap: wrap; }
+  .basculaTicketsTable .bt-acc button { flex: 1 1 auto; min-height: 42px; margin-left: 0 !important; }
+}
+.tablePanel.finBar { flex-direction: row; }

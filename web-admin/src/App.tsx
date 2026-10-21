@@ -2462,6 +2462,7 @@ export function App() {
   const [secadoraAbierta, setSecadoraAbierta] = useState<"TENDAL" | 1 | 2 | null>(null);
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
   const [fuelModalOpen, setFuelModalOpen] = useState(false);
+  const [fomArchivosAbierto, setFomArchivosAbierto] = useState(false);
   // ⏳ Secados finalizados sin combustible (el informe llega después) y el que se está completando.
   const [combustiblePendiente, setCombustiblePendiente] = useState<Array<{ id: string; motor_number: 1 | 2; created_at: string; total_quintals: number; tuneles: number[]; inicio: string | null; fin: string | null; lotes: string | null }>>([]);
   const [completarCombustibleId, setCompletarCombustibleId] = useState<string | null>(null);
@@ -14459,9 +14460,9 @@ Motivo (obligatorio):`, ""));
                       const quitado = !!t.quitado_at && !t.weighing_ticket_id && !liquidated;
                       return (
                         <tr key={t.id} style={quitado || antesCorte ? { opacity: 0.6 } : desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
-                          <td style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
-                          <td style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
-                          <td>
+                          <td className="bt-num" style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
+                          <td className="bt-fecha" style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
+                          <td className="bt-cli">
                             {linked ? (
                               <>
                                 {t.farmer_name || "—"}
@@ -14477,13 +14478,13 @@ Motivo (obligatorio):`, ""));
                                 </span>
                               )}
                           </td>
-                          <td>{t.placa || "—"}</td>
-                          <td className="num">{Number(t.gross_weight).enReal(0, 3)}</td>
-                          <td className="num">{Number(t.tare_weight).enReal(0, 3)}</td>
-                          <td className="num">{Number(t.net_weight).enReal(0, 3)}</td>
-                          <td>{t.calidad || "—"}</td>
-                          <td className="num" style={{ fontWeight: 700 }}>{Number(t.quintals).enReal()}</td>
-                          <td>
+                          <td className="bt-placa" data-label="Placa">{t.placa || "—"}</td>
+                          <td className="num bt-bruto">{Number(t.gross_weight).enReal(0, 3)}</td>
+                          <td className="num bt-tara">{Number(t.tare_weight).enReal(0, 3)}</td>
+                          <td className="num bt-neto" data-label="Neto kg">{Number(t.net_weight).enReal(0, 3)}</td>
+                          <td className="bt-cal" data-label="Calidad">{t.calidad || "—"}</td>
+                          <td className="num bt-qq" style={{ fontWeight: 700 }}>{Number(t.quintals).enReal()}<span className="bt-qq__u"> QQ</span></td>
+                          <td className="bt-est">
                             {quitado ? <span className="chip" title={t.quitado_motivo ?? ""}>🗑️ Quitado{t.quitado_motivo ? <small style={{ display: "block", fontWeight: 400 }}>{t.quitado_motivo}</small> : null}</span>
                               : t.en_espera ? <span className="chip warn" title="La báscula aún espera el segundo pesaje">En espera 2º pesaje</span>
                               : t.weighing_ticket_id ? <span className="chip ok">Ingresado</span>
@@ -14492,7 +14493,7 @@ Motivo (obligatorio):`, ""));
                               : !linked ? <span className="chip danger" title="Falta vincular el cliente">Sin vincular</span>
                               : <span className="chip info">Pendiente</span>}
                           </td>
-                          <td style={{ whiteSpace: "nowrap", textAlign: "right" }}>
+                          <td className="bt-acc" style={{ whiteSpace: "nowrap", textAlign: "right" }}>
                             {quitado ? (
                               <button type="button" className="btnSecondary" onClick={() => restaurarTicketBascula(t)}>↩️ Restaurar</button>
                             ) : <>
@@ -15674,28 +15675,37 @@ Motivo (obligatorio):`, ""));
 
         {activeTab === "Estados Financieros" && (
           <section className="panelGrid">
-            {/* Barra de período + accesos rápidos + descargas */}
-            <div className="tablePanel" style={{ gridColumn: "1 / -1", display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", padding: "12px 16px" }}>
-              <label style={{ margin: 0 }}><span>Desde</span>
-                <input type="date" value={finanzasDesde} onChange={(e) => setFinanzasDesde(e.target.value)} />
-              </label>
-              <label style={{ margin: 0 }}><span>Hasta</span>
-                <input type="date" value={finanzasHasta} onChange={(e) => setFinanzasHasta(e.target.value)} />
-              </label>
-              <button type="button" onClick={() => loadFinanzas().catch((e) => addToast(e.message, "error"))}>↻ Recalcular</button>
-              <div style={{ display: "flex", gap: 6, marginLeft: 4 }}>
-                <button type="button" className="chip" onClick={() => rangoFinanzas("hoy")}>Hoy</button>
-                <button type="button" className="chip" onClick={() => rangoFinanzas("mes")}>Este Mes</button>
-                <button type="button" className="chip" onClick={() => rangoFinanzas("anio")}>Año Actual</button>
-              </div>
-              <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-                <button type="button" onClick={() => descargarEstadosPDF()}>📄 Descargar PDF</button>
-                <button type="button" className="primary" onClick={() => descargarEstadosExcel().catch((e) => addToast(e.message, "error"))}>
-                  📊 Descargar Excel
-                </button>
-              </div>
-              <span className="muted" style={{ flexBasis: "100%", marginTop: 2 }}>Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
-            </div>
+            {/* Barra de período + accesos rápidos + descargas (auditoría fase 4: todo en una sola barra). */}
+            {(() => {
+              const hoyIso = hoyLocal();
+              const d = new Date();
+              const presetActivo = finanzasHasta === hoyIso
+                ? (finanzasDesde === hoyIso ? "hoy"
+                  : finanzasDesde === fechaLocal(new Date(d.getFullYear(), d.getMonth(), 1)) ? "mes"
+                  : finanzasDesde === fechaLocal(new Date(d.getFullYear(), 0, 1)) ? "anio" : "")
+                : "";
+              return (
+                <div className="tablePanel finBar" style={{ gridColumn: "1 / -1" }}>
+                  <label className="finBar__campo"><span>Desde</span>
+                    <input type="date" value={finanzasDesde} onChange={(e) => setFinanzasDesde(e.target.value)} />
+                  </label>
+                  <label className="finBar__campo"><span>Hasta</span>
+                    <input type="date" value={finanzasHasta} onChange={(e) => setFinanzasHasta(e.target.value)} />
+                  </label>
+                  <div className="finBar__rapidos" role="group" aria-label="Períodos rápidos">
+                    {([["hoy", "Hoy"], ["mes", "Este mes"], ["anio", "Año"]] as const).map(([k, t]) => (
+                      <button key={k} type="button" className={presetActivo === k ? "is-on" : ""} onClick={() => rangoFinanzas(k)}>{t}</button>
+                    ))}
+                  </div>
+                  <div className="finBar__acciones">
+                    <button type="button" className="primary" onClick={() => loadFinanzas().catch((e) => addToast(e.message, "error"))}>↻ Recalcular</button>
+                    <button type="button" className="btnSecondary" onClick={() => descargarEstadosPDF()}>📄 PDF</button>
+                    <button type="button" className="btnSecondary" onClick={() => descargarEstadosExcel().catch((e) => addToast(e.message, "error"))}>📊 Excel</button>
+                  </div>
+                  <span className="muted finBar__nota">Todo se calcula solo desde compras, ventas, caja, inventario y producción.</span>
+                </div>
+              );
+            })()}
 
             <CierresMes isAdmin={isAdmin} money={money} onToast={(t, tipo) => addToast(t, tipo)} />
 
@@ -21250,68 +21260,72 @@ Motivo (obligatorio):`, ""));
               <FomentoIntereses key={activeAccionistaId ?? ""} accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"} />
             ) : (<>
 
-            <div style={{ display: "flex", gap: 10, marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
-              <button type="button" onClick={() => exportFomentos().catch(() => undefined)}
-                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "var(--c-brand)", color: "#fff", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
-                📥 DESCARGAR EXCEL
-              </button>
-              <button type="button" onClick={descargarPlantillaFomentos}
-                title="Plantilla plana con las columnas de tus cuadros (CLIENTE, CUADRAS, LIMITE, Fecha inicial, VALOR, ES_SALDO_ANTERIOR…) para copiar y pegar"
-                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #0891b2", background: "#ecfeff", color: "#0e7490", cursor: "pointer", fontWeight: 600, fontSize: 12 }}>
-                📥 DESCARGAR PLANTILLA
-              </button>
-              <label style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid var(--c-brand)", background: "transparent", color: "var(--c-brand)", cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                {fomentoImporting ? <span className="spinner" /> : "📤 SUBIR EXCEL"}
-                <input type="file" accept=".xlsx" disabled={fomentoImporting}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) importFomentos(file).finally(() => { e.target.value = ""; });
-                  }}
-                  style={{ display: "none" }} />
-              </label>
-              <label title="Excel en formato mosaico: varias mini-tablas por hoja, ancladas en la celda 'NOMBRE:'"
-                style={{ padding: "6px 12px", borderRadius: 6, border: "1px solid #7c3aed", background: "#f5f3ff", color: "#6d28d9", cursor: "pointer", fontWeight: 600, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 6 }}>
-                {fomentoMosaicoImporting ? <span className="spinner" /> : "🧩 IMPORTAR MOSAICO (2D)"}
-                <input type="file" accept=".xlsx,.xls" disabled={fomentoMosaicoImporting}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) importFomentosMosaico(file).finally(() => { e.target.value = ""; });
-                  }}
-                  style={{ display: "none" }} />
-              </label>
-              {(fomentoImporting || fomentoMosaicoImporting) && <span className="muted" style={{ fontSize: 12 }}>Importando...</span>}
-            </div>
-
-            {/* Filtro de estado */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-              {(["TODOS","ACTIVOS","NO ACTIVOS","APROBADOS","ARCHIVADOS"] as const).map(f => {
-                const esArch = f === "ARCHIVADOS";
-                const activo = fomentoFilter === f;
-                const col = esArch ? "#6b7280" : "var(--c-brand)";
-                return (
-                  <button key={f} type="button"
-                    style={{ padding: "4px 12px", borderRadius: 6, border: `1px solid ${col}`,
-                      background: activo ? col : "transparent",
-                      color: activo ? "#fff" : col, cursor: "pointer", fontWeight: activo ? 700 : 400 }}
-                    onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}
-                  >{esArch ? "🗄️ ARCHIVADOS" : f}</button>
-                );
-              })}
-            </div>
+            {/* Barra de Fomentos (auditoría fase 4): filtros con su conteo, archivos en un menú y «Nuevo fomento». */}
+            {(() => {
+              const cuenta = (f: "TODOS" | "ACTIVOS" | "NO ACTIVOS" | "APROBADOS" | "ARCHIVADOS") => fomentos.filter((x) =>
+                f === "ARCHIVADOS" ? x.status === "CERRADO_LIQUIDACION" : f === "TODOS" ? x.status !== "CERRADO_LIQUIDACION" : x.status === f).length;
+              const etiqueta = { TODOS: "Todos", ACTIVOS: "Activos", "NO ACTIVOS": "No activos", APROBADOS: "Aprobados", ARCHIVADOS: "Archivados" } as const;
+              return (
+                <div className="fomBarra">
+                  <div className="fomFiltros" role="group" aria-label="Filtrar fomentos">
+                    {(["TODOS", "ACTIVOS", "NO ACTIVOS", "APROBADOS", "ARCHIVADOS"] as const).map((f) => (
+                      <button key={f} type="button" className={fomentoFilter === f ? "is-on" : ""}
+                        onClick={() => { setFomentoFilter(f); setFomentoDetalle(null); }}>
+                        {etiqueta[f]} <span className="fomFiltros__n">{cuenta(f)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="fomBarra__acciones">
+                    {(fomentoImporting || fomentoMosaicoImporting) && <span className="muted" style={{ fontSize: 12 }}><span className="spinner" /> Importando…</span>}
+                    <div className="cj-dd">
+                      <button type="button" className={`btnSecondary ${fomArchivosAbierto ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={fomArchivosAbierto}
+                        onClick={() => setFomArchivosAbierto((v) => !v)}>
+                        📁 Archivos <span className="cj-caret">▾</span>
+                      </button>
+                      {fomArchivosAbierto && (
+                        <div className="cj-menu cj-menu--right" role="menu">
+                          <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setFomArchivosAbierto(false); exportFomentos().catch(() => undefined); }}>
+                            <span className="cj-menu-ico">📥</span><span><span className="cj-menu-label">Descargar Excel</span><span className="cj-menu-hint">Todos los fomentos del accionista</span></span>
+                          </button>
+                          <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setFomArchivosAbierto(false); descargarPlantillaFomentos(); }}>
+                            <span className="cj-menu-ico">📄</span><span><span className="cj-menu-label">Descargar plantilla</span><span className="cj-menu-hint">Columnas de tus cuadros para copiar y pegar</span></span>
+                          </button>
+                          <label role="menuitem" className="cj-menu-item" style={{ cursor: fomentoImporting ? "wait" : "pointer" }}>
+                            <span className="cj-menu-ico">📤</span><span><span className="cj-menu-label">Subir Excel</span><span className="cj-menu-hint">La plantilla llena</span></span>
+                            <input type="file" accept=".xlsx" disabled={fomentoImporting} style={{ display: "none" }}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                setFomArchivosAbierto(false);
+                                if (file) importFomentos(file).finally(() => { e.target.value = ""; });
+                              }} />
+                          </label>
+                          <label role="menuitem" className="cj-menu-item" style={{ cursor: fomentoMosaicoImporting ? "wait" : "pointer" }}>
+                            <span className="cj-menu-ico">🧩</span><span><span className="cj-menu-label">Importar mosaico</span><span className="cj-menu-hint">Varias mini-tablas por hoja (celda «NOMBRE:»)</span></span>
+                            <input type="file" accept=".xlsx,.xls" disabled={fomentoMosaicoImporting} style={{ display: "none" }}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                setFomArchivosAbierto(false);
+                                if (file) importFomentosMosaico(file).finally(() => { e.target.value = ""; });
+                              }} />
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                    {canEdit("Fomentos") && (
+                      <button type="button" className="primary" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}>
+                        + Nuevo fomento
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
 
               {/* COLUMNA IZQUIERDA: Lista (el formulario ahora abre en modal) */}
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
-                  <h3 style={{ margin: 0 }}>Lista de Fomentos</h3>
-                  {canEdit("Fomentos") && (
-                    <button type="button" onClick={() => { setFomentoEditingId(null); resetFomentoForm(); setFomentoModalOpen(true); }}
-                      style={{ background: "var(--c-success)", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", fontWeight: 700, fontSize: 13, whiteSpace: "nowrap" }}>
-                      + Nuevo Fomento
-                    </button>
-                  )}
-                </div>
+                <h3 style={{ margin: "0 0 8px" }}>Lista de fomentos</h3>
                 {/* Buscador rápido: filtra por nombre, libreta (folio) o código. */}
                 <div style={{ position: "relative", marginBottom: 8 }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--c-muted)" }}>🔍</span>
@@ -21341,14 +21355,15 @@ Motivo (obligatorio):`, ""));
                             <strong style={{ fontSize: 14 }}>{f.farmer_name}</strong>
                             <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                               {f.folio && <span title="N.º de Página / Libreta" style={{ fontSize: 11, background: "#eef2ff", color: "#4338ca", borderRadius: 4, padding: "2px 6px", fontWeight: 700, whiteSpace: "nowrap" }}>📖 Pag: {f.folio}</span>}
-                              <span style={{ fontSize: 11, background: statusColor, color: "#fff", borderRadius: 4, padding: "2px 6px" }}>{f.status === "CERRADO_LIQUIDACION" ? "🗄️ CERRADO" : f.status}</span>
+                              <span className="fomChip" style={{ background: statusColor }}>{f.status === "CERRADO_LIQUIDACION" ? "Cerrado" : f.status === "ACTIVOS" ? "Activo" : f.status === "APROBADOS" ? "Aprobado" : f.status === "NO ACTIVOS" ? "No activo" : f.status}</span>
                             </span>
                           </div>
                           <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
                             <span>{f.cuadras} cuadras</span>
                             <span>Límite: {money(Number(f.monto_limite))}</span>
                             <span>Pedido: {money(Number(f.total_pedido))}</span>
-                            <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{habilitado ? "HABILITADO" : "DESHABILITADO"}</span>
+                            {/* HABILITADO = aún le queda cupo para pedir (cuadras × $800 − lo pedido > 0). */}
+                            <span className={`fomCupo ${habilitado ? "is-ok" : "is-agotado"}`} title={habilitado ? "Aún puede pedir: cuadras × $800 es mayor que lo pedido" : "Ya pidió todo su cupo (cuadras × $800)"}>{habilitado ? "Con cupo" : "Cupo agotado"}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
                             {f.status === "CERRADO_LIQUIDACION"
@@ -21464,7 +21479,7 @@ Motivo (obligatorio):`, ""));
                         ["Total Pagado", `${money(cuenta.totalPagado)}`],
                         ["Deuda Total", `${money(cuenta.deudaPendiente)}`],
                         ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `${money(cuenta.saldoFavor)}`] as [string, string]] : []),
-                        ["Estado", fomentoDetalle.estado_credito === "HABILITADO" ? "HABILITADO" : "DESHABILITADO"],
+                        ["Cupo", fomentoDetalle.estado_credito === "HABILITADO" ? "Con cupo" : "Cupo agotado"],
                       ];
                       return (
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
