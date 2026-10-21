@@ -10,6 +10,7 @@ import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, total
 import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
 import { armarResultado, informativo, lineasDelPeriodo, notasDelPeriodo, qqPorActivo, rangoMes } from "../../services/campo-resultados.js";
 import { alertasDeCampo } from "../../services/campo-alertas.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 // MÓDULO INDEPENDIENTE: Caja de Campo (cosechadora + transporte/fletes).
 // V1 = solo captura (CRUD). Sin relación con túneles, piladora, ventas ni
@@ -467,7 +468,7 @@ campoRouter.get("/clientes/estado-cuenta", asyncRoute(async (req, res) => {
 campoRouter.get("/clientes/:id/estado-cuenta", asyncRoute(async (req, res) => {
   const q = z.object({ from: fechaSchema.optional(), to: fechaSchema.optional() }).parse(req.query);
   const from = q.from ?? "1900-01-01";
-  const to = q.to ?? new Date().toISOString().slice(0, 10);
+  const to = q.to ?? hoyEc();
   const cli = (await pool.query("SELECT id, nombre, identificacion, tipo FROM campo_clientes WHERE id = $1", [req.params.id])).rows[0];
   if (!cli) throw new ApiError(404, "Cliente no encontrado");
 
@@ -2495,7 +2496,7 @@ campoRouter.post("/cxp/pagar-grupo", asyncRoute(async (req, res) => {
       detalle.push({ id: deuda.id, fecha: deuda.fecha, concepto: deuda.concepto, saldo_antes: Number(deuda.saldo), aplicado: aplicacion.monto });
     }
     return {
-      fecha: body.fecha ?? new Date().toISOString().slice(0, 10), acreedor: nombre,
+      fecha: body.fecha ?? hoyEc(), acreedor: nombre,
       cuenta: cuenta.nombre, monto: Math.round(body.monto * 100) / 100,
       saldo_antes: total, saldo_despues: Math.round((total - body.monto) * 100) / 100,
       aplicaciones: detalle
@@ -2564,14 +2565,14 @@ function rangoPeriodo(q: { mes?: string; desde?: string; hasta?: string }): { de
     const hasta = new Date(y, m, 0).toISOString().slice(0, 10); // último día del mes
     return { desde, hasta };
   }
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = hoyEc();
   return { desde: q.desde ?? "1900-01-01", hasta: q.hasta ?? hoy };
 }
 
 // 1) SALDO DE CAJA por cuenta (entradas − salidas) a una fecha de corte, + total.
 campoRouter.get("/reportes/saldo-caja", asyncRoute(async (req, res) => {
   const q = z.object({ hasta: fechaSchema.optional() }).parse(req.query);
-  const hasta = q.hasta ?? new Date().toISOString().slice(0, 10);
+  const hasta = q.hasta ?? hoyEc();
   const cuentas = (await pool.query(
     `SELECT c.id, c.nombre,
             COALESCE(SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END), 0)::float AS saldo

@@ -11,6 +11,7 @@ import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
 import { numeroTicketSql } from "../../services/bascula-corte.js";
+import { fechaEc } from "../../utils/fechas.js";
 
 export const cuadrillaRouter = Router();
 
@@ -563,7 +564,7 @@ function defaultRange(query: unknown): { from: string; to: string } {
   const today = new Date();
   const monday = new Date(today);
   monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
-  return { from: from ?? monday.toISOString().slice(0, 10), to: to ?? today.toISOString().slice(0, 10) };
+  return { from: from ?? fechaEc(monday), to: to ?? fechaEc(today) };
 }
 
 // Detecta el CICLO COMPLETO de cuadrilla en Secadoras en un rango: llenado
@@ -830,8 +831,8 @@ function parseRange(query: unknown): { from: string; to: string } {
   const day = (today.getDay() + 6) % 7; // 0 = lunes
   monday.setDate(today.getDate() - day);
   return {
-    from: from ?? monday.toISOString().slice(0, 10),
-    to: to ?? today.toISOString().slice(0, 10)
+    from: from ?? fechaEc(monday),
+    to: to ?? fechaEc(today)
   };
 }
 

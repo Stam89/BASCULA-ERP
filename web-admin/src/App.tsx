@@ -3,7 +3,7 @@ import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } f
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
 import type { BasculaSyncStatus } from "./api";
 import BasculaDevicesPanel from "./components/BasculaDevicesPanel";
-import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal, nombreNormal, agricultoresParecidos } from "./format";
+import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal, nombreNormal, agricultoresParecidos, fechaLocal, hoyLocal } from "./format";
 import type { Farmer, Product, Warehouse, Lot, MateriaPrimaEntry, MateriaPrimaCorreccion, PendingEntry } from "./types";
 import { Metric, ReportTable, Input, Select, MedidorRow, DataList } from "./components/ui";
 import { ClienteSearchInput } from "./components/ClienteSearchInput";
@@ -1740,7 +1740,12 @@ const tabs = navGroups.flatMap((group) => group.tabs);
 // Etiquetas visibles de las pestañas: la CLAVE interna se mantiene estable (la usa
 // toda la lógica, permisos y efectos); solo cambia el texto mostrado. Así se
 // renombra "Servicio Pilado" → "Servicio de Secado" sin romper nada.
-const TAB_LABELS: Record<string, string> = { "Servicio Pilado": "Servicio de Secado" };
+const TAB_LABELS: Record<string, string> = {
+  "Servicio Pilado": "Servicio de Secado",
+  // Solo el texto visible (pedido del dueño 2026-10-20): las claves internas, permisos y efectos no cambian.
+  Dashboard: "Inicio", Bascula: "Báscula", Produccion: "Producción", Seleccion: "Selección",
+  Nomina: "Nómina", Configuracion: "Configuración"
+};
 function tabLabel(tab: string): string { return TAB_LABELS[tab] ?? tab; }
 // Modulos asignables a un operador = TODAS las pestanas del Sidebar excepto
 // Configuracion (solo-admin). Fuente unica: navGroups. Si manana se agrega una
@@ -2487,7 +2492,7 @@ export function App() {
   // estado (no uncontrolled): así el admin puede corregirlas en cualquier momento
   // mientras el motor está "en proceso" y no se pierden en un re-render. Se
   // siembran desde la corrida activa (o HOY/vacío si es nueva) — ver el effect.
-  const [motorFilledAt, setMotorFilledAt] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [motorFilledAt, setMotorFilledAt] = useState<string>(() => hoyLocal());
   const [motorDryStart, setMotorDryStart] = useState<string>("");
   // Anclas de la corrida activa (primer túnel con dato). Se usan para SEMBRAR los
   // campos controlados: la re-siembra ocurre solo cuando cambia el motor o el
@@ -2496,7 +2501,7 @@ export function App() {
   const motorFilledAnchor = motorActiveReports.find((r) => r.filled_at)?.filled_at ?? null;
   const motorStartAnchor = motorActiveReports.find((r) => r.dry_start_at)?.dry_start_at ?? null;
   useEffect(() => {
-    setMotorFilledAt((motorFilledAnchor ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10));
+    setMotorFilledAt((motorFilledAnchor ?? "").slice(0, 10) || hoyLocal());
     setMotorDryStart(motorStartAnchor ? dateTimeLocalValue(motorStartAnchor) : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [motorActivo, motorFilledAnchor, motorStartAnchor]);
@@ -3186,8 +3191,8 @@ export function App() {
   const [packagingRatesForm, setPackagingRatesForm] = useState({ precio_saco_10lb: 0, precio_saco_25lb: 0, precio_saco_50lb: 0 });
 
   // ── Nómina (pagos de trabajadores) ────────────────────────────────────────
-  const nominaToday = new Date().toISOString().slice(0, 10);
-  const nominaMonday = (() => { const d = new Date(); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return d.toISOString().slice(0, 10); })();
+  const nominaToday = hoyLocal();
+  const nominaMonday = (() => { const d = new Date(); const off = (d.getDay() + 6) % 7; d.setDate(d.getDate() - off); return fechaLocal(d); })();
   const [nominaFrom, setNominaFrom] = useState(nominaMonday);
   const [nominaTo, setNominaTo] = useState(nominaToday);
   const [nominaRows, setNominaRows] = useState<WorkerSummary[]>([]);
@@ -3353,7 +3358,7 @@ export function App() {
       .finally(() => { if (vivo) setPagoCorteBusy(false); });
     return () => { vivo = false; };
   }, [pagoConfirm, pagoHasta]); // eslint-disable-line react-hooks/exhaustive-deps
-  const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return d.toISOString().slice(0, 10); })();
+  const nomina60Ago = (() => { const d = new Date(); d.setDate(d.getDate() - 60); return fechaLocal(d); })();
   const [histFrom, setHistFrom] = useState(nomina60Ago);
   const [histTo, setHistTo] = useState(nominaToday);
   const [histRows, setHistRows] = useState<Array<{ worker_role: string; worker_name: string; week_start: string; cnt: number; qq: number; sacas: number; arrocillo: number; earned: number; advances_applied: number; paid_at: string }>>([]);
@@ -3447,7 +3452,7 @@ export function App() {
     const d = consolData; if (!d) return;
     const filas = d.rubros.map((r: any) => {
       const pct = d.total_costo > 0 ? (r.monto / d.total_costo) * 100 : 0;
-      return `<tr><td>${(r.rubro || "").replace(/</g, "&lt;")}</td><td class="r">$${Number(r.monto).enReal()}</td><td class="r">$${Number(r.costo_qq).toFixed(4)}</td><td class="r">${pct.enReal(1, 3)}%</td></tr>`;
+      return `<tr><td>${(r.rubro || "").replace(/</g, "&lt;")}</td><td class="r">${money(Number(r.monto))}</td><td class="r">$${Number(r.costo_qq).toFixed(4)}</td><td class="r">${pct.enReal(1, 3)}%</td></tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Costo Mensual ${d.periodo}</title>
       <style>body{font-family:Arial;font-size:12px;margin:24px}h1{font-size:17px;text-align:center;margin:0}h2{font-size:12px;text-align:center;font-weight:normal;margin:2px 0 12px}
@@ -3458,14 +3463,14 @@ export function App() {
       <h2>${matrizName} · Período ${d.periodo} · QQ producidos: ${Number(d.qq_usados).enReal()}</h2>
       <table><thead><tr><th>Rubro</th><th class="r">Monto $</th><th class="r">$/QQ</th><th class="r">% del costo</th></tr></thead>
       <tbody>${filas}</tbody>
-      <tfoot><tr class="tot"><td>TOTAL COSTO</td><td class="r">$${Number(d.total_costo).enReal()}</td><td class="r">$${Number(d.costo_real_qq).toFixed(4)}</td><td class="r">100%</td></tr></tfoot></table>
+      <tfoot><tr class="tot"><td>TOTAL COSTO</td><td class="r">${money(Number(d.total_costo))}</td><td class="r">$${Number(d.costo_real_qq).toFixed(4)}</td><td class="r">100%</td></tr></tfoot></table>
       <table><tbody>
-        <tr><td>Ingreso · Servicio de Pilada</td><td class="r">$${Number(d.ingresos.servicio_pilada).enReal()}</td></tr>
-        <tr><td>Ingreso · Ventas</td><td class="r">$${Number(d.ingresos.ventas).enReal()}</td></tr>
-        <tr class="tot"><td>TOTAL INGRESOS</td><td class="r">$${Number(d.total_ingresos).enReal()}</td></tr>
-        <tr><td>(-) Financiero / Préstamos e Hipotecas</td><td class="r">$${Number(d.financiero).enReal()}</td></tr>
+        <tr><td>Ingreso · Servicio de Pilada</td><td class="r">${money(Number(d.ingresos.servicio_pilada))}</td></tr>
+        <tr><td>Ingreso · Ventas</td><td class="r">${money(Number(d.ingresos.ventas))}</td></tr>
+        <tr class="tot"><td>TOTAL INGRESOS</td><td class="r">${money(Number(d.total_ingresos))}</td></tr>
+        <tr><td>(-) Financiero / Préstamos e Hipotecas</td><td class="r">${money(Number(d.financiero))}</td></tr>
       </tbody></table>
-      <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: $${Math.abs(Number(d.ganancia_neta)).enReal()}</div>
+      <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: ${money(Math.abs(Number(d.ganancia_neta)))}</div>
       </body></html>`;
     const w = window.open("", "_blank", "width=820,height=680"); if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
@@ -3588,8 +3593,8 @@ export function App() {
   const [companyReadiness, setCompanyReadiness] = useState<CompanyReadiness | null>(null);
 
   // ── Reportes ──────────────────────────────────────────────────────────────
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const firstOfMonthIso = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10);
+  const todayIso = hoyLocal();
+  const firstOfMonthIso = fechaLocal(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
   const [reportKind, setReportKind] = useState<ReportKind>("resumen");
   const [reportFrom, setReportFrom] = useState(firstOfMonthIso);
   const [reportTo, setReportTo] = useState(todayIso);
@@ -3792,8 +3797,8 @@ export function App() {
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   // ── Guías de Remisión (formato legal EC). Tabla propia guias_remision. ──
   const emptyGuiaForm = () => ({
-    fecha_emision: new Date().toISOString().slice(0, 10),
-    fecha_inicio_traslado: new Date().toISOString().slice(0, 10),
+    fecha_emision: hoyLocal(),
+    fecha_inicio_traslado: hoyLocal(),
     fecha_llegada: "",
     punto_partida: "",
     motivo_traslado: "Venta",
@@ -3813,7 +3818,7 @@ export function App() {
   // Estados financieros: se piden al servidor, que los calcula desde la operación.
   const [finanzas, setFinanzas] = useState<FinanzasData | null>(null);
   const [finanzasDesde, setFinanzasDesde] = useState(`${new Date().getFullYear()}-01-01`);
-  const [finanzasHasta, setFinanzasHasta] = useState(new Date().toISOString().slice(0, 10));
+  const [finanzasHasta, setFinanzasHasta] = useState(hoyLocal());
   // Conciliación bancaria
   const [cuentasBanco, setCuentasBanco] = useState<CuentaBancaria[]>([]);
   const [conciliacion, setConciliacion] = useState<Conciliacion | null>(null);
@@ -4880,7 +4885,7 @@ export function App() {
       movement: "EXPENSE",
       category: "PAGO_CUADRILLA",
       amount: total,
-      description: `Pago cuadrilla ${laborForm.worker_group.trim()}: ${sacks} sacos @ $${price.enReal()}`
+      description: `Pago cuadrilla ${laborForm.worker_group.trim()}: ${sacks} sacos @ ${money(price)}`
     });
     setLaborForm({ worker_group: "", sacks_moved: "", price_per_sack: "" });
     addToast(`Pago de cuadrilla registrado (${money(total)})`, "success");
@@ -5681,7 +5686,7 @@ export function App() {
       const t = await apiGet<{ precio_por_qq: number } | null>(`/pilado/tarifa-vigente?socio_id=${socioId}&servicio=PILADO&fecha=${fecha}`);
       if (t && typeof t.precio_por_qq === "number") {
         setPiladoForm((f) => ({ ...f, rate_per_qq: String(t.precio_por_qq) }));
-        setTarifaVigenteHint(`Tarifa vigente: $${t.precio_por_qq.enReal()}/QQ (editable)`);
+        setTarifaVigenteHint(`Tarifa vigente: ${money(t.precio_por_qq)}/QQ (editable)`);
       } else {
         setTarifaVigenteHint("Sin tarifa configurada para este socio (escríbela manual)");
       }
@@ -5730,7 +5735,7 @@ export function App() {
         && !confirmarCambiosCfg("Editar tarifa (cambia el precio desde su fecha de vigencia):", [{ etiqueta, antes: Number(orig.precio_por_qq), despues: precio }])) return;
     } else {
       const mismaFecha = mismas.find((t) => String(t.fecha_vigencia ?? "").slice(0, 10) === fechaNueva);
-      if (mismaFecha && !window.confirm(`${ent.nombre} ya tiene una tarifa de ${tarifaForm.servicio} desde ese mismo día ($${Number(mismaFecha.precio_por_qq).enReal()}/QQ).\n\nSi guardas, quedarán dos y se usará la más nueva. Lo normal es EDITAR la que ya existe.\n\n¿Guardar otra igual?`)) return;
+      if (mismaFecha && !window.confirm(`${ent.nombre} ya tiene una tarifa de ${tarifaForm.servicio} desde ese mismo día (${money(Number(mismaFecha.precio_por_qq))}/QQ).\n\nSi guardas, quedarán dos y se usará la más nueva. Lo normal es EDITAR la que ya existe.\n\n¿Guardar otra igual?`)) return;
       const anterior = mismas
         .filter((t) => String(t.fecha_vigencia ?? "").slice(0, 10) < fechaNueva)
         .sort((x, y) => String(y.fecha_vigencia).localeCompare(String(x.fecha_vigencia)))[0];
@@ -6406,9 +6411,9 @@ export function App() {
     if (!cuadSummary || cuadSummary.rows.length === 0) { addToast("No hay datos para imprimir", "warn"); return; }
     const filas = cuadSummary.rows.map((r) => `
       <tr><td>${r.worker_name || "(sin nombre)"}</td><td class="r">${r.entradas}</td>
-      <td class="r">$${r.total.enReal()}</td>
+      <td class="r">${money(r.total)}</td>
       <td class="r">${r.anticipos > 0 ? "-$" + r.anticipos.enReal() : "—"}</td>
-      <td class="r"><strong>$${r.neto.enReal()}</strong></td></tr>`).join("");
+      <td class="r"><strong>${money(r.neto)}</strong></td></tr>`).join("");
     const html = `<html><head><meta charset="utf-8"><title>Nómina cuadrilla</title><style>
       body{font-family:Arial,sans-serif;font-size:13px;margin:14mm}
       h1{font-size:18px;margin:0 0 2px;text-align:center}
@@ -6429,9 +6434,9 @@ export function App() {
         <thead><tr><th>Trabajador</th><th class="r">Trabajos</th><th class="r">Ganado</th><th class="r">Anticipos</th><th class="r">Neto a pagar</th></tr></thead>
         <tbody>${filas}</tbody>
         <tfoot><tr><td>TOTALES</td><td class="r">${cuadSummary.rows.reduce((s, r) => s + r.entradas, 0)}</td>
-          <td class="r">$${cuadSummary.total_general.enReal()}</td>
+          <td class="r">${money(cuadSummary.total_general)}</td>
           <td class="r">${cuadSummary.total_anticipos > 0 ? "-$" + cuadSummary.total_anticipos.enReal() : "—"}</td>
-          <td class="r">$${cuadSummary.total_neto.enReal()}</td></tr></tfoot>
+          <td class="r">${money(cuadSummary.total_neto)}</td></tr></tfoot>
       </table>
     </body></html>`;
     const w = window.open("", "_blank", "width=640,height=700");
@@ -6461,8 +6466,8 @@ export function App() {
         <td>${esc(String(e.work_date).slice(0, 10))}</td>
         <td>${esc(actividad)}</td>
         <td class="r">${Number(e.quantity)}</td>
-        <td class="r">$${Number(e.unit_rate).enReal()}</td>
-        <td class="r"><strong>$${Number(e.subtotal).enReal()}</strong></td>
+        <td class="r">${money(Number(e.unit_rate))}</td>
+        <td class="r"><strong>${money(Number(e.subtotal))}</strong></td>
       </tr>`;
     }).join("");
     const html = `<html><head><meta charset="utf-8"><title>Rol de Pago Cuadrilla · ${esc(nombre)}</title><style>
@@ -6493,9 +6498,9 @@ export function App() {
         <tbody>${filas}</tbody>
       </table>
       <table class="tot">
-        <tr><td>Ganado (${entradas.length} registro(s))</td><td class="r">$${ganado.enReal()}</td></tr>
+        <tr><td>Ganado (${entradas.length} registro(s))</td><td class="r">${money(ganado)}</td></tr>
         <tr><td>Anticipos descontados</td><td class="r">${anticipos > 0 ? "-$" + anticipos.enReal() : "$0.00"}</td></tr>
-        <tr class="neto"><td>NETO A PAGAR</td><td class="r">$${neto.enReal()}</td></tr>
+        <tr class="neto"><td>NETO A PAGAR</td><td class="r">${money(neto)}</td></tr>
       </table>
       <div class="sig"><hr><span>Recibí conforme — ${esc(nombre)}</span></div>
     </body></html>`;
@@ -6595,7 +6600,7 @@ export function App() {
   function reciboFilasHtml(data: ReciboSemanal): string {
     if (!data.rows.length) return `<tr><td colspan="5" style="text-align:center;color:#888">Sin registros en el período</td></tr>`;
     return data.rows.map((r) =>
-      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${cantidadReciboTxt(r)}</td><td class="r">${r.tarifa}</td><td class="r">$${r.subtotal.enReal()}</td></tr>`
+      `<tr><td>${fmtFechaRecibo(r.fecha)}</td><td>${r.concepto}</td><td class="r">${cantidadReciboTxt(r)}</td><td class="r">${r.tarifa}</td><td class="r">${money(r.subtotal)}</td></tr>`
     ).join("");
   }
 
@@ -6630,9 +6635,9 @@ export function App() {
         <tbody>${reciboFilasHtml(data)}</tbody>
       </table>
       <div class="cierre">
-        <div class="row"><span>(+) Total ganado</span><strong>$${t.earned.enReal()}</strong></div>
-        <div class="row disc"><span>(−) Anticipos</span><strong>-$${t.advances.enReal()}</strong></div>
-        <div class="row net"><span>(=) LÍQUIDO A PAGAR</span><strong>$${t.net.enReal()}</strong></div>
+        <div class="row"><span>(+) Total ganado</span><strong>${money(t.earned)}</strong></div>
+        <div class="row disc"><span>(−) Anticipos</span><strong>-${money(t.advances)}</strong></div>
+        <div class="row net"><span>(=) LÍQUIDO A PAGAR</span><strong>${money(t.net)}</strong></div>
       </div>
       <div class="sigs">
         <div class="sig"><hr><span>Entregado por (Caja / Admin)</span></div>
@@ -6648,7 +6653,7 @@ export function App() {
     if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     const t = data.totals;
     const filas = (data.rows.length ? data.rows : []).map((r) =>
-      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>$${r.subtotal.enReal()}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
+      `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>${money(r.subtotal)}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
     ).join("") || `<div class="l2" style="text-align:center">Sin registros</div>`;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Recibo ${data.worker.name}</title><style>
       @page{size:80mm auto;margin:5mm} *{box-sizing:border-box}
@@ -6668,9 +6673,9 @@ export function App() {
       <div class="meta"><b>Período:</b> ${reciboPeriodo(data)}</div>
       <div style="margin-top:6px">${filas}</div>
       <div class="cierre">
-        <div class="row"><span>(+) Ganado</span><span>$${t.earned.enReal()}</span></div>
-        <div class="row disc"><span>(−) Anticipos</span><span>-$${t.advances.enReal()}</span></div>
-        <div class="row net"><span>LÍQUIDO</span><span>$${t.net.enReal()}</span></div>
+        <div class="row"><span>(+) Ganado</span><span>${money(t.earned)}</span></div>
+        <div class="row disc"><span>(−) Anticipos</span><span>-${money(t.advances)}</span></div>
+        <div class="row net"><span>LÍQUIDO</span><span>${money(t.net)}</span></div>
       </div>
       <div class="sig"><hr>Entregado por (Caja/Admin)</div>
       <div class="sig"><hr>Recibido Conforme (Trabajador)</div>
@@ -6708,14 +6713,14 @@ export function App() {
       const fila = (d: DailyRow) => isEstibador
         ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.tulas).enReal(0, 3)}</td><td class="r">${Number(d.arrocillo).enReal()} QQ</td><td class="r">${Number(d.ganado).enReal()}</td>`
         : isPilador
-        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.qq).enReal()}</td><td class="r">$${Number(d.ganado).enReal()}</td>`
-        : `<td>${fmtFecha(d.fecha)}</td><td class="r">$${Number(d.ganado).enReal()}</td>`;
+        ? `<td>${fmtFecha(d.fecha)}</td><td class="r">${d.piladas}</td><td class="r">${Number(d.qq).enReal()}</td><td class="r">${money(Number(d.ganado))}</td>`
+        : `<td>${fmtFecha(d.fecha)}</td><td class="r">${money(Number(d.ganado))}</td>`;
       const colspan = isEstibador ? 4 : isPilador ? 3 : 1;
       detalleDiario = `<h4>Detalle por día</h4>
         <table>
           <tr class="th">${head}</tr>
           ${detail.rows.map((d) => `<tr>${fila(d)}</tr>`).join("")}
-          <tr class="tot"><td colspan="${colspan}">Total</td><td class="r">$${detail.rows.reduce((s, d) => s + Number(d.ganado), 0).enReal()}</td></tr>
+          <tr class="tot"><td colspan="${colspan}">Total</td><td class="r">${money(detail.rows.reduce((s, d) => s + Number(d.ganado), 0))}</td></tr>
         </table>`;
     } else {
       // Sin detalle: se muestra el resumen agregado como antes.
@@ -6750,9 +6755,9 @@ export function App() {
       <div class="meta"><div><strong>Trabajador:</strong> ${row.worker_name} (${roleLabel})</div><div><strong>Período:</strong> ${from} al ${to}</div></div>
       ${detalleDiario}
       <table>
-        <tr><td>Total ganado</td><td class="r">$${earned.enReal()}</td></tr>
-        ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-$${adv.enReal()}</td></tr>` : ""}
-        <tr class="tot"><td>NETO A PAGAR</td><td class="r">$${net.enReal()}</td></tr>
+        <tr><td>Total ganado</td><td class="r">${money(earned)}</td></tr>
+        ${adv > 0 ? `<tr class="disc"><td>Anticipos recibidos</td><td class="r">-${money(adv)}</td></tr>` : ""}
+        <tr class="tot"><td>NETO A PAGAR</td><td class="r">${money(net)}</td></tr>
       </table>
       <div class="sig"><hr/><span>Firma del trabajador</span></div>
     </body></html>`;
@@ -7482,7 +7487,7 @@ export function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `fomentos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.download = `fomentos_${hoyLocal()}.xlsx`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -7604,7 +7609,7 @@ export function App() {
   // Avisos de un cuadro para la vista previa (no bloquean: el usuario decide).
   function avisosCuadro(c: CuadroMosaico): string[] {
     const hoyLocal = new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
-    const hace1 = new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10);
+    const hace1 = fechaLocal(new Date(Date.now() - 365 * 86400000));
     const av: string[] = [];
     const deHoy = c.entregas.filter((e) => e.fecha === hoyLocal).length;
     if (deHoy) av.push(`${deHoy} con fecha de HOY (¿fórmula =HOY()?)`);
@@ -8311,10 +8316,10 @@ export function App() {
     const librasStr = v.libras.toFixed(3);
     const qqStr = formatoCantidad(v.qq);
     const detalle = v.modo === "QQ"
-      ? `${qqStr} QQ (${librasStr} lb) @ $${v.precioAplicado.enReal()}/QQ`
+      ? `${qqStr} QQ (${librasStr} lb) @ ${money(v.precioAplicado)}/QQ`
       : v.modo === "DOLARES"
-        ? `${money(v.total)} = ${librasStr} lb @ $${v.precioLibra.enReal()}/lb`
-      : `${librasStr} lb @ $${v.precioLibra.enReal()}/lb`;
+        ? `${money(v.total)} = ${librasStr} lb @ ${money(v.precioLibra)}/lb`
+      : `${librasStr} lb @ ${money(v.precioLibra)}/lb`;
 
     const duenoVenta = esMatrizActiva && ventaDetalleDueno ? ventaDetalleDueno : undefined;
     let venta: { customer_name: string; dueno?: string; se_lo_debes?: number };
@@ -9371,7 +9376,7 @@ export function App() {
     c.purchase_number,
     (c.purchase_date || "").slice(0, 10),
     c.supplier_name || "",
-    c.payment_type === "CASH" ? "Contado" : "Credito",
+    c.payment_type === "CASH" ? "Contado" : "Crédito",
     c.status,
     Number(c.total_amount || 0).enReal()
   ]);
@@ -9690,12 +9695,12 @@ export function App() {
     const creditosVig = cajaCreditos.filter((c) => c.status !== "CANCELLED");
     const creditosHtml = cajaCreditos.length ? `<h4 style="margin:16px 0 4px;color:#6d28d9">Egresos a crédito (Cuentas por Pagar · no afectan el saldo de caja)</h4>
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Concepto</th><th>Proveedor</th><th>Estado</th><th>Monto</th></tr></thead><tbody>${
-      cajaCreditos.map((c, i) => `<tr><td>${i + 1}</td><td>${new Date(c.created_at).toLocaleString("es-EC")}</td><td>${c.categoria ?? ""}</td><td>${c.description ?? ""}</td><td>${c.proveedor_nombre ?? ""}</td><td>${c.status === "CANCELLED" ? "ANULADO" : Number(c.balance) < 0.005 ? "Pagada" : "Por pagar"}</td><td>$${Number(c.amount).enReal()}</td></tr>`).join("")
-    }</tbody><tfoot><tr class="tot"><td colspan="6">TOTAL A CRÉDITO</td><td>$${creditosVig.reduce((s, c) => s + Number(c.amount), 0).enReal()}</td></tr></tfoot></table>` : "";
+      cajaCreditos.map((c, i) => `<tr><td>${i + 1}</td><td>${new Date(c.created_at).toLocaleString("es-EC")}</td><td>${c.categoria ?? ""}</td><td>${c.description ?? ""}</td><td>${c.proveedor_nombre ?? ""}</td><td>${c.status === "CANCELLED" ? "ANULADO" : Number(c.balance) < 0.005 ? "Pagada" : "Por pagar"}</td><td>${money(Number(c.amount))}</td></tr>`).join("")
+    }</tbody><tfoot><tr class="tot"><td colspan="6">TOTAL A CRÉDITO</td><td>${money(creditosVig.reduce((s, c) => s + Number(c.amount), 0))}</td></tr></tfoot></table>` : "";
     const balance = (opening + cashSummary.total_income - cashSummary.total_expense).enReal();
     const saldoLinea = openingCash > 0 || openingBank > 0
-      ? `Efectivo: $${openingCash.enReal()} · Banco: $${openingBank.enReal()} · Total: $${opening.enReal()}`
-      : `Saldo inicial: $${opening.enReal()}`;
+      ? `Efectivo: ${money(openingCash)} · Banco: ${money(openingBank)} · Total: ${money(opening)}`
+      : `Saldo inicial: ${money(opening)}`;
     const html = `<html><head><title>Cierre de Caja</title>
     <style>body{font-family:Arial;font-size:12px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:4px 8px}th{background:#16a34a;color:#fff}.tot{font-weight:bold}</style>
     </head><body>
@@ -9706,7 +9711,7 @@ export function App() {
     <table><thead><tr><th>#</th><th>Fecha/Hora</th><th>Categoría</th><th>Descripción</th><th>Proveedor</th><th>Pago</th><th>Ingreso</th><th>Egreso</th></tr></thead>
     <tbody>${rows}</tbody>
     <tfoot>
-      <tr class="tot"><td colspan="6">TOTALES</td><td style="color:green">$${cashSummary.total_income.enReal()}</td><td style="color:#c00">$${cashSummary.total_expense.enReal()}</td></tr>
+      <tr class="tot"><td colspan="6">TOTALES</td><td style="color:green">${money(cashSummary.total_income)}</td><td style="color:#c00">${money(cashSummary.total_expense)}</td></tr>
       <tr class="tot"><td colspan="6">SALDO FINAL</td><td colspan="2">$${balance}</td></tr>
     </tfoot></table>
     ${creditosHtml}
@@ -10199,7 +10204,7 @@ export function App() {
       }
     }
     if (totalAplicado === 0) throw new Error("No hay anticipos pendientes para este agricultor");
-    addToast(`Anticipo aplicado: $${totalAplicado.enReal()} descontados`, "success");
+    addToast(`Anticipo aplicado: ${money(totalAplicado)} descontados`, "success");
     const [liqRows] = await Promise.all([apiGet<LiqRecord[]>("/liquidations")]);
     setLiquidacionesList(liqRows);
     await refresh();
@@ -10218,7 +10223,7 @@ export function App() {
   // Confirma y pide el MOTIVO (queda registrado). Revierte por cada liquidación.
   async function anularLiquidacion(b: LiqBatch) {
     const motivo = window.prompt(
-      `Anular la liquidación de ${b.farmer_name} (neto $${b.net_total.enReal()}).\n\n` +
+      `Anular la liquidación de ${b.farmer_name} (neto ${money(b.net_total)}).\n\n` +
       "Esto revierte los pagos de fomento, la deuda inter-socios y la cuenta por pagar. " +
       "NO se puede si ya hay pagos al agricultor.\n\nEscribe el MOTIVO (obligatorio, queda registrado):"
     );
@@ -11864,7 +11869,7 @@ export function App() {
   // Rangos rápidos del período financiero: fija desde/hasta y recarga.
   function rangoFinanzas(preset: "hoy" | "mes" | "anio") {
     const hoy = new Date();
-    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    const iso = (d: Date) => fechaLocal(d);
     let desde = "";
     if (preset === "hoy") desde = iso(hoy);
     else if (preset === "mes") desde = iso(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
@@ -11879,7 +11884,7 @@ export function App() {
   function descargarEstadosPDF() {
     if (!finanzas) { addToast("Aún no hay datos del período", "error"); return; }
     const f = finanzas;
-    const money = (n: number) => "$" + (Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const money = (n: number) => "$" + (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     const fila = (k: string, v: number, bold = false) =>
       `<tr${bold ? ' style="font-weight:700;border-top:1px solid #cbd5e1"' : ""}><td>${k}</td><td style="text-align:right">${money(v)}</td></tr>`;
     const ind = Object.entries(f.indicadores).map(([k, v]) => {
@@ -11995,7 +12000,7 @@ export function App() {
       }).then((r) => { if (!r.ok) throw new Error("No se pudo guardar el precio de venta"); });
       // Refleja en memoria sin recargar toda la lista.
       setProductionHistory((cur) => cur.map((it) => it.id === batchId ? { ...it, [campo]: num } : it));
-      addToast(num != null ? `Precio guardado: $${num.enReal()}/QQ` : "Precio borrado", "success");
+      addToast(num != null ? `Precio guardado: ${money(num)}/QQ` : "Precio borrado", "success");
     } catch (err) {
       addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
     }
@@ -12724,7 +12729,7 @@ Motivo (obligatorio):`, "");
       .then((t) => {
         if (!t || !(Number(t.precio_por_qq) > 0)) return;
         setFleteModal((m) => m && m.order.id === order.id && !m.porQq
-          ? { ...m, porQq: String(t.precio_por_qq), total: m.total || String(round2(Number(t.precio_por_qq) * qqDePedido(order))), tarifaHint: `Tarifa de flete vigente: $${Number(t.precio_por_qq).enReal()}/QQ` }
+          ? { ...m, porQq: String(t.precio_por_qq), total: m.total || String(round2(Number(t.precio_por_qq) * qqDePedido(order))), tarifaHint: `Tarifa de flete vigente: ${money(Number(t.precio_por_qq))}/QQ` }
           : m);
       })
       .catch(() => undefined);
@@ -12986,8 +12991,8 @@ Motivo (obligatorio):`, "");
         </table>
         <div class="tot">Total: ${totalQq.enReal()} QQ</div>
         <div class="cost">
-          <div class="row"><span class="k">Tarifa acordada:</span> <strong>$${Number(b.rate_per_qq).enReal()} / QQ</strong></div>
-          <div class="row"><span class="k">Costo estimado:</span> <strong>$${Number(b.total_cost).enReal()}</strong></div>
+          <div class="row"><span class="k">Tarifa acordada:</span> <strong>${money(Number(b.rate_per_qq))} / QQ</strong></div>
+          <div class="row"><span class="k">Costo estimado:</span> <strong>${money(Number(b.total_cost))}</strong></div>
         </div>
         <div class="sigs">
           <div class="sig"><hr><span>Entregado por (Bodega)</span></div>
@@ -13254,7 +13259,7 @@ Motivo (obligatorio):`, "");
       return;
     }
     if (liqFomentoTotal > liqFomentoLifo.disponible + 0.005) {
-      addToast(`La asignacion a fomentos ($${liqFomentoTotal.enReal()}) supera el disponible de la liquidacion ($${liqFomentoLifo.disponible.enReal()}).`, "error");
+      addToast(`La asignacion a fomentos (${money(liqFomentoTotal)}) supera el disponible de la liquidacion (${money(liqFomentoLifo.disponible)}).`, "error");
       return;
     }
     type LiqApiResult = {
@@ -13364,9 +13369,9 @@ Motivo (obligatorio):`, "");
     setDiscountsOpen(false);
     // Confirma que los servicios propios quedaron pendientes en CxC de Campo.
     let cruceMsg = "";
-    if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: $${cargosCampoTotal.enReal()} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
-    if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): $${fomentoCruceSocios.enReal()}`;
-    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por $${saldoContraMonto.enReal()}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
+    if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: ${money(cargosCampoTotal)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
+    if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): ${money(fomentoCruceSocios)}`;
+    if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por ${money(saldoContraMonto)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
   }
@@ -13393,8 +13398,8 @@ Motivo (obligatorio):`, "");
       <tr>
         <td>${it.product_name}</td>
         <td style="text-align:right">${cantTxt}</td>
-        <td style="text-align:right">$${precio.enReal()}</td>
-        <td style="text-align:right">$${Number(it.total).enReal()}</td>
+        <td style="text-align:right">${money(precio)}</td>
+        <td style="text-align:right">${money(Number(it.total))}</td>
       </tr>`;
     }).join("");
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -13430,7 +13435,7 @@ Motivo (obligatorio):`, "");
       <table>
         <thead><tr><th>Producto</th><th style="text-align:right">Cantidad</th><th style="text-align:right">Precio</th><th style="text-align:right">Total</th></tr></thead>
         <tbody>${filas}</tbody>
-        <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">$${Number(venta.total_amount).enReal()}</td></tr></tfoot>
+        <tfoot><tr class="tot"><td colspan="3">TOTAL</td><td style="text-align:right">${money(Number(venta.total_amount))}</td></tr></tfoot>
       </table>
       ${venta.payment_status !== "PAID" ? `<p style="color:#b91c1c;font-weight:700">VENTA A CRÉDITO — saldo pendiente</p>` : ""}
       <div class="sigs">
@@ -13472,8 +13477,8 @@ Motivo (obligatorio):`, "");
     }
     const fomentoRows = fomentoRecibo && (fomentoRecibo.descuentos.length || fomentoRecibo.nuevos_saldos.length)
       ? `<tr><td colspan="2" style="padding-top:6px;font-weight:bold;color:#15803d">Amortización de Fomentos (LIFO)</td></tr>`
-        + fomentoRecibo.descuentos.map((d) => `<tr><td class="lbl">Descuento a ${d.accionista_nombre}:</td><td class="val disc">-$${Number(d.monto).enReal()}</td></tr>`).join("")
-        + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">$${Number(n.monto).enReal()}</td></tr>`).join("")
+        + fomentoRecibo.descuentos.map((d) => `<tr><td class="lbl">Descuento a ${d.accionista_nombre}:</td><td class="val disc">-${money(Number(d.monto))}</td></tr>`).join("")
+        + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">${money(Number(n.monto))}</td></tr>`).join("")
       : "";
 
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
@@ -13498,8 +13503,8 @@ Motivo (obligatorio):`, "");
         <td>${l.lot_code ?? "—"}</td>
         <td>${l.rice_type ?? "—"}</td>
         <td style="text-align:right">${l.quintals.enReal()}</td>
-        <td style="text-align:right">$${l.price_per_quintal.enReal()}</td>
-        <td style="text-align:right">$${(l.quintals * l.price_per_quintal).enReal()}</td>
+        <td style="text-align:right">${money(l.price_per_quintal)}</td>
+        <td style="text-align:right">${money((l.quintals * l.price_per_quintal))}</td>
       </tr>`).join("");
 
     // Filas de anticipos individuales
@@ -13507,10 +13512,10 @@ Motivo (obligatorio):`, "");
       ? appliedAdvances.map((a) => `
         <tr>
           <td class="lbl disc">${a.advance_number} — ${a.concept}</td>
-          <td class="val disc">-$${Number(a.amount_applied).enReal()}</td>
+          <td class="val disc">-${money(Number(a.amount_applied))}</td>
         </tr>`).join("")
       : b.advances_total > 0
-        ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-$${b.advances_total.enReal()}</td></tr>`
+        ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-${money(b.advances_total)}</td></tr>`
         : "";
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
@@ -13556,20 +13561,20 @@ Motivo (obligatorio):`, "");
       </table>
       <table class="totals">
         <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.enReal()} QQ</td></tr>
-        <tr><td class="lbl">Bruto:</td><td class="val">$${b.gross_total.enReal()}</td></tr>
+        <tr><td class="lbl">Bruto:</td><td class="val">${money(b.gross_total)}</td></tr>
         ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
         ${b.other_disc_total > 0 ? `
           <tr class="disc-header"><td colspan="2">Desglose de descuentos operativos</td></tr>
-          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-$${b.discount_breakdown.fomento.enReal()}</td></tr>` : ""}
-          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-$${b.discount_breakdown.bascula.enReal()}</td></tr>` : ""}
-          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-$${b.discount_breakdown.cosechadora.enReal()}</td></tr>
-          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-$${b.discount_breakdown.flete.enReal()}</td></tr>
+          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-${money(b.discount_breakdown.fomento)}</td></tr>` : ""}
+          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-${money(b.discount_breakdown.bascula)}</td></tr>` : ""}
+          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-${money(b.discount_breakdown.cosechadora)}</td></tr>
+          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-${money(b.discount_breakdown.flete)}</td></tr>
           ${otrosAdicionales > 0.01
-            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-$${otrosAdicionales.enReal()}</td></tr>`
+            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-${money(otrosAdicionales)}</td></tr>`
             : ""}
         ` : ""}
-        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-$${totalDescuentos.enReal()}</td></tr>
-        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">$${netoReal.enReal()}</td></tr>
+        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-${money(totalDescuentos)}</td></tr>
+        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">${money(netoReal)}</td></tr>
         ${fomentoRows}
       </table>
       <div class="sigs">
@@ -13606,8 +13611,8 @@ Motivo (obligatorio):`, "");
         <td>${fechaFinal}</td>
         <td style="text-align:right">${dias}</td>
         <td style="text-align:right">${meses.enReal()}${e.es_saldo_anterior ? " fijo" : ""}</td>
-        <td style="text-align:right">$${Number(e.valor).enReal()}</td>
-        <td style="text-align:right;font-weight:600">$${Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))).enReal()}</td>
+        <td style="text-align:right">${money(Number(e.valor))}</td>
+        <td style="text-align:right;font-weight:600">${money(Number(e.suman ?? (Number(e.valor)+Number(e.interes ?? 0))))}</td>
       </tr>`;
     }).join("");
 
@@ -13664,26 +13669,26 @@ Motivo (obligatorio):`, "");
           <tbody>${entregaRows || `<tr><td colspan="7" style="text-align:center;color:#888">Sin cargos registrados</td></tr>`}</tbody>
           <tfoot><tr>
             <td colspan="3">TOTALES</td><td></td><td></td>
-            <td style="text-align:right">$${totalPedido.enReal()}</td>
-            <td style="text-align:right">$${cargosFomento.enReal()}</td>
+            <td style="text-align:right">${money(totalPedido)}</td>
+            <td style="text-align:right">${money(cargosFomento)}</td>
           </tr></tfoot>
         </table>
       </div>
 
       <div class="sec">
         <table class="subt" style="width:380px">
-          <tr><td class="lbl">(+) Total pedido:</td><td class="val">$${totalPedido.enReal()}</td></tr>
-          <tr><td class="lbl">(+) Gasto administrativo:</td><td class="val">$${totalInteres.enReal()}</td></tr>
-          <tr><td class="lbl">Total deuda generada:</td><td class="val">$${cuenta.totalCargos.enReal()}</td></tr>
-          <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-$${cuenta.totalPagado.enReal()}</td></tr>
-          <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">$${cuenta.deudaPendiente.enReal()}</td></tr>
+          <tr><td class="lbl">(+) Total pedido:</td><td class="val">${money(totalPedido)}</td></tr>
+          <tr><td class="lbl">(+) Gasto administrativo:</td><td class="val">${money(totalInteres)}</td></tr>
+          <tr><td class="lbl">Total deuda generada:</td><td class="val">${money(cuenta.totalCargos)}</td></tr>
+          <tr><td class="lbl">(−) Total pagado:</td><td class="val" style="color:#15803d">-${money(cuenta.totalPagado)}</td></tr>
+          <tr><td class="lbl" style="border-top:1px solid #999">Deuda total:</td><td class="val" style="border-top:1px solid #999;font-weight:800">${money(cuenta.deudaPendiente)}</td></tr>
         </table>
       </div>
 
       <div class="result ${cuenta.saldado ? "favor" : "contra"}">
         <div class="cap">${cuenta.saldado ? "SALDADO" : "DEUDA PENDIENTE"}</div>
         <div class="amt">$ ${cuenta.deudaPendiente.enReal()}</div>
-        <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: $${cuenta.saldoFavor.enReal()}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
+        <div style="font-size:12px;margin-top:4px;font-weight:700">${cuenta.saldoFavor > 0 ? `Saldo a favor del agricultor: ${money(cuenta.saldoFavor)}` : cuenta.saldado ? "Cuenta cubierta por completo." : "Monto pendiente de pago del agricultor."}</div>
       </div>
 
       <div class="sigs">
@@ -13752,7 +13757,7 @@ Motivo (obligatorio):`, "");
                     <table className="cajaTable" style={{ marginTop: 10 }}>
                       <tbody>
                         <tr><td>Total QQ procesados</td><td className="num">{Number(piladoReport.quintals).enReal()} QQ</td></tr>
-                        <tr><td>Tarifa por QQ</td><td className="num">${Number(piladoReport.rate_per_qq).enReal()}</td></tr>
+                        <tr><td>Tarifa por QQ</td><td className="num">{money(Number(piladoReport.rate_per_qq))}</td></tr>
                         <tr><td>Total a cobrar</td><td className="num"><strong>{money(Number(piladoReport.total))}</strong></td></tr>
                         <tr><td>Saldo pendiente</td><td className="num">{Number(piladoReport.saldo) > 0 ? money(Number(piladoReport.saldo)) : "Pagado"}</td></tr>
                       </tbody>
@@ -13768,7 +13773,7 @@ Motivo (obligatorio):`, "");
                               <tr key={i}>
                                 <td>{d.presentacion}</td>
                                 <td className="num">{Number(d.quintales).enReal()}</td>
-                                <td className="num">${Number(d.precio_total_qq).enReal()}</td>
+                                <td className="num">{money(Number(d.precio_total_qq))}</td>
                                 <td className="num">{money(Number(d.subtotal))}</td>
                               </tr>
                             ))}
@@ -13983,7 +13988,7 @@ Motivo (obligatorio):`, "");
           </div>
           <div className="topbarRight">
             <span className="topbarDate">
-              {new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              {(() => { const t = new Date().toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long", year: "numeric" }); return t.charAt(0).toUpperCase() + t.slice(1); })()}
             </span>
             <button
               className="btnSecondary"
@@ -13997,7 +14002,7 @@ Motivo (obligatorio):`, "");
               }}
               disabled={loading}
             >
-              {loading ? "⟳" : "↻"} Actualizar
+              {loading ? "⟳" : "↻"} <span className="topbarBtnTxt">Actualizar</span>
             </button>
             <button type="button" className="btnSecondary busq-btn" onClick={() => setBuscadorAbierto(true)} title="Buscar tickets, placas, nombres, lotes… (Ctrl+K)" aria-label="Buscar en el sistema">
               🔎 <span className="busq-btn-txt">Buscar</span> <kbd className="busq-btn-kbd">Ctrl K</kbd>
@@ -14441,7 +14446,7 @@ Motivo (obligatorio):`, "");
               <div className="emptyState"><div className="emptyIcon">📲</div><p>No hay tickets. Importa desde tu app con IMPORTAR-BASCULA.bat.</p></div>
             ) : (
               <div style={{ overflowX: "auto" }}>
-                <table className="cajaTable" style={{ marginTop: 8 }}>
+                <table className="cajaTable basculaTicketsTable" style={{ marginTop: 8 }}>
                   <thead>
                     <tr>
                       <th>Ticket</th><th>Fecha</th><th>Cliente</th><th>Placa</th>
@@ -14539,7 +14544,7 @@ Motivo (obligatorio):`, "");
             const netoLb = netoKg * 2.2046;
             const descHumPct = hum > base ? (hum - base) / (100 - base) : 0;
             const liqLb = Math.max(0, netoLb - netoLb * descHumPct - netoLb * (imp / 100));
-            const n = (value: number, decimals = 2) => value.toLocaleString("es-EC", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+            const n = (value: number, decimals = 2) => value.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
             return (
               <div className="modalOverlay" onClick={() => { void cerrarIngresoManualBascula(); }}>
                 <form className="modalCard basManual" onClick={(event) => event.stopPropagation()} onSubmit={submitWeighing}>
@@ -14962,7 +14967,7 @@ Motivo (obligatorio):`, "");
                             })}
                             <div className="totalBox"><span>Peso total del túnel</span><strong>{qqTunel.enReal()} QQ</strong></div>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(base.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(base.filled_at ?? "").slice(0, 10) || hoyLocal()} required={false} />
                               <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(base.moisture_before ?? 0)} required={false} />
                             </div>
                             <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={base.operator_name ?? ""} required />
@@ -15019,7 +15024,7 @@ Motivo (obligatorio):`, "");
                             <div className="totalBox"><span>Peso total</span><strong>{Number(rep.total_quintals ?? 0).enReal()} QQ</strong></div>
                             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                               <Select name="rice_type" label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue={rep.rice_type ?? "0.11"} />
-                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || new Date().toISOString().slice(0, 10)} required={false} />
+                              <Input name="filled_at" label="Fecha de llenado" type="date" defaultValue={(rep.filled_at ?? "").slice(0, 10) || hoyLocal()} required={false} />
                             </div>
                             <Input name="moisture_before" label="Humedad inicial %" type="number" defaultValue={String(rep.moisture_before ?? 0)} required={false} />
                             <Input name="operator_name" label="Nombre del secador" placeholder="Quien seca este túnel (para la nómina)" defaultValue={rep.operator_name ?? ""} required />
@@ -15558,7 +15563,7 @@ Motivo (obligatorio):`, "");
               {(() => {
                 const total = costoFormTotal();
                 const qq = parseFloat(costoForm.qq_producidos) || 0;
-                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: ${total.enReal()}{qq > 0 && ` · Costo por QQ: $${(total / qq).enReal()}`}</p>;
+                return <p style={{ fontWeight: 700, margin: "8px 0" }}>Costo total: {money(total)}{qq > 0 && ` · Costo por QQ: ${money((total / qq))}`}</p>;
               })()}
               <button type="button" className="primary" onClick={submitCosto}>Registrar costo</button>
               <hr className="divider" />
@@ -15572,8 +15577,8 @@ Motivo (obligatorio):`, "");
                       <small>Luz {Number(c.luz).enReal(0, 3)} · Mant {Number(c.mantenimiento).enReal(0, 3)} · M.obra {Number(c.mano_obra).enReal(0, 3)} · Comb {Number(c.combustible).enReal(0, 3)} · Desg {Number(c.desgaste).enReal(0, 3)} · Otros {Number(c.otros).enReal(0, 3)}</small>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <strong>${Number(c.costo_total).enReal()}</strong>
-                      <small>${Number(c.costo_por_qq).enReal()}/QQ</small>
+                      <strong>{money(Number(c.costo_total))}</strong>
+                      <small>{money(Number(c.costo_por_qq))}/QQ</small>
                     </div>
                   </div>
                 ))}
@@ -16016,7 +16021,7 @@ Motivo (obligatorio):`, "");
                     {esMerc && (
                       <p className="muted" style={{ marginTop: 0 }}>
                         Salidas de inventario valorizadas al costo del producto terminado
-                        (${detalleCosto.data.costo_qq_terminado.enReal()}/QQ).
+                        ({money(detalleCosto.data.costo_qq_terminado)}/QQ).
                       </p>
                     )}
                     {bloque.items.length === 0 ? (
@@ -16067,7 +16072,7 @@ Motivo (obligatorio):`, "");
             <form className="formPanel" onSubmit={(event) => submitFarmer(event).catch((error) => setMessage(error.message))}>
               <h2>Nuevo agricultor</h2>
               <Input name="full_name" label="Nombre completo" onBlur={reformatNameOnBlur} />
-              <Input name="identification" label="Cedula/RUC" />
+              <Input name="identification" label="Cédula/RUC" />
               <button type="button" style={{ marginBottom: 10, padding: "6px 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, fontSize: 13 }}
                 onClick={(e) => {
                   const form = e.currentTarget.closest("form");
@@ -16075,7 +16080,7 @@ Motivo (obligatorio):`, "");
                   const nameEl = form?.elements.namedItem("full_name") as HTMLInputElement | null;
                   consultarSRIyRellenar(idEl?.value ?? "", ({ razonSocial }) => { if (nameEl) nameEl.value = razonSocial; });
                 }}>🔍 Consultar SRI</button>
-              <Input name="phone" label="Telefono" />
+              <Input name="phone" label="Teléfono" />
               {accionistas.length > 0 && (
                 <Select
                   name="accionista_id"
@@ -16780,7 +16785,7 @@ Motivo (obligatorio):`, "");
                         <select value={millingSacoServicioForm.sack_id} onChange={(e) => setMillingSacoServicioForm({ sack_id: e.target.value, cantidad: "" })}>
                           <option value="">— Elegir saco —</option>
                           {disponibles.map((sk) => (
-                            <option key={sk.id} value={sk.id}>{sk.tipo} · stock {Number(sk.stock)} · ${Number(sk.precio_venta_cliente ?? 0).enReal()} c/u</option>
+                            <option key={sk.id} value={sk.id}>{sk.tipo} · stock {Number(sk.stock)} · {money(Number(sk.precio_venta_cliente ?? 0))} c/u</option>
                           ))}
                         </select>
                       </label>
@@ -16803,7 +16808,7 @@ Motivo (obligatorio):`, "");
                             return (
                               <tr key={l.sack_id} style={{ borderTop: "1px solid #e0e7ff" }}>
                                 <td style={{ padding: "5px 4px", fontWeight: 700 }}>{sk?.tipo ?? "Saco"}</td>
-                                <td style={{ padding: "5px 4px", textAlign: "right" }}>{l.cantidad} × ${precio.enReal()}</td>
+                                <td style={{ padding: "5px 4px", textAlign: "right" }}>{l.cantidad} × {money(precio)}</td>
                                 <td style={{ padding: "5px 4px", textAlign: "right", fontWeight: 700 }}>{money(l.cantidad * precio)}</td>
                                 <td style={{ padding: "5px 4px", textAlign: "right" }}>
                                   <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "2px 8px" }}
@@ -16899,8 +16904,8 @@ Motivo (obligatorio):`, "");
                     <label>
                       <span>Destino / Empaque</span>
                       <select value={millingPiladoDestino} onChange={(event) => setMillingPiladoDestino(event.target.value as "TULA" | "SACO")}>
-                        <option value="TULA">🧺 Tula (Enviar a Selección)</option>
-                        <option value="SACO">📦 Saco Comercial</option>
+                        <option value="TULA">🧺 Tula (a Selección)</option>
+                        <option value="SACO">📦 Saco</option>
                       </select>
                     </label>
                     {millingPiladoDestino === "SACO" ? (
@@ -17111,7 +17116,7 @@ Motivo (obligatorio):`, "");
                           <div style={{ fontSize: 12, color: "#1d4ed8", fontWeight: 700, marginBottom: 8 }}>🧾 Liquidación de Cobro por Servicio</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                             <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>QQ pilados</div><div style={{ fontWeight: 700 }}>{qq.enReal()} QQ</div></div>
-                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>Tarifa</div><div style={{ fontWeight: 700 }}>${tarifa.enReal()}/QQ</div></div>
+                            <div><div style={{ fontSize: 11, color: "var(--c-muted)" }}>Tarifa</div><div style={{ fontWeight: 700 }}>{money(tarifa)}/QQ</div></div>
                           </div>
                           <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #bfdbfe", display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
                             <span style={{ fontSize: 12, fontWeight: 800, color: "#1d4ed8" }}>TOTAL COBRO</span>
@@ -17229,7 +17234,7 @@ Motivo (obligatorio):`, "");
                         </div>
                         {/* Tarifa de pilado CONGELADA para este lote (histórica). */}
                         <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 600, color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px", marginBottom: 10 }}>
-                          ⚙️ Tarifa de pilada aplicada: ${c.precioPilada.enReal()} <span className="muted" style={{ fontWeight: 400 }}>(Histórica)</span>
+                          ⚙️ Tarifa de pilada aplicada: {money(c.precioPilada)} <span className="muted" style={{ fontWeight: 400 }}>(Histórica)</span>
                         </div>
                         <div style={{ overflowX: "auto" }}>
                           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 620 }}>
@@ -17263,7 +17268,7 @@ Motivo (obligatorio):`, "");
                                   <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
                                     <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                     <td style={dcell}>{n2(qq)}</td>
-                                    <td style={dcell}>{precio != null ? `$${precio.enReal()}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
+                                    <td style={dcell}>{precio != null ? `${money(precio)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
                                     <td style={dcell}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilado del socio en Configuración → Tarifas">—</span>}</td>
                                     <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
                                   </tr>
@@ -17640,7 +17645,7 @@ Motivo (obligatorio):`, "");
                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregarLineaYVolver(); } }} />
                       </td>
                       <td className="num orderItemsGrid__bultos">
-                        {Number(saleLineForm.quantity) > 0 && saleLineForm.unit_price !== "" ? `$${(Number(saleLineForm.quantity) * Number(saleLineForm.unit_price)).enReal()}` : "—"}
+                        {Number(saleLineForm.quantity) > 0 && saleLineForm.unit_price !== "" ? `${money((Number(saleLineForm.quantity) * Number(saleLineForm.unit_price)))}` : "—"}
                       </td>
                       <td>
                         <button type="button" className="orderItemsGrid__agregar" onClick={agregarLineaYVolver} disabled={lineaExcedeStock}
@@ -17790,8 +17795,8 @@ Motivo (obligatorio):`, "");
                               </td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.enReal()}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).enReal(0, 3)}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right" }}>${item.unit_price.enReal()}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>${subtotal.enReal()}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{money(item.unit_price)}</td>
+                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{money(subtotal)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "center" }}>
                                 <button
                                   type="button"
@@ -17813,7 +17818,7 @@ Motivo (obligatorio):`, "");
                         <td className="num">{saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).enReal()}</td>
                         <td className="num" style={{ color: "#2563eb" }}>{saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).enReal(0, 3)}</td>
                         <td />
-                        <td className="num" style={{ color: "#15803d" }}>${calculateSaleTotal().enReal()}</td>
+                        <td className="num" style={{ color: "#15803d" }}>{money(calculateSaleTotal())}</td>
                         <td />
                       </tr>
                     </tfoot>
@@ -17835,7 +17840,7 @@ Motivo (obligatorio):`, "");
 
               <div className="totalBox" style={{ background: "#dcfce7", padding: 16, borderRadius: 8, marginBottom: 12 }}>
                 <span style={{ fontSize: 14 }}>TOTAL DEL PEDIDO</span>
-                <strong style={{ fontSize: 28, color: "#16a34a" }}>${calculateSaleTotal().enReal()}</strong>
+                <strong style={{ fontSize: 28, color: "#16a34a" }}>{money(calculateSaleTotal())}</strong>
                 <small style={{ color: "#6b7280" }}>
                   {saleLineItems.length} línea(s) · {saleLineItems.reduce((s, l) => s + qqDeLinea(l), 0).enReal()} QQ · {saleLineItems.reduce((s, l) => s + bultosDeLinea(l), 0).enReal(0, 3)} bultos
                 </small>
@@ -18184,7 +18189,7 @@ Motivo (obligatorio):`, "");
                         <tr key={s.id} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
                           <td style={{ padding: "5px 10px" }}><strong>{s.sale_number}</strong></td>
                           <td style={{ padding: "5px 10px" }}>{s.customer_name ?? "Sin cliente"}</td>
-                          <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>${Number(s.total_amount).enReal()}</td>
+                          <td style={{ padding: "5px 10px", textAlign: "right", fontWeight: 700 }}>{money(Number(s.total_amount))}</td>
                           <td style={{ padding: "5px 10px" }}>
                             <span style={{
                               padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 700,
@@ -18788,7 +18793,7 @@ Motivo (obligatorio):`, "");
                 <select value={purchaseForm.payment_type}
                   onChange={(e: any) => setPurchaseForm({ ...purchaseForm, payment_type: e.target.value })}>
                   <option value="CASH">Contado (paga de caja)</option>
-                  <option value="CREDIT">Credito (cuenta por pagar)</option>
+                  <option value="CREDIT">Crédito (cuenta por pagar)</option>
                 </select>
               </label>
               {purchaseForm.payment_type === "CASH" ? (
@@ -18847,7 +18852,7 @@ Motivo (obligatorio):`, "");
                 </div>
               ))}
               <button type="button" onClick={addPurchaseItem} style={{ marginBottom: 8 }}>+ Agregar item</button>
-              <p style={{ fontWeight: 600 }}>Total: ${purchaseTotal().enReal()}</p>
+              <p style={{ fontWeight: 600 }}>Total: {money(purchaseTotal())}</p>
               <button type="button" className="primary" onClick={submitPurchase}>Registrar compra</button>
             </div>
 
@@ -18868,7 +18873,7 @@ Motivo (obligatorio):`, "");
                   <select value={purchaseFilter.payment_type} onChange={(e: any) => setPurchaseFilter({ ...purchaseFilter, payment_type: e.target.value })}>
                     <option value="">Todos</option>
                     <option value="CASH">Contado</option>
-                    <option value="CREDIT">Credito</option>
+                    <option value="CREDIT">Crédito</option>
                   </select></label>
                 <button type="button" onClick={exportPurchCsv}>Exportar CSV</button>
                 <button type="button" onClick={printPurchReport}>Imprimir</button>
@@ -18878,16 +18883,16 @@ Motivo (obligatorio):`, "");
                 const total = vis.reduce((s: number, c: any) => s + Number(c.total_amount || 0), 0);
                 return (
                   <>
-                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} compras · Total: ${total.enReal()}</p>
+                    <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} compras · Total: {money(total)}</p>
                     {vis.length === 0 && <p className="muted">Sin compras</p>}
                     <div className="equipList">
                       {vis.map((c: any) => (
                         <div key={c.id} className="equipItem">
                           <div>
                             <strong>{c.purchase_number} — {c.supplier_name}</strong>
-                            <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Credito"} · {c.status}</small>
+                            <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Crédito"} · {c.status}</small>
                           </div>
-                          <strong>${Number(c.total_amount).enReal()}</strong>
+                          <strong>{money(Number(c.total_amount))}</strong>
                         </div>
                       ))}
                     </div>
@@ -18905,7 +18910,7 @@ Motivo (obligatorio):`, "");
                   onChange={(v) => setSupplierForm({ ...supplierForm, name: v })}
                   placeholder="Razon social o nombre" />
               </label>
-              <label><span>Identificacion (RUC/Cedula)</span>
+              <label><span>Identificación (RUC/Cédula)</span>
                 <div style={{ display: "flex", gap: 6 }}>
                   <input type="text" value={supplierForm.identification}
                     onChange={(e: any) => setSupplierForm({ ...supplierForm, identification: e.target.value })} style={{ flex: 1 }} />
@@ -18913,7 +18918,7 @@ Motivo (obligatorio):`, "");
                     style={{ padding: "0 12px", borderRadius: 6, border: "1px solid #2563eb", background: "#eff6ff", color: "#2563eb", cursor: "pointer", fontWeight: 700, whiteSpace: "nowrap" }}>🔍 SRI</button>
                 </div>
               </label>
-              <label><span>Telefono</span>
+              <label><span>Teléfono</span>
                 <input type="text" value={supplierForm.phone}
                   onChange={(e: any) => setSupplierForm({ ...supplierForm, phone: e.target.value })} />
               </label>
@@ -18921,7 +18926,7 @@ Motivo (obligatorio):`, "");
                 <input type="email" value={supplierForm.email}
                   onChange={(e: any) => setSupplierForm({ ...supplierForm, email: e.target.value })} />
               </label>
-              <label><span>Direccion</span>
+              <label><span>Dirección</span>
                 <input type="text" value={supplierForm.address}
                   onChange={(e: any) => setSupplierForm({ ...supplierForm, address: e.target.value })} />
               </label>
@@ -18943,9 +18948,9 @@ Motivo (obligatorio):`, "");
                         <NameInput type="text" value={supplierEdit.name}
                           onChange={(v) => setSupplierEdit({ ...supplierEdit, name: v })} placeholder="Nombre" />
                         <input type="text" value={supplierEdit.identification}
-                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, identification: e.target.value })} placeholder="RUC/Cedula" />
+                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, identification: e.target.value })} placeholder="RUC/Cédula" />
                         <input type="text" value={supplierEdit.phone}
-                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, phone: e.target.value })} placeholder="Telefono" />
+                          onChange={(e: any) => setSupplierEdit({ ...supplierEdit, phone: e.target.value })} placeholder="Teléfono" />
                         <div style={{ display: "flex", gap: 6 }}>
                           <button type="button" className="primary" onClick={() => saveSupplierEdit(s.id)}>Guardar</button>
                           <button type="button" onClick={() => setEditingSupplierId(null)}>Cancelar</button>
@@ -19426,7 +19431,7 @@ Motivo (obligatorio):`, "");
                             style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                             <option value="">Seleccione un agricultor</option>
                             {farmersWithPendingLiq.map((f) => (
-                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: ${f.pending_advance_balance.enReal()})</option>
+                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: {money(f.pending_advance_balance)})</option>
                             ))}
                           </select>
                         </label>
@@ -19991,7 +19996,7 @@ Motivo (obligatorio):`, "");
                         </div>
                         {sackBuyForm.cantidad && sackBuyForm.precio && (
                           <div style={{ background: "#dbeafe", border: "1px solid #93c5fd", borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#1e40af" }}>
-                            Subtotal del ítem: <strong>${(parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")).enReal()}</strong>
+                            Subtotal del ítem: <strong>{money((parseInt(sackBuyForm.cantidad || "0") * parseFloat(sackBuyForm.precio || "0")))}</strong>
                           </div>
                         )}
                         <button type="button" className="btnSecondary" onClick={agregarSacoALista} style={{ width: "100%", padding: "8px 0", fontWeight: 700, borderRadius: 6 }}>➕ Agregar a la lista</button>
@@ -20010,8 +20015,8 @@ Motivo (obligatorio):`, "");
                                   <tr key={i} style={{ background: i % 2 === 0 ? "#fff" : "#f9fafb" }}>
                                     <td style={{ padding: "4px 8px" }}>{it.tipo}</td>
                                     <td style={{ padding: "4px 8px", textAlign: "right" }}>{it.cantidad}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>${it.precio.enReal()}</td>
-                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${(it.cantidad * it.precio).enReal()}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right" }}>{money(it.precio)}</td>
+                                    <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>{money((it.cantidad * it.precio))}</td>
                                     <td style={{ padding: "4px 8px", textAlign: "center" }}>
                                       <button type="button" onClick={() => quitarSacoDeLista(i)} style={{ padding: "2px 8px", background: "#ef4444", color: "#fff", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 11 }}>🗑️</button>
                                     </td>
@@ -20020,7 +20025,7 @@ Motivo (obligatorio):`, "");
                               </tbody>
                               <tfoot><tr style={{ background: "#f0fdf4", fontWeight: 800 }}>
                                 <td colSpan={3} style={{ padding: "6px 8px" }}>MONTO TOTAL $</td>
-                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#15803d", fontSize: 15 }}>${sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0).enReal()}</td>
+                                <td style={{ padding: "6px 8px", textAlign: "right", color: "#15803d", fontSize: 15 }}>{money(sackCart.reduce((s, it) => s + it.cantidad * it.precio, 0))}</td>
                                 <td />
                               </tr></tfoot>
                             </table>
@@ -20144,7 +20149,7 @@ Motivo (obligatorio):`, "");
                       <div className="totalBox">
                         <span>Total a pagar</span>
                         <strong>{money(round2((Number(laborForm.sacks_moved) || 0) * (Number(laborForm.price_per_sack) || 0)))}</strong>
-                        <small>{laborForm.sacks_moved || 0} sacos × ${Number(laborForm.price_per_sack || 0).enReal()}</small>
+                        <small>{laborForm.sacks_moved || 0} sacos × {money(Number(laborForm.price_per_sack || 0))}</small>
                       </div>
                       <button className="primary" disabled={busy}>Registrar pago</button>
                     </form>
@@ -20286,8 +20291,8 @@ Motivo (obligatorio):`, "");
                         return (
                           <>
                             <p style={{ fontWeight: 600, margin: "4px 0" }}>
-                              {vis.length} registros · Pagado en caja: ${total.enReal()}
-                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: ${totalStock.enReal()} · Costo total: ${(total + totalStock).enReal()}</span>}
+                              {vis.length} registros · Pagado en caja: {money(total)}
+                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: {money(totalStock)} · Costo total: {money((total + totalStock))}</span>}
                             </p>
                             {vis.length === 0 && <p className="muted">Sin mantenimientos</p>}
                             <div className="equipList">
@@ -20297,16 +20302,16 @@ Motivo (obligatorio):`, "");
                                     <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}{m.maquina ? " · " + m.maquina : ""}</strong>
                                     <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
                                     {Number(m.repuestos_stock_valor || 0) > 0 && (
-                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · ${Number(m.repuestos_stock_valor).enReal()}</small>
+                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · {money(Number(m.repuestos_stock_valor))}</small>
                                     )}
                                     {m.repuestos_comprados && <small style={{ display: "block", color: "#9a3412" }}>🛒 Comprados: {m.repuestos_comprados}</small>}
                                     {Number(m.parts_cost || 0) > 0 && !m.repuestos_comprados && (
-                                      <small style={{ display: "block", color: "#475569" }}>Mano de obra ${Number(m.labor_cost || 0).enReal()} · Materiales ${Number(m.parts_cost).enReal()}</small>
+                                      <small style={{ display: "block", color: "#475569" }}>Mano de obra {money(Number(m.labor_cost || 0))} · Materiales {money(Number(m.parts_cost))}</small>
                                     )}
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
-                                    <strong>${Number(m.amount).enReal()}</strong>
-                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ ${Number(m.repuestos_stock_valor).enReal()} stock</small>}
+                                    <strong>{money(Number(m.amount))}</strong>
+                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ {money(Number(m.repuestos_stock_valor))} stock</small>}
                                     {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
                                   </div>
                                 </div>
@@ -20420,7 +20425,7 @@ Motivo (obligatorio):`, "");
                             const disponible = Number(f.falta_por_pedir);
                             return (
                               <option key={f.id} value={f.id}>
-                                {f.farmer_name} | Deuda: ${cuenta.deudaPendiente.enReal()} | {disponible > 0.005 ? `Disponible: $${disponible.enReal()}` : "Límite superado"}
+                                {f.farmer_name} | Deuda: {money(cuenta.deudaPendiente)} | {disponible > 0.005 ? `Disponible: ${money(disponible)}` : "Límite superado"}
                               </option>
                             );
                           })}
@@ -20441,20 +20446,20 @@ Motivo (obligatorio):`, "");
                         return (
                           <>
                             <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: mostrarAvisoLimite ? 6 : 10, fontSize: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-                              <div><span style={{ color: "var(--c-muted)" }}>Límite</span><br/><strong>${limite.enReal()}</strong></div>
-                              <div><span style={{ color: "var(--c-muted)" }}>Entregado</span><br/><strong>${entregado.enReal()}</strong></div>
-                              <div><span style={{ color: "var(--c-muted)" }}>Disponible</span><br/><strong style={{ color: disponible > 0.005 ? "#16a34a" : "#dc2626" }}>${disponible.enReal()}</strong></div>
+                              <div><span style={{ color: "var(--c-muted)" }}>Límite</span><br/><strong>{money(limite)}</strong></div>
+                              <div><span style={{ color: "var(--c-muted)" }}>Entregado</span><br/><strong>{money(entregado)}</strong></div>
+                              <div><span style={{ color: "var(--c-muted)" }}>Disponible</span><br/><strong style={{ color: disponible > 0.005 ? "#16a34a" : "#dc2626" }}>{money(disponible)}</strong></div>
                             </div>
                             {mostrarAvisoLimite && (
                               <div className="alert error" role="alert" aria-live="polite" style={{ marginBottom: 10, fontSize: 12 }}>
                                 {excesoResultante > 0.005
-                                  ? `Límite superado: al registrar esta entrega quedará excedido por $${excesoResultante.enReal()}. Se pedirá confirmación antes de guardar.`
+                                  ? `Límite superado: al registrar esta entrega quedará excedido por ${money(excesoResultante)}. Se pedirá confirmación antes de guardar.`
                                   : "Este fomento ya alcanzó su límite. Una nueva entrega requerirá confirmación."}
                               </div>
                             )}
                             {cajaFomentoAccion === "pago" && (
                               <div style={{ margin: "-4px 0 10px", color: "var(--c-muted)", fontSize: 11 }}>
-                                Deuda pendiente: <strong>${cuenta.deudaPendiente.enReal()}</strong>
+                                Deuda pendiente: <strong>{money(cuenta.deudaPendiente)}</strong>
                               </div>
                             )}
                           </>
@@ -20647,18 +20652,18 @@ Motivo (obligatorio):`, "");
                         <span>{item.lot_code}</span>
                         <span>{item.rice_type ?? "—"}</span>
                         <span>{Number(item.quintals).enReal()}</span>
-                        <span>${Number(item.price_per_quintal).enReal()}</span>
+                        <span>{money(Number(item.price_per_quintal))}</span>
                         <span className="liqDiscount">
-                          -${(Number(item.advances_discount) + Number(item.other_discounts)).enReal()}
+                          -{money((Number(item.advances_discount) + Number(item.other_discounts)))}
                         </span>
-                        <span className="liqNet">${Number(item.net_amount).enReal()}</span>
+                        <span className="liqNet">{money(Number(item.net_amount))}</span>
                       </div>
                     ))}
                     <div className="liqResultTotal">
                       <span>Total neto</span><span /><span />
                       <span /><span />
                       <span className="liqNet">
-                        ${liqResult.reduce((s, r) => s + Number(r.net_amount), 0).enReal()}
+                        {money(liqResult.reduce((s, r) => s + Number(r.net_amount), 0))}
                       </span>
                     </div>
                   </div>
@@ -20843,7 +20848,7 @@ Motivo (obligatorio):`, "");
                       {!discountsOpen && <line x1="8" y1="3" x2="8" y2="13"/>}
                     </svg>
                     Descuentos
-                    {liqDiscountsTotal > 0 && <span className="liqDiscBadge">-${liqDiscountsTotal.enReal()}</span>}
+                    {liqDiscountsTotal > 0 && <span className="liqDiscBadge">-{money(liqDiscountsTotal)}</span>}
                     <svg className="chevron" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                       <polyline points="2,4 6,8 10,4"/>
                     </svg>
@@ -20901,7 +20906,7 @@ Motivo (obligatorio):`, "");
                             </div>
                             <div className="liqHarvesterSubtotal">
                               <span>Subtotal</span>
-                              <strong>${(Number(row.qq || 0) * Number(row.precio || 0)).enReal()}</strong>
+                              <strong>{money((Number(row.qq || 0) * Number(row.precio || 0)))}</strong>
                             </div>
                           </div>
                         ))}
@@ -20910,7 +20915,7 @@ Motivo (obligatorio):`, "");
                         </button>
                         <div className="liqDiscRow liqHarvesterTotal">
                           <span>Total cosechadora</span>
-                          <strong>${liqCosechadoraTotal.enReal()}</strong>
+                          <strong>{money(liqCosechadoraTotal)}</strong>
                         </div>
                       </div>
                       {/* ─ Fomentos del agricultor ─ */}
@@ -20918,26 +20923,26 @@ Motivo (obligatorio):`, "");
                         <div className="liqFleteDesglose">
                           <div className="liqFleteDesgloseHd">🌱 Fomentos · amortización LIFO (más reciente primero)</div>
                           {liqFomentoLifo.items.map((f) => (
-                            <div key={f.id} className="liqDiscRow" title={`Saldo: $${f.saldo.enReal()}`}
+                            <div key={f.id} className="liqDiscRow" title={`Saldo: ${money(f.saldo)}`}
                               style={{ opacity: f.tocado ? 1 : 0.55, alignItems: "flex-start" }}>
                               <span>
                                 {f.es_de_otro_socio
                                   ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {f.accionista_nombre}</span>
                                   : <>Fomento propio </>}
-                                <small className="muted">saldo ${f.saldo.enReal()}</small>
+                                <small className="muted">saldo {money(f.saldo)}</small>
                                 {f.tocado && (
                                   <small style={{ display: "block", color: f.renovado ? "#b45309" : "#15803d", fontSize: 11 }}>
                                     {f.renovado
-                                      ? `→ se cierra (histórico) · renueva $${f.nuevoSaldo.enReal()}`
+                                      ? `→ se cierra (histórico) · renueva ${money(f.nuevoSaldo)}`
                                       : "→ se cierra (pagado)"}
                                   </small>
                                 )}
                               </span>
-                              <strong style={{ color: f.tocado ? "#b91c1c" : "var(--c-muted)" }}>-${f.abono.enReal()}</strong>
+                              <strong style={{ color: f.tocado ? "#b91c1c" : "var(--c-muted)" }}>-{money(f.abono)}</strong>
                             </div>
                           ))}
                           <small className="muted" style={{ display: "block", marginTop: 2 }}>
-                            El estimado a pagar (${liqFomentoLifo.disponible.enReal()}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
+                            El estimado a pagar ({money(liqFomentoLifo.disponible)}) amortiza los fomentos del más reciente al más antiguo. Descontar un fomento de otro socio genera una deuda inter-socios.
                           </small>
                         </div>
                       )}
@@ -20946,7 +20951,7 @@ Motivo (obligatorio):`, "");
                         <div className="liqFleteDesglose" style={{ borderColor: "#93c5fd" }}>
                           <div className="liqFleteDesgloseHd">💵 Distribución de Pago · {liqFomentosList.length} fondeadores</div>
                           <small className="muted" style={{ display: "block", marginBottom: 6 }}>
-                            Disponible del arroz: <strong>${liqFomentoLifo.disponible.enReal()}</strong>. Asigna cuánto va a cada fomento (prellenado con el sugerido).
+                            Disponible del arroz: <strong>{money(liqFomentoLifo.disponible)}</strong>. Asigna cuánto va a cada fomento (prellenado con el sugerido).
                           </small>
                           {liqFomentoResuelto.map((r) => {
                             const it = liqFomentoLifo.items.find((x) => x.id === r.id);
@@ -20957,10 +20962,10 @@ Motivo (obligatorio):`, "");
                                   {r.es_de_otro_socio
                                     ? <span className="chip" style={{ background: "#f0fdf4", color: "#15803d", border: "1px solid #bbf7d0", marginRight: 6 }}>Fomento de {r.accionista_nombre}</span>
                                     : <>Fomento propio </>}
-                                  <small className="muted">saldo ${r.saldo.enReal()}</small>
+                                  <small className="muted">saldo {money(r.saldo)}</small>
                                   {r.monto > 0.005 && (
                                     <small style={{ display: "block", color: remanente > 0.005 ? "#b45309" : "#15803d", fontSize: 11 }}>
-                                      {remanente > 0.005 ? `→ se cierra (histórico) · arrastra $${remanente.enReal()}` : "→ se cierra (pagado)"}
+                                      {remanente > 0.005 ? `→ se cierra (histórico) · arrastra ${money(remanente)}` : "→ se cierra (pagado)"}
                                     </small>
                                   )}
                                 </span>
@@ -20977,16 +20982,16 @@ Motivo (obligatorio):`, "");
                           })}
                           <div className="liqDiscRow" style={{ fontWeight: 700, borderTop: "1px solid #e5e7eb", marginTop: 4, paddingTop: 4 }}>
                             <span>Total asignado a fomentos</span>
-                            <strong style={{ color: liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 ? "#b91c1c" : "#15803d" }}>${liqFomentoManualTotal.enReal()}</strong>
+                            <strong style={{ color: liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 ? "#b91c1c" : "#15803d" }}>{money(liqFomentoManualTotal)}</strong>
                           </div>
                           {liqFomentoManualTotal > liqFomentoLifo.disponible + 0.005 && (
-                            <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz (${liqFomentoLifo.disponible.enReal()}).</small>
+                            <small style={{ color: "#b91c1c", display: "block" }}>⚠️ Asignaste más que el disponible del arroz ({money(liqFomentoLifo.disponible)}).</small>
                           )}
                         </div>
                       )}
                       {liqFomentosList.length > 0 && liqSaldoLibreFomento > 0.005 && (
                         <div style={{ marginTop: 6, padding: "7px 10px", borderRadius: 7, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12 }}>
-                          <strong>Saldo libre después de Fomentos: ${liqSaldoLibreFomento.enReal()}</strong>
+                          <strong>Saldo libre después de Fomentos: {money(liqSaldoLibreFomento)}</strong>
                           <span style={{ display: "block", marginTop: 2 }}>
                             Permanece disponible en la liquidación para pagar al agricultor o para asignarlo arriba a otro fomento del mismo agricultor.
                           </span>
@@ -20998,11 +21003,11 @@ Motivo (obligatorio):`, "");
                           <div className="liqFleteDesgloseHd">Fletes (por transporte)</div>
                           <div className="liqDiscRow">
                             <span>🏭 Flota Propia (interno)</span>
-                            <strong>-${liqFleteInterno.enReal()}</strong>
+                            <strong>-{money(liqFleteInterno)}</strong>
                           </div>
                           <div className="liqDiscRow">
                             <span>🚚 Terceros (a pagar)</span>
-                            <strong>-${liqFleteTerceros.enReal()}</strong>
+                            <strong>-{money(liqFleteTerceros)}</strong>
                           </div>
                           <small className="muted" style={{ display: "block" }}>
                             Flota Propia salda la deuda interna con Campo (no entra a caja). Terceros queda como saldo a pagar al chofer.
@@ -21020,21 +21025,21 @@ Motivo (obligatorio):`, "");
                     </div>
                     <div className="liqSummaryRow">
                       <span>Total bruto</span>
-                      <strong>${liqGrossTotal.enReal()}</strong>
+                      <strong>{money(liqGrossTotal)}</strong>
                     </div>
                     {liqDiscountsTotal > 0 && (
                       <div className="liqSummaryRow disc">
                         <span>Descuentos manuales</span>
-                        <strong>-${liqDiscountsTotal.enReal()}</strong>
+                        <strong>-{money(liqDiscountsTotal)}</strong>
                       </div>
                     )}
                     <div className="liqSummaryRow total">
                       <span>Estimado a pagar</span>
-                      <strong>${Math.max(0, liqGrossTotal - liqDiscountsTotal).enReal()}</strong>
+                      <strong>{money(Math.max(0, liqGrossTotal - liqDiscountsTotal))}</strong>
                     </div>
                     {liqSaldoEnContra > 0 && (
                       <div className="liqSummaryRow" style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 8px", marginTop: 4 }}>
-                        <span style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ Saldo en contra: -${liqSaldoEnContra.enReal()}</span>
+                        <span style={{ color: "#b91c1c", fontWeight: 600 }}>⚠️ Saldo en contra: -{money(liqSaldoEnContra)}</span>
                         <small style={{ color: "#b91c1c" }}>Se generará nuevo fomento</small>
                       </div>
                     )}
@@ -21121,13 +21126,13 @@ Motivo (obligatorio):`, "");
                         <div key={b.key} className="liqHistRow">
                           <span>{b.farmer_name}</span>
                           <span>{qqTotal.enReal()} QQ</span>
-                          <span>${b.gross_total.enReal()}</span>
-                          <span className="liqDiscount">-${b.advances_total.enReal()}</span>
-                          <span className="liqDiscount">-${b.other_disc_total.enReal()}</span>
-                          <span className="liqNet">${b.net_total.enReal()}</span>
+                          <span>{money(b.gross_total)}</span>
+                          <span className="liqDiscount">-{money(b.advances_total)}</span>
+                          <span className="liqDiscount">-{money(b.other_disc_total)}</span>
+                          <span className="liqNet">{money(b.net_total)}</span>
                           <span>
                             <span className={paid ? "liqBadgePaid" : "liqBadgePending"}>
-                              {paid ? "Pagado" : `Pend. $${b.pending_total.enReal()}`}
+                              {paid ? "Pagado" : `Pend. ${money(b.pending_total)}`}
                             </span>
                           </span>
                           <span className="liqActions">
@@ -21354,14 +21359,14 @@ Motivo (obligatorio):`, "");
                           </div>
                           <div style={{ fontSize: 12, color: "var(--c-muted)", display: "flex", gap: 12, flexWrap: "wrap" }}>
                             <span>{f.cuadras} cuadras</span>
-                            <span>Límite: ${Number(f.monto_limite).enReal()}</span>
-                            <span>Pedido: ${Number(f.total_pedido).enReal()}</span>
-                            <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{f.estado_credito}</span>
+                            <span>Límite: {money(Number(f.monto_limite))}</span>
+                            <span>Pedido: {money(Number(f.total_pedido))}</span>
+                            <span style={{ color: habilitado ? "#16a34a" : "#dc2626", fontWeight: 700 }}>{habilitado ? "HABILITADO" : "DESHABILITADO"}</span>
                           </div>
                           <div style={{ fontSize: 11, color: "var(--c-muted)", marginTop: 2 }}>
                             {f.status === "CERRADO_LIQUIDACION"
-                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda $${cuenta.deudaPendiente.enReal()}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor $${cuenta.saldoFavor.enReal()}` : ""}</strong></>
-                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Gasto adm.: ${Number(f.gasto_adm).enReal()}</>}
+                              ? <>Liquidado: {f.liquidado_at?.slice(0,10) ?? "—"} | <strong style={{ color: cuenta.deudaPendiente > 0 ? "#dc2626" : "#16a34a" }}>{cuenta.deudaPendiente > 0 ? `Deuda ${money(cuenta.deudaPendiente)}` : "SALDADO"}{cuenta.saldoFavor > 0 ? ` · A favor ${money(cuenta.saldoFavor)}` : ""}</strong></>
+                              : <>Inicio: {f.inicio?.slice(0,10)} | Cosecha: {f.cosecha?.slice(0,10) ?? "—"} | Gasto adm.: {money(Number(f.gasto_adm))}</>}
                           </div>
                         </div>
                       );
@@ -21420,8 +21425,8 @@ Motivo (obligatorio):`, "");
                       return (
                         <div style={{ background: saldado ? "#f0fdf4" : "#fef2f2", border: `1px solid ${saldado ? "#86efac" : "#fecaca"}`, borderRadius: 8, padding: "9px 12px", marginBottom: 12, fontSize: 12, color: saldado ? "#166534" : "#991b1b" }}>
                           {fomentoDetalle.status === "CERRADO_LIQUIDACION" && <><strong>Fomento archivado</strong>{fomentoDetalle.liquidado_at ? ` el ${fomentoDetalle.liquidado_at.slice(0,10)}` : ""}. </>}
-                          <strong>{saldado ? "SALDADO" : `Deuda pendiente: $${cuenta.deudaPendiente.enReal()}`}</strong>
-                          {cuenta.saldoFavor > 0 && <span style={{ display: "block", marginTop: 3, fontWeight: 800 }}>Saldo a favor del agricultor: ${cuenta.saldoFavor.enReal()}</span>}
+                          <strong>{saldado ? "SALDADO" : `Deuda pendiente: ${money(cuenta.deudaPendiente)}`}</strong>
+                          {cuenta.saldoFavor > 0 && <span style={{ display: "block", marginTop: 3, fontWeight: 800 }}>Saldo a favor del agricultor: {money(cuenta.saldoFavor)}</span>}
                         </div>
                       );
                     })()}
@@ -21465,14 +21470,14 @@ Motivo (obligatorio):`, "");
                       const resumen: [string, string | number][] = [
                         ["Cuadras", fomentoDetalle.cuadras],
                         ["Paradas", Number(fomentoDetalle.paradas).enReal(0, 3)],
-                        ["Monto Límite", `$${Number(fomentoDetalle.monto_limite).enReal()}`],
-                        ["Total Pedido", `$${Number(fomentoDetalle.total_pedido).enReal()}`],
-                        ["Disponible", `$${Number(fomentoDetalle.falta_por_pedir).enReal()}`],
-                        ["Gasto adm. acum.", `$${Number(fomentoDetalle.gasto_adm).enReal()}`],
-                        ["Total Pagado", `$${cuenta.totalPagado.enReal()}`],
-                        ["Deuda Total", `$${cuenta.deudaPendiente.enReal()}`],
-                        ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `$${cuenta.saldoFavor.enReal()}`] as [string, string]] : []),
-                        ["Estado", fomentoDetalle.estado_credito],
+                        ["Monto Límite", `${money(Number(fomentoDetalle.monto_limite))}`],
+                        ["Total Pedido", `${money(Number(fomentoDetalle.total_pedido))}`],
+                        ["Disponible", `${money(Number(fomentoDetalle.falta_por_pedir))}`],
+                        ["Gasto adm. acum.", `${money(Number(fomentoDetalle.gasto_adm))}`],
+                        ["Total Pagado", `${money(cuenta.totalPagado)}`],
+                        ["Deuda Total", `${money(cuenta.deudaPendiente)}`],
+                        ...(cuenta.saldoFavor > 0 ? [["Saldo a favor", `${money(cuenta.saldoFavor)}`] as [string, string]] : []),
+                        ["Estado", fomentoDetalle.estado_credito === "HABILITADO" ? "HABILITADO" : "DESHABILITADO"],
                       ];
                       return (
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
@@ -21523,9 +21528,9 @@ Motivo (obligatorio):`, "");
                                 <td style={{ padding: "4px 8px", textAlign: "right", whiteSpace: "nowrap" }}>
                                   {meses.enReal()}{e.es_saldo_anterior && <span style={{ marginLeft: 4, fontSize: 10, fontWeight: 800, color: "#92400e" }}>FIJO</span>}
                                 </td>
-                                <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(e.valor).enReal()}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(e.interes).enReal()}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>${Number(e.suman).enReal()}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right" }}>{money(Number(e.valor))}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>{money(Number(e.interes))}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>{money(Number(e.suman))}</td>
                                 <td style={{ padding: "4px 8px" }}>
                                   {canAnular && (
                                     <button type="button" title="Eliminar entrega"
@@ -21545,9 +21550,9 @@ Motivo (obligatorio):`, "");
                             <tr style={{ fontWeight: 700, borderTop: "2px solid #e5e7eb" }}>
                               <td colSpan={3} style={{ padding: "4px 8px" }}>TOTALES</td>
                               <td></td><td></td>
-                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${Number(fomentoDetalle.total_pedido).enReal()}</td>
-                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>${Number(fomentoDetalle.gasto_adm).enReal()}</td>
-                              <td style={{ padding: "4px 8px", textAlign: "right" }}>${(Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)).enReal()}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>{money(Number(fomentoDetalle.total_pedido))}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>{money(Number(fomentoDetalle.gasto_adm))}</td>
+                              <td style={{ padding: "4px 8px", textAlign: "right" }}>{money((Number(fomentoDetalle.total_pedido)+Number(fomentoDetalle.gasto_adm)))}</td>
                               <td></td>
                             </tr>
                           </tfoot>
@@ -21562,7 +21567,7 @@ Motivo (obligatorio):`, "");
                         <div onClick={(ev) => ev.stopPropagation()} className="formPanel" style={{ maxWidth: 440, width: "100%", margin: 0 }}>
                           <h3 style={{ marginTop: 0, color: "#b91c1c" }}>⚠️ ¿Eliminar entrega de crédito?</h3>
                           <p style={{ lineHeight: 1.5 }}>
-                            Estás a punto de borrar la entrega de <strong>${confirmarEntrega.valor.enReal()}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
+                            Estás a punto de borrar la entrega de <strong>{money(confirmarEntrega.valor)}</strong> del <strong>{confirmarEntrega.fecha}</strong>.
                             Esto recalculará la deuda total y el gasto administrativo del fomento.
                           </p>
                           <div className="buttonRow" style={{ marginTop: 14 }}>
@@ -21607,7 +21612,7 @@ Motivo (obligatorio):`, "");
                               const valor = Number(fomentoEntregaForm.valor);
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const interes = valor * renta / 30 * dias;
-                              return `Días: ${dias} | Tasa: ${(renta*100).enReal()}% | Gasto adm.: $${interes.enReal()} | Total: $${(valor + interes).enReal()}`;
+                              return `Días: ${dias} | Tasa: ${(renta*100).enReal()}% | Gasto adm.: ${money(interes)} | Total: ${money((valor + interes))}`;
                             })()}
                           </div>
                         )}
@@ -21642,7 +21647,7 @@ Motivo (obligatorio):`, "");
                             {fomentoDetalle.pagos.map((p, i) => (
                               <tr key={p.id} style={{ background: i % 2 === 0 ? "#fff" : "#f0fdf4" }}>
                                 <td style={{ padding: "4px 8px" }}>{p.fecha?.slice(0,10)}</td>
-                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>${Number(p.valor).enReal()}</td>
+                                <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>{money(Number(p.valor))}</td>
                                 <td style={{ padding: "4px 8px" }}>{p.concepto ?? "—"}</td>
                                 <td style={{ padding: "4px 8px" }}>
                                   {canAnular && (
@@ -21658,7 +21663,7 @@ Motivo (obligatorio):`, "");
                             <tr style={{ fontWeight: 700, borderTop: "2px solid #bbf7d0" }}>
                               <td style={{ padding: "4px 8px" }}>TOTAL</td>
                               <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a" }}>
-                                ${fomentoDetalle.pagos.reduce((s, p) => s + Number(p.valor), 0).enReal()}
+                                {money(fomentoDetalle.pagos.reduce((s, p) => s + Number(p.valor), 0))}
                               </td>
                               <td colSpan={2}></td>
                             </tr>
@@ -21742,7 +21747,7 @@ Motivo (obligatorio):`, "");
                   </label>
                   {fomentoForm.cuadras && (
                     <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#f0fdf4", borderRadius: 6, padding: "4px 8px" }}>
-                      Paradas: {(Number(fomentoForm.cuadras)*16).enReal(0, 3)} | Límite automático: ${(Number(fomentoForm.cuadras)*800).enReal()}
+                      Paradas: {(Number(fomentoForm.cuadras)*16).enReal(0, 3)} | Límite automático: {money((Number(fomentoForm.cuadras)*800))}
                     </div>
                   )}
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Límite de Crédito ($)
@@ -21873,7 +21878,7 @@ Motivo (obligatorio):`, "");
               const accNombre = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo";
               const resumenHoja = (h: HojaMosaico) => {
                 const ce = h.cuadros.filter((c) => c.entregas.length > 0);
-                return `${h.nombre}${h.oculta ? " (oculta)" : ""} · ${ce.length} con entregas · $${ce.reduce((a, c) => a + c.entregas.reduce((x, e) => x + e.valor, 0), 0).enReal()}`;
+                return `${h.nombre}${h.oculta ? " (oculta)" : ""} · ${ce.length} con entregas · ${money(ce.reduce((a, c) => a + c.entregas.reduce((x, e) => x + e.valor, 0), 0))}`;
               };
               return (
                 <div className="modalOverlay" onClick={() => !m.busy && setMosaico(null)}>
@@ -21887,7 +21892,7 @@ Motivo (obligatorio):`, "");
                     </label>
                     <div className="mosaicoModal__kpis">
                       <span><small>A importar</small><strong>{sel.length}</strong></span>
-                      <span><small>Total entregado</small><strong>${totalSel.enReal()}</strong></span>
+                      <span><small>Total entregado</small><strong>{money(totalSel)}</strong></span>
                       <span><small>Agricultores nuevos</small><strong>{nuevos}</strong></span>
                     </div>
                     <p className="mosaicoModal__nota">El gasto administrativo se calcula desde la fecha de cada entrega con la <b>renta</b> del cuadro (si no tiene, 7 %). Desmarca lo que no quieras importar.</p>
@@ -21906,7 +21911,7 @@ Motivo (obligatorio):`, "");
                               <small>{c.celda} · {c.entregas.length} {c.entregas.length === 1 ? "entrega" : "entregas"} · renta {c.renta != null ? `${(c.renta * 100).enReal(0, 2)} %` : "7 % (sin dato)"}</small>
                               {av.length > 0 && <small className="mosaicoModal__aviso">⚠️ {av.join(" · ")}</small>}
                             </span>
-                            <b className="mosaicoModal__monto">${total.enReal()}</b>
+                            <b className="mosaicoModal__monto">{money(total)}</b>
                           </label>
                         );
                       })}
@@ -21949,7 +21954,7 @@ Motivo (obligatorio):`, "");
         )}
 
         {activeTab === "Por Cobrar" && (() => {
-          const hoy = new Date().toISOString().slice(0, 10);
+          const hoy = hoyLocal();
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
           // A quién se le cobra: la MATRIZ (solo si la deuda es con ella), otro SOCIO, un AGRICULTOR o un CLIENTE.
           // Antes todo lo que no se reconocía caía en «Matriz» (los clientes del socio salían como deuda de la Matriz)
@@ -22146,7 +22151,7 @@ Motivo (obligatorio):`, "");
         })()}
 
         {activeTab === "Por Pagar" && (() => {
-          const hoy = new Date().toISOString().slice(0, 10);
+          const hoy = hoyLocal();
           const socioNames = accionistas.filter((a) => a.tipo === "SOCIO").map((a) => (a.name || "").toUpperCase());
           // A quién se le debe: la MATRIZ (solo si la deuda es con ella), otro SOCIO, un AGRICULTOR o un PROVEEDOR / otro.
           // Antes lo que no se reconocía caía en «Matriz» (proveedores y terceros salían como deuda con la Matriz).
@@ -22308,12 +22313,12 @@ Motivo (obligatorio):`, "");
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: $${Number(laborRatesForm.secado_servicio_per_qq || 0).enReal()}`} /></label>
+                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: ${money(Number(laborRatesForm.secado_servicio_per_qq || 0))}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
                   <span>Total a cobrar</span>
                   <strong>{money(secadoTotal)}</strong>
-                  <small>{secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} QQ × ${(secadoRate || 0).enReal()}</small>
+                  <small>{secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} QQ × {money((secadoRate || 0))}</small>
                 </div>
                 <button type="button" className="primary" disabled={!secadoLotSel || !(secadoTotal > 0)} onClick={submitSecado}>Registrar cobro de secado</button>
                 {serviceDriedLots.length === 0 && <p className="muted" style={{ marginTop: 8 }}>No hay lotes de servicio secados pendientes de cobro.</p>}
@@ -23292,7 +23297,7 @@ Motivo (obligatorio):`, "");
                       <div className="totalBox" style={{ marginBottom: 10 }}>
                         <span>Subtotal{anticipo > 0 ? " (neto)" : ""}</span>
                         <strong>{money(previewSubtotal)}</strong>
-                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − $${anticipo.enReal()} anticipo` : ""}` : "elige actividad"}</small>
+                        <small>{selAct ? `${cuadEntryForm.quantity || 0} × $${Number(selAct.unit_rate)}${anticipo > 0 ? ` − ${money(anticipo)} anticipo` : ""}` : "elige actividad"}</small>
                       </div>
                       <div style={{ display: "flex", gap: 8 }}>
                         <button className="primary">{editingCuadId ? "Guardar cambios" : "Agregar"}</button>
@@ -25113,7 +25118,7 @@ Motivo (obligatorio):`, "");
                   {lastCreatedUserAccess && (
                     <div className="userCreatedAccess">
                       <div>
-                        <strong>Ultimo usuario creado</strong>
+                        <strong>Último usuario creado</strong>
                         <p>Usuario: <b>{lastCreatedUserAccess.username}</b> · Clave: <b>{lastCreatedUserAccess.password}</b></p>
                       </div>
                       <button type="button" className="btnGhost" onClick={() => copyLastCreatedUserAccess()}>
@@ -25477,7 +25482,7 @@ Motivo (obligatorio):`, "");
                             onChange={(e) => setUserEditor({ ...userEditor, username: e.target.value })} />
                         </label>
                         <label>
-                          <span>Cedula</span>
+                          <span>Cédula</span>
                           <input value={userEditor.cedula} inputMode="numeric"
                             onChange={(e) => setUserEditor({ ...userEditor, cedula: e.target.value })} />
                         </label>
@@ -25862,7 +25867,7 @@ Motivo (obligatorio):`, "");
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 10, marginTop: 10 }}>
                         <label><span>Nombre para identificarla *</span><input type="text" placeholder="Ej: Cuenta corriente principal" value={newBankAccount.name} onChange={(e) => setNewBankAccount((v) => ({ ...v, name: e.target.value }))} /></label>
                         <label><span>Banco / Tipo de cuenta *</span><input type="text" placeholder="Ej: Banco Pichincha · Corriente" value={newBankAccount.banco} onChange={(e) => setNewBankAccount((v) => ({ ...v, banco: e.target.value }))} /></label>
-                        <label><span>Numero de cuenta *</span><input type="text" placeholder="Ej: 2200XXXXXX" value={newBankAccount.numero_cuenta} onChange={(e) => setNewBankAccount((v) => ({ ...v, numero_cuenta: e.target.value }))} /></label>
+                        <label><span>Número de cuenta *</span><input type="text" placeholder="Ej: 2200XXXXXX" value={newBankAccount.numero_cuenta} onChange={(e) => setNewBankAccount((v) => ({ ...v, numero_cuenta: e.target.value }))} /></label>
                       </div>
                       <div className="buttonRow" style={{ marginTop: 10 }}>
                         <button type="button" className="primary" onClick={() => createBankAccount().catch((err) => addToast(err.message, "error"))}>Guardar cuenta</button>
@@ -27244,7 +27249,7 @@ Motivo (obligatorio):`, "");
           </label>
           {liqPreview ? (
             <div className="liqSummary">
-              <div className="liqSummaryRow"><span>Bruto ({Number(liqTicket.quintals).enReal()} QQ × ${Number(liqPrecio).enReal()})</span><span>{money(liqPreview.grossPayable)}</span></div>
+              <div className="liqSummaryRow"><span>Bruto ({Number(liqTicket.quintals).enReal()} QQ × {money(Number(liqPrecio))})</span><span>{money(liqPreview.grossPayable)}</span></div>
               {liqPreview.advancesDiscount > 0 && <div className="liqSummaryRow disc"><span>Descuento anticipos</span><span>−{money(liqPreview.advancesDiscount)}</span></div>}
               <div className="liqSummaryRow total"><span>Neto a pagar</span><span>{money(liqPreview.netPayable)}</span></div>
             </div>
@@ -27726,7 +27731,7 @@ function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }
           Servicio, Costo Operativo) van como chips dentro de la tarjeta afín. */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
         {bigCard("COMPRAS DEL MES", money(kView.compras), `${comprasQqView.enReal()} quintales`, "#16a34a",
-          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · $${costoView.por_qq.enReal()}/QQ` : money(costoView.total), "#b91c1c") : null)}
+          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · ${money(costoView.por_qq)}/QQ` : money(costoView.total), "#b91c1c") : null)}
         {bigCard("VENTAS DEL MES", money(kView.ventas), `${ventasQqView.enReal()} quintales`, "#2563eb",
           <>
             {chip("Utilidad", `${money(kView.utilidad)} · ${kView.margen}%`, "#f59e0b")}
@@ -28092,7 +28097,7 @@ function DryingReportsPanel({
   return (
     <section className="tracePanel dryingReportsPanel">
       <h2>Secados guardados</h2>
-      {reports.length === 0 && <p className="muted">Aun no hay informes de secado guardados.</p>}
+      {reports.length === 0 && <p className="muted">Aún no hay informes de secado guardados.</p>}
       {reports.map((report) => {
         const done = report.status === "COMPLETED";
         const op = reportOpType(report);

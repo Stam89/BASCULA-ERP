@@ -33,7 +33,7 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 const nombreMes = (m: string) => { const [y, mm] = m.split("-").map(Number); return `${MESES[mm - 1]} ${y}`; };
 const mesActual = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; };
 const signo = (n: number) => (n < 0 ? `−${money(-n)}` : money(n));
-const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("es-EC", { maximumFractionDigits: 2 });
+const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
 
 function variacion(actual: number, antes: number): { texto: string; sube: boolean } | null {
   if (Math.abs(antes) < 0.005) return null;

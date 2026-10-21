@@ -4,12 +4,12 @@
 // pero queda editable. Mantiene los estilos de CajaModule.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch, apiGet, apiPost } from "../api";
-import { money } from "../format";
+import { hoyLocal, money } from "../format";
 import { useAutoRefresh } from "./autoRefresh";
 import { ClienteSearchInput } from "../components/ClienteSearchInput";
 
-const hoy = () => new Date().toISOString().slice(0, 10);
-const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const hoy = () => hoyLocal();
+const qqFmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
 // PATCH/DELETE a /campo/partes/:id (apiPost solo cubre POST/GET).
 async function parteReq(path: string, method: "PATCH" | "DELETE", body?: unknown): Promise<unknown> {

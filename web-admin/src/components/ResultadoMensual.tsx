@@ -8,6 +8,7 @@
 // solo los montos que el sistema no conoce se ingresan a mano por mes.
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiOk, apiPatch, apiPost } from "../api";
+import { hoyLocal, money } from "../format";
 
 type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
 type Rubro = { id: string; nombre: string; claves: string[]; categorias: string[]; nomina: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
@@ -35,9 +36,9 @@ type Reporte = {
 };
 export type GanaOperacion = { operacion: string; utilidad: number; lotes: number };
 
-const dinero = (n: number) => `$${(Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const porQq = (n: number) => `$${(Number(n) || 0).enReal()}`;
-const mesActual = () => new Date().toISOString().slice(0, 7);
+const dinero = (n: number) => `${(Number(n) || 0) < 0 ? "-" : ""}$${Math.abs(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const porQq = (n: number) => `${money((Number(n) || 0))}`;
+const mesActual = () => hoyLocal().slice(0, 7);
 
 export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategoriasCaja, categoriasVersion }: {
   puedeEditar: boolean;

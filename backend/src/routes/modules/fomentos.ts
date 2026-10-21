@@ -14,6 +14,7 @@ import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 import { calcularLimiteFomento } from "../../services/fomento-limite.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const fomentosRouter = Router();
 
@@ -267,7 +268,7 @@ fomentosRouter.get("/export", asyncRoute(async (req, res) => {
   }
 
   const buffer = (await workbook.xlsx.writeBuffer()) as unknown as Buffer;
-  const filename = `fomentos_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const filename = `fomentos_${hoyEc()}.xlsx`;
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
   res.send(buffer);
@@ -399,7 +400,7 @@ fomentosRouter.post("/import", upload.single("file"), asyncRoute(async (req, res
       for (const g of grupos.values()) {
         const nombre = g.cliente;
         const fechas = g.entregas.map((e) => e.fecha).filter((f): f is string => !!f).sort();
-        const inicio = fechas[0] ?? new Date().toISOString().slice(0, 10);
+        const inicio = fechas[0] ?? hoyEc();
         const cosecha = calcularCosecha(inicio);
 
         // Dedup por (accionista, nombre, cuadras, límite, inicio).
@@ -677,7 +678,7 @@ fomentosRouter.post("/bulk-import", asyncRoute(async (req, res) => {
       const limite = b.limite && b.limite > 0 ? b.limite : null;
       // inicio = la entrega más antigua con fecha válida, o HOY.
       const fechas = b.entregas.map((e) => fechaISOsegura(e.fecha)).filter((f): f is string => !!f).sort();
-      const inicio = fechas[0] ?? new Date().toISOString().slice(0, 10);
+      const inicio = fechas[0] ?? hoyEc();
       const cosecha = calcularCosecha(inicio);
 
       // Dedup: evita duplicar si se re-sube el mismo mosaico.

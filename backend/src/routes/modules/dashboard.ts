@@ -171,6 +171,12 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
       polvillo: Number(i?.polvillo ?? 0),
       banco_balance: Number(b?.balance ?? 0)
     };
+  }).map((x) => {
+    // Total de QQ en bodega del socio (cáscara + seco + producto + subproductos). Antes quedaba fijo en 0 y el
+    // gráfico «Distribución de inventario» del inicio salía vacío. Los saldos negativos declarados no restan.
+    const qq = [x.cascara_011, x.seco_011, x.cascara_corriente, x.seco_corriente, x.producto_011, x.producto_corriente,
+      x.arrocillo_34, x.arrocillo_fino, x.polvillo].reduce((s, n) => s + Math.max(0, n), 0);
+    return { ...x, inventario_qq: Math.round(qq * 100) / 100 };
   });
 
   const sum = (f: (x: typeof perAccionista[number]) => number) => Math.round(perAccionista.reduce((s, x) => s + f(x), 0) * 100) / 100;
@@ -206,7 +212,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     per_accionista: perAccionista,
     totales: {
       compras_qq: sum((x) => x.compras_qq), ventas_qq: sum((x) => x.ventas_qq),
-      inventario_qq: 0, inventario_valor: 0,
+      inventario_qq: sum((x) => x.inventario_qq), inventario_valor: 0,
       cascara_011: sum((x) => x.cascara_011), cascara_corriente: sum((x) => x.cascara_corriente),
       seco_011: sum((x) => x.seco_011), seco_corriente: sum((x) => x.seco_corriente),
       producto_011: sum((x) => x.producto_011), producto_corriente: sum((x) => x.producto_corriente),

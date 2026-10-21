@@ -12,7 +12,7 @@ async function patchMaquina(id: string, body: unknown): Promise<void> {
   const r = await apiFetch(`/campo/activos/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { error?: string }).error || "No se pudo actualizar la maquinaria");
 }
-import { money } from "../format";
+import { hoyLocal, money } from "../format";
 import { useAutoRefresh } from "./autoRefresh";
 import PartesModule from "./PartesModule";
 import EstadoResultadosCampo from "./EstadoResultadosCampo";
@@ -58,7 +58,7 @@ type Servicio = {
   estado: "pendiente" | "abonado" | "pagado"; notas: string | null;
 };
 
-const hoy = () => new Date().toISOString().slice(0, 10);
+const hoy = () => hoyLocal();
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
 export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "historial" | "reportes" | "resultados" | "config";
@@ -826,7 +826,7 @@ function MantenimientoFlota({ activos, cuentas, onSaved, onError }: {
         <h2>＋ Registrar trabajo</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <label><span>Fecha</span><input type="date" value={f.fecha} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
-          <label><span>Maquina / Vehiculo *</span><select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}><option value="">Seleccione</option>{activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}</select></label>
+          <label><span>Máquina / Vehículo *</span><select value={f.activo_id} onChange={(e) => setF({ ...f, activo_id: e.target.value })}><option value="">Seleccione</option>{activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}{a.placa_codigo ? ` · ${a.placa_codigo}` : ""}</option>)}</select></label>
         </div>
         <label><span>Tipo de trabajo</span><select value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value as MantenimientoTipo })}>{MANT_TIPOS.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
         <label><span>Pieza / Sistema</span><select value={f.componente} onChange={(e) => setF({ ...f, componente: e.target.value })}><option value="">Seleccione (opcional)</option>{PIEZAS_MANT.map((g) => <optgroup key={g.grupo} label={g.grupo}>{g.items.map((it) => <option key={it}>{it}</option>)}</optgroup>)}</select></label>
@@ -853,10 +853,10 @@ function MantenimientoFlota({ activos, cuentas, onSaved, onError }: {
 
       <div className="tablePanel" style={{ alignSelf: "start" }}>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
-          <div><h2 style={{ margin: 0 }}>Ultimo trabajo por equipo</h2><small className="muted">Que se cambio, cuando y cual es el siguiente control.</small></div>
+          <div><h2 style={{ margin: 0 }}>Último trabajo por equipo</h2><small className="muted">Qué se cambió, cuándo y cuál es el siguiente control.</small></div>
           <label style={{ margin: "0 0 0 auto", minWidth: 220 }}><span>Filtrar equipo</span><select value={filtroActivo} onChange={(e) => setFiltroActivo(e.target.value)}><option value="">Toda la flota</option>{activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></label>
         </div>
-        <div style={{ overflowX: "auto" }}><table className="cajaTable" style={{ marginTop: 8 }}><thead><tr><th>Equipo</th><th>Ultimo trabajo</th><th>Fecha</th><th>Lectura</th><th>Proximo</th></tr></thead><tbody>
+        <div style={{ overflowX: "auto" }}><table className="cajaTable" style={{ marginTop: 8 }}><thead><tr><th>Equipo</th><th>Último trabajo</th><th>Fecha</th><th>Lectura</th><th>Proximo</th></tr></thead><tbody>
           {(filtroActivo ? activos.filter((a) => a.id === filtroActivo) : activos).map((a) => { const r = ultimoPorActivo.get(a.id); return <tr key={a.id}><td><strong>{a.nombre}</strong><small className="muted" style={{ display: "block" }}>{tipoLabel(a.tipo)}</small></td><td>{r ? r.detalle : <span className="muted">Sin historial</span>}</td><td>{r ? String(r.fecha).slice(0, 10) : "—"}</td><td>{r?.lectura != null ? `${r.lectura} ${r.unidad_lectura}` : "—"}</td><td>{r ? <>{r.proxima_fecha ? String(r.proxima_fecha).slice(0, 10) : r.proxima_lectura != null ? `${r.proxima_lectura} ${r.unidad_lectura}` : "—"} <span style={{ marginLeft: 4 }}>{estadoChip(r)}</span></> : "—"}</td></tr>; })}
         </tbody></table></div>
       </div>
@@ -921,7 +921,7 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
       qq: ms.reduce((s, m) => s + (m.qq ?? 0), 0)
     };
   }, [maquinas]);
-  const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const qqFmt = (n: number) => (Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
   return (
     <>
@@ -1769,7 +1769,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   }
   const req = <span style={{ color: "#ef4444" }}>*</span>;
   const iconoTipo = (a: Activo) => FAMILIA_INFO[familiaDe(a)].icono;
-  const num = (n: number) => n.toLocaleString("es-EC", { maximumFractionDigits: 2 });
+  const num = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   return (
     <form className="formPanel egresoCampo" onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <h2>－ Nuevo egreso (gasto)</h2>

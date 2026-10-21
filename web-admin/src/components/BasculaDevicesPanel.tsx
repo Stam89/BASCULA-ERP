@@ -8,7 +8,7 @@ type Props = {
 function fecha(value: string | null): string {
   return value
     ? new Date(value).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" })
-    : "Aun no sincroniza";
+    : "Aún no sincroniza";
 }
 
 function idCorto(value: string): string {
@@ -59,8 +59,8 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
       <div className="configCardBody">
         <div className="basculaDevicesIntro">
           <div>
-            <strong>Conexion directa protegida</strong>
-            <p>Cada instalacion de Bascula v11.44 o posterior aparece aqui despues de sincronizar por primera vez.</p>
+            <strong>Conexión directa protegida</strong>
+            <p>Cada instalación de Báscula v11.44 o posterior aparece aquí después de sincronizar por primera vez.</p>
           </div>
           <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={loading} title="Actualizar lista">
             ↻ Actualizar

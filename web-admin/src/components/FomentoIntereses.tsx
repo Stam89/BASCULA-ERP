@@ -128,7 +128,7 @@ export function FomentoIntereses({ accionistaNombre }: { accionistaNombre: strin
             </header>
             <div className="fomInt__det">
               <span>📅 Cuenta: {ddmm(f.fecha_cuenta)}{f.liquidacion ? ` · ${f.liquidacion}` : ""}</span>
-              <span>Renta {(f.renta * 100).toLocaleString("es-EC", { maximumFractionDigits: 2 })} %</span>
+              <span>Renta {(f.renta * 100).toLocaleString("en-US", { maximumFractionDigits: 2 })} %</span>
               <span>Capital {money(f.capital + f.saldo_anterior)}</span>
               <span>Cobrado {money(f.cobrado)}</span>
               {f.saldo_en_contra > 0.005 && <span className="fomInt__contra">Saldo en contra {money(f.saldo_en_contra)}</span>}

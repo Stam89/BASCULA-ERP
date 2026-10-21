@@ -2,9 +2,35 @@
 // dependencias de estado ni de React: son fáciles de reusar y de testear. No
 // se cambió ninguna lógica; solo se movieron aquí.
 
-/** Formatea un número como moneda: 12.5 -> "$12.50". */
+/**
+ * Formatea un número como moneda: 12.5 -> "$12.50"; 27729.99 -> "$27,729.99"; -40 -> "-$40.00".
+ * Coma en los miles y punto en los centavos (elegido por el dueño 2026-10-20). Los decimales siguen siendo los reales
+ * (2 a 4), como antes.
+ */
 export function money(value: string | number | null | undefined): string {
-  return `$${numeroReal(value, 2, 4)}`;
+  const n = Number(value ?? 0);
+  if (!Number.isFinite(n)) return "$—";
+  const [entero, dec] = numeroReal(Math.abs(n), 2, 4).split(".");
+  const signo = n < 0 && Number(numeroReal(Math.abs(n), 2, 4)) > 0 ? "-" : "";
+  return `${signo}$${conMiles(entero)}${dec ? `.${dec}` : ""}`;
+}
+
+/** Separador de miles con coma: "27729" -> "27,729". */
+export function conMiles(entero: string): string {
+  return entero.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+/**
+ * Fecha YYYY-MM-DD en la hora del equipo (Ecuador). `toISOString()` da la de Greenwich: después de las 19:00 ya
+ * es «mañana» y los formularios de la noche guardaban el día siguiente (auditoría 2026-10-20).
+ */
+export function fechaLocal(d: Date = new Date()): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Hoy (YYYY-MM-DD) en la hora del equipo. */
+export function hoyLocal(): string {
+  return fechaLocal(new Date());
 }
 
 // Conectores de nombres/razones sociales que van en minúscula cuando NO son la

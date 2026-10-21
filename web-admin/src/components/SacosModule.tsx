@@ -7,6 +7,7 @@
 // usuario; el stock solo cambia con compras, ventas y movimientos (kárdex).
 import { useMemo, useState, type FormEvent } from "react";
 import { apiFetch, apiPatch, apiPost } from "../api";
+import { money } from "../format";
 
 export type Saco = {
   id: string;
@@ -155,7 +156,7 @@ export function SacosTablero({ sacos, onVerKardex, onConfig }: { sacos: Saco[]; 
       <div className="sacx__kpis">
         {kpi("🧵", "Sacos en bodega", fmt(totalSacos), `${activos.length} presentaciones activas`, "#2dd4bf", "#0f766e")}
         {kpi("🏷️", "Marcas", String(marcas), "con sacos registrados", "#a78bfa", "#6d28d9")}
-        {kpi("💲", "Valor estimado", `$${valor.enReal()}`, "stock × precio de compra", "#60a5fa", "#1d4ed8")}
+        {kpi("💲", "Valor estimado", `${money(valor)}`, "stock × precio de compra", "#60a5fa", "#1d4ed8")}
         {alertas.length
           ? kpi("⚠️", "Alertas", String(alertas.length), "sacos por comprar", "#fb923c", "#c2410c")
           : kpi("✅", "Alertas", "0", "todo en orden", "#4ade80", "#15803d")}
@@ -414,7 +415,7 @@ export function SacosCatalogoConfig({
     // Precios: si queda en 0 o cambia 3 veces o más, puede ser un error de tecleo → preguntar.
     if (campo !== "stock_minimo" && antes > 0 && (valor === 0 || valor / antes >= 3 || antes / valor >= 3)) {
       const nombre = campo === "precio_compra_default" ? "precio de compra" : "precio al cliente";
-      if (!window.confirm(`${s.tipo}: el ${nombre} pasa de $${antes.enReal()} a $${valor.enReal()}${valor === 0 ? " (queda en 0)" : ""}.\n\n¿Es correcto?`)) {
+      if (!window.confirm(`${s.tipo}: el ${nombre} pasa de ${money(antes)} a ${money(valor)}${valor === 0 ? " (queda en 0)" : ""}.\n\n¿Es correcto?`)) {
         if (input) input.value = antes.enReal();
         return;
       }

@@ -21,7 +21,7 @@ type Fila = {
   donde: string | null;
 };
 
-const dinero = (n: number) => `$${(Number(n) || 0).toLocaleString("es-EC", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const dinero = (n: number) => `${(Number(n) || 0) < 0 ? "-" : ""}$${Math.abs(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fechaLarga = (f: string) => new Date(f).toLocaleDateString("es-EC", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 const fechaCorta = (f: string) => new Date(f).toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
 function haceDias(f: string): string {

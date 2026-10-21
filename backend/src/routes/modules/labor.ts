@@ -9,6 +9,7 @@ import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
 import { esDiaPagableSecador, fechasLaborablesDesdeLunes } from "../../utils/secador-workday.js";
+import { fechaEc } from "../../utils/fechas.js";
 
 export const laborRouter = Router();
 
@@ -565,8 +566,8 @@ laborRouter.get("/summary", asyncRoute(async (req, res) => {
   const monday = new Date(today);
   const day = (monday.getDay() + 6) % 7; // 0 = lunes
   monday.setDate(monday.getDate() - day);
-  const from = q.from ?? monday.toISOString().slice(0, 10);
-  const to = q.to ?? today.toISOString().slice(0, 10);
+  const from = q.from ?? fechaEc(monday);
+  const to = q.to ?? fechaEc(today);
 
   const result = await pool.query(
     `SELECT wp.worker_role, wp.worker_name,
@@ -609,8 +610,8 @@ laborRouter.get("/history", asyncRoute(async (req, res) => {
   const today = new Date();
   const past = new Date(today);
   past.setDate(past.getDate() - 60);
-  const from = q.from ?? past.toISOString().slice(0, 10);
-  const to = q.to ?? today.toISOString().slice(0, 10);
+  const from = q.from ?? fechaEc(past);
+  const to = q.to ?? fechaEc(today);
 
   const result = await pool.query(
     `SELECT wp.worker_role, wp.worker_name,
@@ -851,8 +852,8 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
   const today = new Date();
   const monday = new Date(today);
   monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  const from = q.from ?? monday.toISOString().slice(0, 10);
-  const to = q.to ?? today.toISOString().slice(0, 10);
+  const from = q.from ?? fechaEc(monday);
+  const to = q.to ?? fechaEc(today);
   const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
 
   // La CORRIDA (no el día calendario) es la unidad de cobro del secador: los

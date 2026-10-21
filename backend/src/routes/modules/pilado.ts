@@ -8,6 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
+import { fechaEc } from "../../utils/fechas.js";
 
 export const piladoRouter = Router();
 
@@ -20,8 +21,8 @@ piladoRouter.get("/services", asyncRoute(async (req, res) => {
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.query);
   const today = new Date();
-  const from = q.from ?? new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-  const to = q.to ?? today.toISOString().slice(0, 10);
+  const from = q.from ?? fechaEc(new Date(today.getFullYear(), today.getMonth(), 1));
+  const to = q.to ?? fechaEc(today);
 
   const result = await pool.query(
     `SELECT s.id, s.service_date, s.quintals, s.rate_per_qq, s.total, s.notes,

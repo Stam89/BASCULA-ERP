@@ -6215,3 +6215,13 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjx-confirmar__fila small { display: block; color: var(--c-muted); font-size: 12px; }
 .cjx-confirmar__btns { display: flex; gap: 6px; }
 .cjx-confirmar__btns button { padding: 8px 12px; font-weight: 700; }
+
+/* Auditoría 2026-10-20 · barra de arriba: la fecha ya llega con mayúscula inicial («Martes, 20 de octubre de 2026»);
+   en el celular los botones van solo con ícono para que se lea el nombre de la pantalla. */
+.topbarDate { text-transform: none; }
+@media (max-width: 860px) {
+  .topbarBtnTxt, .busq-btn-txt { display: none; }
+  .topbarRight > .btnSecondary { padding-left: 10px; padding-right: 10px; }
+}
+/* Báscula: el número de ticket, la fecha y la placa no se parten en dos líneas («#000 / 419»). */
+.basculaTicketsTable td:nth-child(1), .basculaTicketsTable td:nth-child(2), .basculaTicketsTable td:nth-child(4) { white-space: nowrap; }

@@ -39,7 +39,7 @@ const fechaTxt = (f: string) => f.split("-").reverse().join("/");
 const mesTxt = (mes: string) => { const [y, m] = mes.split("-").map(Number); return `${MESES[m - 1]} ${y}`; };
 const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 const r2 = (n: number) => Math.round(n * 100) / 100;
-const qqTxt = (n: number) => `${n.toLocaleString("es-EC", { maximumFractionDigits: 2 })} QQ`;
+const qqTxt = (n: number) => `${n.toLocaleString("en-US", { maximumFractionDigits: 2 })} QQ`;
 
 /** Último mes que ya se puede cortar: el anterior (o el actual si hoy es su último día). */
 function mesMaximo(): string {

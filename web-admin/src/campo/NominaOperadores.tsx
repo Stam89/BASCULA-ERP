@@ -4,7 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } f
 import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
 
-const qqFmt = (n: number) => n.toLocaleString("es-EC", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+const qqFmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
 async function req(path: string, method: "PATCH" | "DELETE", body?: unknown): Promise<unknown> {
   const r = await apiFetch(path, {

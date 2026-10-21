@@ -19,6 +19,7 @@ import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../util
 import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
 import { buildManualBasculaPayload, formatBasculaTicketNumber } from "../../utils/manual-bascula-ticket.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -796,7 +797,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exig
          VALUES ($1, $2, $3, $4, 'MAQUILA', true, 'PILADO', 'WEIGHED', $5, $6)
          RETURNING id`,
         [
-          await nextSequentialLotCode(client, new Date().toISOString().slice(0, 10), "PILADO"),
+          await nextSequentialLotCode(client, hoyEc(), "PILADO"),
           nextCode("IMP"), t.farmer_id, body.rice_type,
           "Solo Servicio de Pilada (arroz seco) - directo a Producción",
           ticketAccionista
