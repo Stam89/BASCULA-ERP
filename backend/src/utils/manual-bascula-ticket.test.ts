@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildManualBasculaPayload, formatBasculaTicketNumber } from "./manual-bascula-ticket.js";
+import { buildManualBasculaPayload, esSerieEmergencia, formatBasculaTicketNumber, siguienteEmergencia } from "./manual-bascula-ticket.js";
 
 describe("ticket manual del ERP compatible con BASCULA", () => {
   it("usa la misma numeración visible y normaliza los textos", () => {
@@ -51,5 +51,14 @@ describe("ticket manual del ERP compatible con BASCULA", () => {
     expect(payload.plazo).toBe("");
     expect(payload.fechaPago).toBe("");
     expect(payload.totalQQ).toBe(11);
+  });
+
+  it("la serie de emergencia (sin tablet) va aparte desde 900 001", () => {
+    expect(siguienteEmergencia(null)).toBe(900_001);
+    expect(siguienteEmergencia(419)).toBe(900_001);
+    expect(siguienteEmergencia(900_007)).toBe(900_008);
+    expect(formatBasculaTicketNumber(900_001)).toBe("900 001");
+    expect(esSerieEmergencia(419)).toBe(false);
+    expect(esSerieEmergencia(900_001)).toBe(true);
   });
 });

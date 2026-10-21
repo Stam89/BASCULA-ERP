@@ -72,3 +72,13 @@ export function buildManualBasculaPayload(input: ManualBasculaTicketInput, now =
     impureza: input.impurity ?? 0
   };
 }
+
+// 🆕 Tickets hechos SOLO en el ERP (la tablet no se usó): serie aparte desde 900 001 que la tablet nunca va a alcanzar,
+// así su numeración propia jamás choca con un ticket de emergencia (pedido del dueño 2026-10-21).
+export const SERIE_EMERGENCIA = 900_000;
+export const esSerieEmergencia = (numero: number) => Number(numero) > SERIE_EMERGENCIA;
+/** Siguiente número de la serie de emergencia a partir del mayor que ya existe en ella (null = ninguno). */
+export function siguienteEmergencia(mayorEnSerie: number | null | undefined): number {
+  const m = Number(mayorEnSerie ?? 0);
+  return m > SERIE_EMERGENCIA ? m + 1 : SERIE_EMERGENCIA + 1;
+}

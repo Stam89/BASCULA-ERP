@@ -6167,6 +6167,18 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .basManual__ticket > span { font-size: 16px; font-weight: 800; color: #14532d; }
 .basManual__ticket input { height: 42px; text-align: right; color: #15803d; font-size: 23px; font-weight: 800; background: #fff; }
 .basManual__ticket small { color: #3f6212; font-size: 12px; }
+/* Ingreso manual: ¿el número sale de la tablet o es un ticket nuevo sin tablet? (evita repetir números) */
+.basManual__modo { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 20px 0; }
+.basManual__modo button { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 2px solid #e2e8f0; background: #fff; cursor: pointer; }
+.basManual__modo button strong { font-size: 14px; color: #0f172a; }
+.basManual__modo button small { font-size: 12px; color: #64748b; }
+.basManual__modo button.on { border-color: #16a34a; background: #f0fdf4; box-shadow: 0 0 0 3px rgba(22, 163, 74, .15); }
+.basManual__auto { height: 42px; display: flex; align-items: center; justify-content: flex-end; padding: 0 10px; color: #15803d; font-size: 23px; font-weight: 800; background: #fff; border: 1px dashed #86efac; border-radius: 8px; }
+.basManual__aviso { grid-column: 1 / -1; font-size: 12.5px; font-weight: 600; border-radius: 8px; padding: 6px 10px; border: 1px solid; }
+.basManual__aviso.ok { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+.basManual__aviso.ojo { color: #92400e; background: #fffbeb; border-color: #fde68a; }
+.basManual__aviso.malo { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
+@media (max-width: 640px) { .basManual__modo { grid-template-columns: 1fr; padding: 10px 14px 0; } }
 .basManual__section { padding: 16px 20px; border-bottom: 1px solid var(--c-border); }
 .basManual__section h4 { margin: 0 0 12px; color: var(--c-text); font-size: 14px; letter-spacing: 0; }
 .basManual__sectionHead { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }

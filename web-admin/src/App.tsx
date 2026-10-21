@@ -339,9 +339,19 @@ type ManualBasculaContext = {
   last_number: number | null;
   suggested_number: number;
   formatted_number: string;
+  /** Siguiente número de la serie de emergencia (900 001…) para un ticket sin tablet. */
+  emergencia_number?: number;
+  emergencia_formatted?: string;
+};
+type ManualBasculaCheck = {
+  existe: boolean; numero: string; serie_emergencia: boolean;
+  estado?: "liquidado" | "ingresado" | "quitado" | "en_espera" | "pendiente"; bloquea?: boolean;
+  cliente?: string | null; fecha?: string | null; placa?: string | null; quintals?: number;
 };
 
 type ManualBasculaForm = {
+  /** «recuperar» = el ticket está en la tablet y no llegó; «nuevo» = la tablet no se usó (número automático). */
+  modoNumero: "" | "recuperar" | "nuevo";
   ticketNumber: string;
   farmerId: string;
   operationType: "" | "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO";
@@ -359,6 +369,7 @@ type ManualBasculaForm = {
 
 function emptyManualBasculaForm(): ManualBasculaForm {
   return {
+    modoNumero: "",
     ticketNumber: "",
     farmerId: "",
     operationType: "",
@@ -2575,6 +2586,8 @@ export function App() {
   const [ingresoModalOpen, setIngresoModalOpen] = useState(false);
   const [manualBasculaForm, setManualBasculaForm] = useState<ManualBasculaForm>(emptyManualBasculaForm);
   const [manualBasculaContext, setManualBasculaContext] = useState<ManualBasculaContext | null>(null);
+  // 🔎 Aviso al escribir el número de un ticket de la tablet: ¿ya está en el ERP? (evita duplicar el mismo número)
+  const [manualBasculaCheck, setManualBasculaCheck] = useState<ManualBasculaCheck | null>(null);
   const [manualBasculaBusy, setManualBasculaBusy] = useState(false);
   // Conector de báscula por Web Serial (RS232). Refs para el bucle de lectura.
   const serialPortRef = useRef<any>(null);
@@ -10498,11 +10511,21 @@ export function App() {
     try {
       const context = await apiGet<ManualBasculaContext>("/tickets/manual-context");
       setManualBasculaContext(context);
-      setManualBasculaForm((current) => ({ ...current, ticketNumber: String(context.suggested_number) }));
     } catch (error) {
       addToast(error instanceof Error ? error.message : "No se pudo consultar el siguiente ticket", "error");
     }
   }
+
+  useEffect(() => {
+    const numero = Math.trunc(Number(manualBasculaForm.ticketNumber));
+    if (!ingresoModalOpen || manualBasculaForm.modoNumero !== "recuperar" || !(numero >= 1)) { setManualBasculaCheck(null); return; }
+    let vigente = true;
+    const t = setTimeout(() => {
+      const qs = new URLSearchParams({ numero: String(numero), ...(manualBasculaForm.farmerId ? { farmer_id: manualBasculaForm.farmerId } : {}) });
+      apiGet<ManualBasculaCheck>(`/tickets/manual-check?${qs}`).then((r) => { if (vigente) setManualBasculaCheck(r); }).catch(() => { if (vigente) setManualBasculaCheck(null); });
+    }, 350);
+    return () => { vigente = false; clearTimeout(t); };
+  }, [ingresoModalOpen, manualBasculaForm.modoNumero, manualBasculaForm.ticketNumber, manualBasculaForm.farmerId]);
 
   async function cerrarIngresoManualBascula() {
     if (manualBasculaBusy) return;
@@ -10519,8 +10542,11 @@ export function App() {
     const gross = Number(form.gross);
     const tare = Number(form.tara);
     const qualification = Number(form.qualification);
+    const nuevo = form.modoNumero === "nuevo";
 
-    if (!(ticketNumber >= 1)) { addToast("Escribe un número de ticket válido", "error"); return; }
+    if (!form.modoNumero) { addToast("Elige si el ticket está en la tablet o es uno nuevo sin tablet", "error"); return; }
+    if (!nuevo && !(ticketNumber >= 1)) { addToast("Escribe el número de ticket que aparece en la tablet", "error"); return; }
+    if (!nuevo && manualBasculaCheck?.bloquea) { addToast(`El ticket #${manualBasculaCheck.numero} ya está en el ERP: revisa el número de la tablet`, "error"); return; }
     if (!form.farmerId) { addToast("Selecciona el cliente o agricultor", "error"); return; }
     if (!form.operationType) { addToast("Selecciona el destino de la carga", "error"); return; }
     if (!form.riceType) { addToast("Selecciona el tipo de arroz", "error"); return; }
@@ -10531,7 +10557,8 @@ export function App() {
     setManualBasculaBusy(true);
     try {
       const saved = await apiPost<{ ticket: { id: string; numero: string }; reused: boolean }>("/tickets/manual", {
-        ticket_number: ticketNumber,
+        modo: form.modoNumero,
+        ticket_number: nuevo ? undefined : ticketNumber,
         farmer_id: form.farmerId,
         operation_type: form.operationType,
         rice_type: form.riceType,
@@ -14633,13 +14660,41 @@ Motivo (obligatorio):`, ""));
                     <button type="button" className="basManual__close" aria-label="Cerrar" title="Cerrar" onClick={() => { void cerrarIngresoManualBascula(); }}>×</button>
                   </header>
 
-                  <div className="basManual__ticket">
-                    <span>Ticket #</span>
-                    <input type="number" min="1" step="1" inputMode="numeric" required aria-label="Número de ticket"
-                      value={manualBasculaForm.ticketNumber}
-                      onChange={(event) => setManualBasculaField("ticketNumber", event.target.value)} />
-                    <small>{manualBasculaContext?.last_number ? `Último sincronizado: #${manualBasculaContext.last_number}` : "Numeración compartida con BASCULA"}</small>
+                  {/* 🔢 Número del ticket: el de la tablet (recuperar) o uno automático de la serie de emergencia (sin tablet). */}
+                  <div className="basManual__modo" role="group" aria-label="¿De dónde sale el número del ticket?">
+                    <button type="button" className={manualBasculaForm.modoNumero === "recuperar" ? "on" : ""}
+                      onClick={() => setManualBasculaForm((c) => ({ ...c, modoNumero: "recuperar", ticketNumber: "" }))}>
+                      <strong>📲 Está en la tablet</strong><small>Se hizo en la báscula y no llegó al ERP</small>
+                    </button>
+                    <button type="button" className={manualBasculaForm.modoNumero === "nuevo" ? "on" : ""}
+                      onClick={() => setManualBasculaForm((c) => ({ ...c, modoNumero: "nuevo", ticketNumber: "" }))}>
+                      <strong>🆕 Ticket nuevo sin tablet</strong><small>La tablet no se usó: número automático</small>
+                    </button>
                   </div>
+                  {manualBasculaForm.modoNumero === "recuperar" && (
+                    <div className="basManual__ticket">
+                      <span>Ticket #</span>
+                      <input type="number" min="1" step="1" inputMode="numeric" required aria-label="Número de ticket de la tablet" autoFocus
+                        placeholder="Nº de la tablet" value={manualBasculaForm.ticketNumber}
+                        onChange={(event) => setManualBasculaField("ticketNumber", event.target.value)} />
+                      <small>Escribe el número tal como sale en la tablet.{manualBasculaContext?.last_number ? ` Último que llegó: #${manualBasculaContext.last_number}` : ""}</small>
+                      {manualBasculaCheck && (() => {
+                        const c = manualBasculaCheck;
+                        const quien = [c.cliente, c.placa, c.fecha].filter(Boolean).join(" · ");
+                        const txt = !c.existe ? `✅ El #${c.numero} no está en el ERP: se registrará con ese número.`
+                          : c.bloquea ? `⛔ El #${c.numero} ya está en el ERP (${c.estado === "liquidado" ? "liquidado" : c.estado === "ingresado" ? "ya ingresado" : "de otro agricultor"}): ${quien}. Revisa el número en la tablet.`
+                          : `⚠️ El #${c.numero} ya llegó de la tablet (${c.estado === "en_espera" ? "esperando 2º pesaje" : c.estado === "quitado" ? "quitado de pendientes" : "pendiente"}): ${quien}. Se completará ese mismo ticket, no se crea otro.`;
+                        return <div className={`basManual__aviso ${!c.existe ? "ok" : c.bloquea ? "malo" : "ojo"}`}>{txt}</div>;
+                      })()}
+                    </div>
+                  )}
+                  {manualBasculaForm.modoNumero === "nuevo" && (
+                    <div className="basManual__ticket">
+                      <span>Ticket #</span>
+                      <output className="basManual__auto">{manualBasculaContext?.emergencia_formatted ?? "900 001"}</output>
+                      <small>Automático, de la serie de emergencia (900 001, 900 002…) que la tablet nunca usa: no se puede repetir.</small>
+                    </div>
+                  )}
 
                   <section className="basManual__section">
                     <h4>Datos del ingreso</h4>
@@ -14740,7 +14795,7 @@ Motivo (obligatorio):`, ""));
                   </details>
 
                   <footer className="buttonRow basManual__actions">
-                    <button type="submit" className="primary" disabled={manualBasculaBusy}>{manualBasculaBusy ? "Guardando…" : "Guardar e ingresar"}</button>
+                    <button type="submit" className="primary" disabled={manualBasculaBusy || !manualBasculaForm.modoNumero || (manualBasculaForm.modoNumero === "recuperar" && Boolean(manualBasculaCheck?.bloquea))}>{manualBasculaBusy ? "Guardando…" : "Guardar e ingresar"}</button>
                     <button type="button" disabled={manualBasculaBusy} onClick={() => { void cerrarIngresoManualBascula(); }}>Cancelar</button>
                   </footer>
                 </form>

@@ -18,7 +18,7 @@ import { env } from "../../config/env.js";
 import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
 import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
-import { buildManualBasculaPayload, formatBasculaTicketNumber } from "../../utils/manual-bascula-ticket.js";
+import { buildManualBasculaPayload, esSerieEmergencia, formatBasculaTicketNumber, SERIE_EMERGENCIA, siguienteEmergencia } from "../../utils/manual-bascula-ticket.js";
 import { hoyEc } from "../../utils/fechas.js";
 
 export const mobileTicketsRouter = Router();
@@ -94,7 +94,10 @@ const basculaImportSchema = z.object({
 });
 
 const manualTicketSchema = z.object({
-  ticket_number: z.coerce.number().int().positive().max(999_999_999),
+  // «recuperar» = el ticket se hizo en la tablet y no llegó (se escribe su número);
+  // «nuevo» = la tablet no se usó: el número sale solo de la serie de emergencia (se ignora ticket_number).
+  modo: z.enum(["recuperar", "nuevo"]).optional().default("recuperar"),
+  ticket_number: z.coerce.number().int().positive().max(999_999_999).optional(),
   farmer_id: z.string().uuid(),
   operation_type: z.enum(["COMPRA", "SECADO", "SECADO_PILADO", "PILADO"]),
   rice_type: z.enum(["0.11", "CORRIENTE"]),
@@ -377,25 +380,65 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
 // que la app. Es una sugerencia: el operador puede escribir el número que ya
 // aparece en la tablet cuando está recuperando un ticket que no llegó al ERP.
 mobileTicketsRouter.get("/manual-context", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula"]), asyncRoute(async (_req, res) => {
-  const latest = await pool.query<{ last_number: string | null }>(
-    `SELECT max(${numeroTicketSql("t")})::text AS last_number
+  // El último de la TABLET no cuenta la serie de emergencia (900 001…), que lleva su propio conteo.
+  const latest = await pool.query<{ last_number: string | null; ultimo_emergencia: string | null }>(
+    `SELECT max(${numeroTicketSql("t")}) FILTER (WHERE ${numeroTicketSql("t")} <= $1)::text AS last_number,
+            max(${numeroTicketSql("t")}) FILTER (WHERE ${numeroTicketSql("t")} > $1)::text AS ultimo_emergencia
        FROM mobile_synced_tickets t
       WHERE lower(COALESCE(NULLIF(t.raw_payload->>'modo', ''), 'principal')) = 'principal'
-        AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'`
+        AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'`,
+    [SERIE_EMERGENCIA]
   );
   const lastNumber = latest.rows[0]?.last_number != null ? Number(latest.rows[0].last_number) : 0;
   const suggestedNumber = Math.max(1, lastNumber + 1);
+  const emergencia = siguienteEmergencia(latest.rows[0]?.ultimo_emergencia != null ? Number(latest.rows[0].ultimo_emergencia) : null);
   res.json({
     last_number: lastNumber || null,
     suggested_number: suggestedNumber,
-    formatted_number: formatBasculaTicketNumber(suggestedNumber)
+    formatted_number: formatBasculaTicketNumber(suggestedNumber),
+    emergencia_number: emergencia,
+    emergencia_formatted: formatBasculaTicketNumber(emergencia)
   });
+}));
+
+// 🔎 ¿Ese número de ticket ya está en el ERP? Para avisar AL ESCRIBIRLO en el ingreso manual (antes de guardar).
+mobileTicketsRouter.get("/manual-check", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula"]), asyncRoute(async (req, res) => {
+  const { numero, farmer_id } = z.object({ numero: z.coerce.number().int().positive(), farmer_id: z.string().uuid().optional() }).parse(req.query);
+  const r = (await pool.query(
+    `SELECT t.id, t.farmer_id, COALESCE(f.full_name, t.farmer_name) AS cliente, t.raw_payload->>'fecha' AS fecha,
+            t.raw_payload->>'placa' AS placa, t.en_espera, t.weighing_ticket_id, t.liquidated_at, t.quitado_at, t.quintals
+       FROM mobile_synced_tickets t LEFT JOIN farmers f ON f.id = t.farmer_id
+      WHERE COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'
+        AND lower(COALESCE(NULLIF(t.raw_payload->>'modo', ''), 'principal')) = 'principal'
+        AND ${numeroTicketSql("t")} = $1::bigint
+      ORDER BY t.mobile_updated_at DESC LIMIT 1`,
+    [numero]
+  )).rows[0];
+  if (!r) { res.json({ existe: false, numero: formatBasculaTicketNumber(numero), serie_emergencia: esSerieEmergencia(numero) }); return; }
+  const estado = r.liquidated_at ? "liquidado" : r.weighing_ticket_id ? "ingresado" : r.quitado_at ? "quitado" : r.en_espera ? "en_espera" : "pendiente";
+  // Bloquea si ya se procesó o es de OTRO agricultor; si es el mismo pendiente / en espera, se completa ese mismo.
+  const bloquea = estado === "liquidado" || estado === "ingresado" || Boolean(farmer_id && r.farmer_id && r.farmer_id !== farmer_id);
+  res.json({ existe: true, numero: formatBasculaTicketNumber(numero), serie_emergencia: esSerieEmergencia(numero), estado, bloquea,
+    cliente: r.cliente, fecha: r.fecha, placa: r.placa, quintals: Number(r.quintals ?? 0) });
 }));
 
 // Ingreso de emergencia desde el ERP en el formato NATIVO de BASCULA. Primero
 // queda en mobile_synced_tickets y luego el frontend usa /:id/create-lot, el
 // mismo camino de los tickets WiFi/Firebase. Repetir la petición con el mismo
 // número reutiliza el registro: nunca crea una segunda entrada de inventario.
+// Reserva el siguiente número de la serie de emergencia. Lo calculado se recuerda en memoria, así dos ingresos al
+// mismo tiempo nunca reciben el mismo número (el cálculo después de leer la base es instantáneo, sin esperas).
+let ultimoEmergenciaReservado = 0;
+async function reservarNumeroEmergencia(): Promise<number> {
+  const r = (await pool.query<{ mayor: string | null }>(
+    `SELECT max(${numeroTicketSql("t")})::text AS mayor FROM mobile_synced_tickets t WHERE ${numeroTicketSql("t")} > $1`,
+    [SERIE_EMERGENCIA]
+  )).rows[0];
+  const siguiente = Math.max(siguienteEmergencia(r?.mayor != null ? Number(r.mayor) : null), ultimoEmergenciaReservado + 1);
+  ultimoEmergenciaReservado = siguiente;
+  return siguiente;
+}
+
 mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const body = manualTicketSchema.parse(req.body);
   const user = (req as AuthenticatedRequest).user;
@@ -404,6 +447,18 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
     [body.farmer_id]
   );
   if (!farmer.rowCount) throw new ApiError(404, "Agricultor no encontrado.");
+
+  // 🔢 Número: el de la tablet (recuperar) o el siguiente de la serie de emergencia (nuevo, no se escribe a mano).
+  let ticketNumber: number;
+  if (body.modo === "nuevo") {
+    ticketNumber = await reservarNumeroEmergencia();
+  } else {
+    if (!body.ticket_number) throw new ApiError(400, "Escribe el número de ticket que aparece en la tablet.");
+    if (esSerieEmergencia(body.ticket_number)) {
+      throw new ApiError(400, `El #${formatBasculaTicketNumber(body.ticket_number)} es de la serie de emergencia: para un ticket sin tablet usa «Ticket nuevo sin tablet».`);
+    }
+    ticketNumber = body.ticket_number;
+  }
 
   const existingQuery = () => pool.query<{
     id: string;
@@ -423,16 +478,16 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
         AND ${numeroTicketSql("t")} = $1::bigint
       ORDER BY t.mobile_updated_at DESC
       LIMIT 1`,
-    [body.ticket_number]
+    [ticketNumber]
   );
 
   let existing = (await existingQuery()).rows[0] ?? null;
   const existedBefore = Boolean(existing);
   if (existing?.weighing_ticket_id || existing?.liquidated_at) {
-    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya fue procesado en el ERP.`);
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(ticketNumber)} ya fue procesado en el ERP.`);
   }
   if (existing?.farmer_id && existing.farmer_id !== body.farmer_id) {
-    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya pertenece a otro agricultor. Revísalo en la lista antes de continuar.`);
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(ticketNumber)} ya pertenece a otro agricultor. Revísalo en la lista antes de continuar.`);
   }
 
   const differsFromCompleteTicket = existing && !existing.en_espera && (
@@ -441,7 +496,7 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
     || Math.abs(Number(existing.qualification) - body.qualification) > 0.001
   );
   if (differsFromCompleteTicket) {
-    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(body.ticket_number)} ya existe con otros pesos. Usa el ticket sincronizado o corrígelo desde BASCULA.`);
+    throw new ApiError(409, `El ticket #${formatBasculaTicketNumber(ticketNumber)} ya existe con otros pesos. Usa el ticket sincronizado o corrígelo desde BASCULA.`);
   }
 
   // Si no existe, o estaba esperando el segundo pesaje, se publica el registro
@@ -449,7 +504,7 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
   if (!existing || existing.en_espera) {
     const now = Date.now();
     const payload = buildManualBasculaPayload({
-      ticketNumber: body.ticket_number,
+      ticketNumber,
       farmerName: farmer.rows[0].full_name,
       bajadaX: body.bajada_x,
       plate: body.plate,
@@ -479,7 +534,7 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
   );
 
   res.status(existedBefore ? 200 : 201).json({
-    ticket: { id: existing.id, numero: formatBasculaTicketNumber(body.ticket_number) },
+    ticket: { id: existing.id, numero: formatBasculaTicketNumber(ticketNumber) },
     reused: existedBefore
   });
 }));
@@ -514,7 +569,8 @@ mobileTicketsRouter.get("/corte", requireAuth, asyncRoute(async (_req, res) => {
            AND ${numeroTicketSql("t")} >= $1::bigint
          ORDER BY ${numeroTicketSql("t")} LIMIT 1) AS fecha_numero,
        (SELECT max(${numeroTicketSql("t")})::text FROM mobile_synced_tickets t
-         WHERE lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal') AS ultimo`,
+         WHERE lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
+           AND ${numeroTicketSql("t")} <= ${SERIE_EMERGENCIA}) AS ultimo`,
     [corte.numero, corte.desde]
   )).rows[0];
   res.json({ desde: corte.desde, numero: corte.numero, fecha_numero: r?.fecha_numero ?? null, ultimo: r?.ultimo != null ? Number(r.ultimo) : null, ocultos: r?.ocultos ?? 0 });
