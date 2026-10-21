@@ -4164,7 +4164,7 @@ export function App() {
     [stock]
   );
   const otherStockRows = useMemo(
-    () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cascara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
+    () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cáscara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
     [stock]
   );
   const criticalSupplies = useMemo(
@@ -8712,7 +8712,7 @@ export function App() {
     return {
       inventoryProductId,
       rawProductId,
-      rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cascara"
+      rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cáscara"
         : rendSub != null ? `cáscara (${cascaraTotalQq.enReal()} QQ × ${(rendSub * 100).toFixed(1)}% al pilarla)` : null,
       esSubproducto: rendSub != null,
       terminadoQq,
@@ -10337,13 +10337,13 @@ export function App() {
       await Promise.all([
         apiPost("/inventory/products", {
           code: "CASCARA-011",
-          name: "Cascara 0.11",
+          name: "Cáscara 0.11",
           product_type: "RAW_MATERIAL",
           unit: "QQ"
         }),
         apiPost("/inventory/products", {
           code: "CASCARA-CORRIENTE",
-          name: "Cascara Corriente",
+          name: "Cáscara Corriente",
           product_type: "RAW_MATERIAL",
           unit: "QQ"
         }),

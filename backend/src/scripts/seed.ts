@@ -22,8 +22,8 @@ async function main() {
     `INSERT INTO products (code, name, product_type, unit)
      VALUES
        ('ARROZ-CASCARA', 'Arroz en Cascara', 'RAW_MATERIAL', 'QQ'),
-       ('CASCARA-011', 'Cascara 0.11', 'RAW_MATERIAL', 'QQ'),
-       ('CASCARA-CORRIENTE', 'Cascara Corriente', 'RAW_MATERIAL', 'QQ'),
+       ('CASCARA-011', 'Cáscara 0.11', 'RAW_MATERIAL', 'QQ'),
+       ('CASCARA-CORRIENTE', 'Cáscara Corriente', 'RAW_MATERIAL', 'QQ'),
        ('ARROZ-BLANCO', 'Arroz blanco pilado', 'FINISHED_GOOD', 'QQ'),
        ('ARROZ-PILADO', 'Arroz Pilado', 'FINISHED_GOOD', 'QQ'),
        ('ARROZ-PILADO-SACO', 'Arroz Pilado', 'FINISHED_GOOD', 'QQ'),
