@@ -9,6 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiOk, apiPatch, apiPost } from "../api";
 import { hoyLocal, money } from "../format";
+import { confirmar } from "./Dialogo";
 
 type Mov = { fecha: string; descripcion: string; monto: number; categoria: string; subcategoria: string | null; categoria_codigo: string; tipo_nomina: string | null };
 type Rubro = { id: string; nombre: string; claves: string[]; categorias: string[]; nomina: string[]; costo_estimado_qq: number; gasto_total: number; costo_real_qq: number; alerta: boolean; detalle: Mov[] };
@@ -158,7 +159,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo agregar", "error"); }
   }
   async function borrarManual(id: string) {
-    if (!window.confirm("¿Quitar este monto del mes?")) return;
+    if (!(await confirmar("¿Quitar este monto del mes?"))) return;
     try { await apiOk(`/resultado-mensual/manual/${id}`, { method: "DELETE" }); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
@@ -185,7 +186,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     if (!mostrar) {
       const nombres = propias.map((c) => `«${c.nombre}»`).join(", ");
       const socios = propias.some((c) => c.aplicable_a === "AMBOS") ? " (tampoco en las cajas de los socios)" : "";
-      if (!window.confirm(`¿Ocultar «${r.nombre}» en Caja?\n\nLa categoría ${nombres} ya no aparecerá en Caja → ➕ Nuevo movimiento${socios}.\nLo ya registrado se conserva y sigue contando en este reporte. Puedes volver a mostrarla cuando quieras.`)) return;
+      if (!(await confirmar(`¿Ocultar «${r.nombre}» en Caja?\n\nLa categoría ${nombres} ya no aparecerá en Caja → ➕ Nuevo movimiento${socios}.\nLo ya registrado se conserva y sigue contando en este reporte. Puedes volver a mostrarla cuando quieras.`))) return;
     }
     const codigos = new Set(propias.map((c) => c.codigo));
     const antes = categoriasCaja;
@@ -200,7 +201,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
     }
   }
   async function desactivarRubro(r: Rubro) {
-    if (!window.confirm(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar». La categoría de Caja se conserva (tiene historial).`)) return;
+    if (!(await confirmar(`¿Quitar el rubro «${r.nombre}» del reporte? Sus egresos pasarán a «Sin clasificar». La categoría de Caja se conserva (tiene historial).`))) return;
     try { await apiPatch(`/resultado-mensual/rubros/${r.id}`, { activo: false }); sincronizarCaja(); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }

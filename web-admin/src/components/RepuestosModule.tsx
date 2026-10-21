@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { apiGet, apiPatch, apiPost } from "../api";
 import { money } from "../format";
+import { confirmar } from "./Dialogo";
 
 export type Repuesto = {
   id: string;
@@ -216,7 +217,7 @@ export function RepuestosModule({ cajaAbiertaId, cajaMixta, puedeEditar, avisar,
   }
 
   async function desactivar(r: Repuesto) {
-    if (!window.confirm(`¿Quitar «${r.nombre}» de la lista? Su historial se conserva.`)) return;
+    if (!(await confirmar(`¿Quitar «${r.nombre}» de la lista? Su historial se conserva.`))) return;
     try { await apiPatch(`/repuestos/${r.id}`, { activo: false }); await cargar(); onCambio?.(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }

@@ -7,6 +7,7 @@ import { apiFetch, apiGet, apiPost } from "../api";
 import { hoyLocal, money } from "../format";
 import { useAutoRefresh } from "./autoRefresh";
 import { ClienteSearchInput } from "../components/ClienteSearchInput";
+import { confirmar } from "../components/Dialogo";
 
 const hoy = () => hoyLocal();
 const qqFmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -97,12 +98,12 @@ export default function PartesModule() {
   const porCobrar = partes.filter((p) => p.estado === "por_cobrar").length;
 
   async function anular(p: Parte) {
-    if (!window.confirm(`¿Anular el parte de ${p.cliente} (${qqFmt(p.qq)} QQ)? Esta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`¿Anular el parte de ${p.cliente} (${qqFmt(p.qq)} QQ)? Esta acción no se puede deshacer.`))) return;
     try { await parteReq(`/campo/partes/${p.id}`, "DELETE"); await refrescar(); notify("Parte anulado"); }
     catch (e) { notify((e as Error).message, "err"); }
   }
   async function descobrar(p: Parte) {
-    if (!window.confirm(`¿Des-cobrar el parte de ${p.cliente}? Se borrará el servicio de cobro generado.`)) return;
+    if (!(await confirmar(`¿Des-cobrar el parte de ${p.cliente}? Se borrará el servicio de cobro generado.`))) return;
     try { await apiPost(`/campo/partes/${p.id}/descobrar`, {}); await refrescar(); notify("Cobro anulado; el parte vuelve a Por cobrar"); }
     catch (e) { notify((e as Error).message, "err"); }
   }

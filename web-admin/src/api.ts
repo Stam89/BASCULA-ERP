@@ -1,4 +1,5 @@
 // En desarrollo (Vite en :5173) apuntamos al backend en :4000.
+import { confirmar } from "./components/Dialogo";
 // En producción la web se sirve desde el propio backend, así que usamos rutas
 // relativas al mismo origen — esto permite entrar desde cualquier PC de la red
 // por http://IP-del-servidor:4000 sin configurar nada.
@@ -156,7 +157,7 @@ async function enviarJsonUnaVez<T>(method: "POST" | "PUT" | "PATCH", path: strin
       // No era un JSON de aviso: sigue el manejo normal del error.
     }
     if (!aviso) break;
-    if (!window.confirm(`⚠️ ${aviso.texto}`)) throw new Error("No se registró: cancelaste el aviso.");
+    if (!(await confirmar(`⚠️ ${aviso.texto}`))) throw new Error("No se registró: cancelaste el aviso.");
     confirmados.push(aviso.code);
     response = await enviar();
   }

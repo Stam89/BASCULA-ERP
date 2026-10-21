@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGetBasculaDevices, apiSetBasculaDeviceActive, type BasculaDevice } from "../api";
+import { confirmar } from "./Dialogo";
 
 type Props = {
   avisar: (mensaje: string, tipo?: "success" | "error" | "warn") => void;
@@ -35,9 +36,7 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
 
   async function cambiar(device: BasculaDevice) {
     const activar = !device.activo;
-    if (!activar && !window.confirm(
-      `¿Bloquear ${device.modelo || "esta tablet"}?\n\nDejara de sincronizar con su credencial individual. Los tickets guardados no se borraran.`
-    )) return;
+    if (!activar && !(await confirmar(`¿Bloquear ${device.modelo || "esta tablet"}?\n\nDejara de sincronizar con su credencial individual. Los tickets guardados no se borraran.`))) return;
     setBusy(device.device_id);
     try {
       const updated = await apiSetBasculaDeviceActive(device.device_id, activar);

@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { apiFetch, apiGet, apiPost } from "../api";
 import { money } from "../format";
+import { confirmar, pedirTexto } from "../components/Dialogo";
 
 const qqFmt = (n: number) => n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 
@@ -80,7 +81,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
   }
 
   async function editar(t: Tarifa) {
-    const val = window.prompt(`Nueva tarifa para ${t.operador} · ${t.activo_nombre} ($ por ${unidadCorta(t.unidad)}):`, String(t.tarifa));
+    const val = (await pedirTexto(`Nueva tarifa para ${t.operador} · ${t.activo_nombre} ($ por ${unidadCorta(t.unidad)}):`, String(t.tarifa)));
     if (val == null) return;
     const tarifa = Number(val);
     if (!(tarifa >= 0)) { onError("Tarifa inválida"); return; }
@@ -89,7 +90,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
   }
 
   async function eliminar(t: Tarifa) {
-    if (!window.confirm(`¿Eliminar la tarifa de ${t.operador} · ${t.activo_nombre}?`)) return;
+    if (!(await confirmar(`¿Eliminar la tarifa de ${t.operador} · ${t.activo_nombre}?`))) return;
     try { await req(`/campo/tarifas-operador/${t.id}`, "DELETE"); await cargar(); onChanged?.("Tarifa eliminada"); }
     catch (e) { onError((e as Error).message); }
   }
@@ -430,11 +431,11 @@ export default function NominaOperadores() {
   }
 
   async function anularPago(p: PagoHist) {
-    const motivo = window.prompt(`Anular el pago de ${money(p.monto)} a ${p.operador}.
+    const motivo = (await pedirTexto(`Anular el pago de ${money(p.monto)} a ${p.operador}.
 
 El dinero vuelve a ${p.cuenta_nombre ?? "la cuenta"}, sus partes quedan sin pagar y los vales que descontó vuelven a pendientes.
 
-Motivo (obligatorio):`, "");
+Motivo (obligatorio):`, ""));
     if (motivo === null) return;
     if (motivo.trim().length < 5) { notify("Escribe el motivo (mínimo 5 letras).", "err"); return; }
     try {

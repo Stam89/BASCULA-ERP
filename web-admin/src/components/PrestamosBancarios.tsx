@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../api";
 import { money } from "../format";
+import { pedirTexto } from "./Dialogo";
 
 type Avisar = (msg: string, tipo: "success" | "error" | "warn") => void;
 type Medio = "EFECTIVO" | "BANCO";
@@ -156,7 +157,7 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
     } catch (e) { avisar((e as Error).message, "error"); } finally { setBusy(false); }
   }
   async function anular(p: Prestamo) {
-    const motivo = window.prompt(`¿Anular el préstamo ${p.banco}? Se borra de la lista${p.desembolso_movement_id ? " y se anula la entrada de su dinero en Caja" : ""}.\n\nEscribe el motivo:`);
+    const motivo = (await pedirTexto(`¿Anular el préstamo ${p.banco}? Se borra de la lista${p.desembolso_movement_id ? " y se anula la entrada de su dinero en Caja" : ""}.\n\nEscribe el motivo:`));
     if (!motivo || motivo.trim().length < 3) return;
     try {
       await apiPost(`/prestamos/${p.id}/anular`, { motivo: motivo.trim() });

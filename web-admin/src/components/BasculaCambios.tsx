@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost } from "../api";
 import { money } from "../format";
+import { confirmar } from "./Dialogo";
 
 // ⚖️ Tickets que la báscula cambió DESPUÉS de ingresarlos (la tablet corrigió el peso o la calificación).
 // El administrador elige: «Aplicar el peso nuevo» (corrige ingreso, lote/secado/pilado, cáscara y liquidación)
@@ -26,9 +27,9 @@ export function BasculaCambios({ esAdmin, avisar, onCambio }: {
   if (items.length === 0) return null;
 
   async function aplicar(c: Cambio) {
-    if (!window.confirm(`Ticket ${c.numero} de ${c.agricultor}: aplicar el peso NUEVO de la báscula.\n\n` +
+    if (!(await confirmar(`Ticket ${c.numero} de ${c.agricultor}: aplicar el peso NUEVO de la báscula.\n\n` +
       `Antes: ${c.neto} kg neto (${c.qq} QQ) → Ahora: ${c.nuevo.neto} kg neto (${c.nuevo.qq} QQ).\n\n` +
-      `Se corrigen el ingreso, el lote/secado/pilado, la cáscara${c.liquidacion ? ` y la liquidación ${c.liquidacion} (y lo que se le debe al agricultor)` : ""}.`)) return;
+      `Se corrigen el ingreso, el lote/secado/pilado, la cáscara${c.liquidacion ? ` y la liquidación ${c.liquidacion} (y lo que se le debe al agricultor)` : ""}.`))) return;
     setBusy(c.id);
     try {
       const r = await apiPost<{ qq_antes: number; qq: number; liquidacion: { numero: string; neto_antes: number; neto: number } | null; avisos: string[] }>(`/tickets/${c.id}/aplicar-cambio`, {});
@@ -40,7 +41,7 @@ export function BasculaCambios({ esAdmin, avisar, onCambio }: {
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo aplicar", "error"); } finally { setBusy(""); }
   }
   async function mantener(c: Cambio) {
-    if (!window.confirm(`Ticket ${c.numero}: mantener lo ingresado (${c.neto} kg neto) y descartar el cambio de la báscula?`)) return;
+    if (!(await confirmar(`Ticket ${c.numero}: mantener lo ingresado (${c.neto} kg neto) y descartar el cambio de la báscula?`))) return;
     setBusy(c.id);
     try { await apiPost(`/tickets/${c.id}/descartar-cambio`, {}); avisar(`Ticket ${c.numero}: se mantiene lo ingresado`, "success"); await cargar(); }
     catch (e) { avisar(e instanceof Error ? e.message : "No se pudo descartar", "error"); } finally { setBusy(""); }

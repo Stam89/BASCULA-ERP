@@ -6225,3 +6225,23 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 }
 /* Báscula: el número de ticket, la fecha y la placa no se parten en dos líneas («#000 / 419»). */
 .basculaTicketsTable td:nth-child(1), .basculaTicketsTable td:nth-child(2), .basculaTicketsTable td:nth-child(4) { white-space: nowrap; }
+/* 💬 Ventana del sistema (confirmar / motivo / aviso) en lugar de las del navegador — auditoría fase 3. */
+.dlg-fondo { position: fixed; inset: 0; z-index: 4000; background: rgba(15, 23, 42, 0.45); display: flex; align-items: center; justify-content: center; padding: 16px; animation: dlgEntra .12s ease-out; }
+.dlg-caja { width: 100%; max-width: 460px; background: #fff; border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 24px 60px rgba(15, 23, 42, 0.25); padding: 18px 20px 16px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.dlg-cabeza { display: flex; gap: 12px; align-items: flex-start; }
+.dlg-icono { flex: 0 0 auto; width: 40px; height: 40px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 19px; background: #e1f5ee; }
+.dlg-caja.is-peligro .dlg-icono { background: #fcebeb; }
+.dlg-textos { min-width: 0; flex: 1; }
+.dlg-textos h3 { margin: 2px 0 0; font-size: 16px; font-weight: 700; color: #0f172a; line-height: 1.35; white-space: pre-line; overflow-wrap: anywhere; }
+.dlg-mensaje { margin: 6px 0 0; font-size: 13.5px; color: #475569; line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
+.dlg-campo { margin: 12px 0 0 52px; display: grid; gap: 4px; }
+.dlg-campo input { width: 100%; min-height: 40px; }
+.dlg-error { color: #b91c1c; font-weight: 600; }
+.dlg-botones { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.dlg-btn { min-height: 40px; padding: 8px 16px; border-radius: 10px; border: 1px solid #cbd5e1; background: #fff; color: #334155; font-weight: 700; cursor: pointer; }
+.dlg-btn:hover { border-color: #64748b; }
+.dlg-btn.is-principal { background: #0f6e56; border-color: #0f6e56; color: #fff; }
+.dlg-btn.is-peligro { background: #a32d2d; border-color: #a32d2d; color: #fff; }
+@keyframes dlgEntra { from { opacity: 0; } to { opacity: 1; } }
+@media (max-width: 560px) { .dlg-campo { margin-left: 0; } .dlg-botones .dlg-btn { flex: 1 1 0; } }
+.dlg-caja.is-aviso .dlg-icono { background: #faeeda; }

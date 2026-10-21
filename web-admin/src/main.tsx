@@ -2,6 +2,7 @@ import "./format";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { DialogoHost } from "./components/Dialogo";
 import "./styles.css";
 import { recargarPorVersionNueva } from "./recargaVersion";
 
@@ -22,5 +23,6 @@ document.addEventListener("wheel", (event) => {
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />
+    <DialogoHost />
   </React.StrictMode>
 );

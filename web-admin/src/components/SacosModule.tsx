@@ -8,6 +8,7 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { apiFetch, apiPatch, apiPost } from "../api";
 import { money } from "../format";
+import { confirmar } from "./Dialogo";
 
 export type Saco = {
   id: string;
@@ -415,7 +416,7 @@ export function SacosCatalogoConfig({
     // Precios: si queda en 0 o cambia 3 veces o más, puede ser un error de tecleo → preguntar.
     if (campo !== "stock_minimo" && antes > 0 && (valor === 0 || valor / antes >= 3 || antes / valor >= 3)) {
       const nombre = campo === "precio_compra_default" ? "precio de compra" : "precio al cliente";
-      if (!window.confirm(`${s.tipo}: el ${nombre} pasa de ${money(antes)} a ${money(valor)}${valor === 0 ? " (queda en 0)" : ""}.\n\n¿Es correcto?`)) {
+      if (!(await confirmar(`${s.tipo}: el ${nombre} pasa de ${money(antes)} a ${money(valor)}${valor === 0 ? " (queda en 0)" : ""}.\n\n¿Es correcto?`))) {
         if (input) input.value = antes.enReal();
         return;
       }
@@ -464,7 +465,7 @@ export function SacosCatalogoConfig({
     const tieneStock = num(s.stock) !== 0;
     const ultimoDeMarca = s.categoria === "MARCA" && !!s.product_id &&
       !sacos.some((x) => x.id !== s.id && x.product_id === s.product_id && x.activo !== false);
-    if (!window.confirm(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${ultimoDeMarca ? `\n\nEs el último saco de la marca ${s.marca}: la marca también se quita (se borra si nunca se usó; si tiene historial se desactiva). Si vuelves a crear un saco con ese nombre, queda enlazada otra vez.` : ""}`)) return;
+    if (!(await confirmar(`¿Eliminar "${s.tipo}"?${tieneStock ? `\n\nTiene ${num(s.stock)} sacos en stock.` : ""}\n\nSi tiene movimientos se DESACTIVA (se conserva su historial); si no, se borra.${ultimoDeMarca ? `\n\nEs el último saco de la marca ${s.marca}: la marca también se quita (se borra si nunca se usó; si tiene historial se desactiva). Si vuelves a crear un saco con ese nombre, queda enlazada otra vez.` : ""}`))) return;
     try {
       const r = await apiFetch(`/sacks/${s.id}`, { method: "DELETE" });
       const data = await r.json().catch(() => ({}));

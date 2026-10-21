@@ -19,6 +19,7 @@ import EstadoResultadosCampo from "./EstadoResultadosCampo";
 import NominaOperadores, { TarifasOperadorCatalogo } from "./NominaOperadores";
 import { BuscadorHistorial } from "../components/BuscadorHistorial";
 import { BuscadorCombo, type OpcionCombo } from "../components/BuscadorCombo";
+import { confirmar, pedirTexto } from "../components/Dialogo";
 
 // Menú propio de la operación Campo (contexto aislado). Para agregar secciones
 // nuevas: añade una entrada aquí y su caso en CampoModule (prop `section`).
@@ -1923,11 +1924,11 @@ function ValesPanel({ onLiquidated, onError }: {
   useEffect(() => { cargar(); }, [cargar]);
 
   async function anularVale(v: Vale) {
-    const motivo = window.prompt(`Anular el vale de ${money(v.entregado)}${v.concepto ? ` (${v.concepto})` : ""}.
+    const motivo = (await pedirTexto(`Anular el vale de ${money(v.entregado)}${v.concepto ? ` (${v.concepto})` : ""}.
 
 El dinero vuelve a ${v.cuenta_nombre} y el vale desaparece de pendientes. Úsalo solo si se entregó mal; si ya gastaron algo, mejor «Liquidar / Rendir».
 
-Motivo (obligatorio):`, "");
+Motivo (obligatorio):`, ""));
     if (motivo === null) return;
     if (motivo.trim().length < 5) { onError("Escribe el motivo (mínimo 5 letras)."); return; }
     try {
@@ -2135,10 +2136,10 @@ function LibroView({ cuentas, version, onReversed, onError }: {
   useEffect(() => { cargar(); }, [cargar, version]);
 
   async function reversar(row: LibroRow) {
-    const motivo = window.prompt(`Motivo de la reversion\n\n${row.concepto || "Movimiento sin concepto"}`)?.trim();
+    const motivo = (await pedirTexto(`Motivo de la reversion\n\n${row.concepto || "Movimiento sin concepto"}`))?.trim();
     if (!motivo) return;
     if (motivo.length < 5) { onError("Escribe un motivo de al menos 5 caracteres"); return; }
-    if (!window.confirm("Se creara un movimiento contrario. El original no se borrara. ¿Continuar?")) return;
+    if (!(await confirmar("Se creara un movimiento contrario. El original no se borrara. ¿Continuar?"))) return;
     try {
       setReversando(row.id);
       await apiPost(`/campo/movimientos/${row.id}/reversar`, { motivo });
@@ -2323,7 +2324,7 @@ function CuentasConsolidadasPanel({ nombreOperacion, onChanged, onNotify, onErro
   const cruzables = rows.filter((r) => r.compensable > 0.005);
   if (!cruzables.length) return null;
   const compensar = async (r: CuentaConsolidada) => {
-    if (!window.confirm(`Se compensarán ${money(r.compensable)} entre lo que ${r.nombre} debe y lo que Transporte le debe. No se moverá efectivo. ¿Continuar?`)) return;
+    if (!(await confirmar(`Se compensarán ${money(r.compensable)} entre lo que ${r.nombre} debe y lo que Transporte le debe. No se moverá efectivo. ¿Continuar?`))) return;
     try {
       setBusy(r.cliente_id);
       const c = await apiPost<ComprobanteCompensacion>(`/campo/cuentas-consolidadas/${r.cliente_id}/compensar`, { fecha: hoy() });
@@ -2441,7 +2442,7 @@ function CxPView({ nombreOperacion, onNotify, onError }: { nombreOperacion: stri
   useEffect(() => { cargar(); }, [cargar]);
 
   async function eliminar(c: CxP) {
-    if (!window.confirm(`¿Eliminar la cuenta por pagar de ${c.acreedor} (${money(c.monto)})?`)) return;
+    if (!(await confirmar(`¿Eliminar la cuenta por pagar de ${c.acreedor} (${money(c.monto)})?`))) return;
     try {
       await apiOk(`/campo/cxp/${c.id}`, { method: "DELETE" });
       await cargar(); onNotify("Cuenta por pagar eliminada");
@@ -3094,8 +3095,8 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
     setFb({ ...fb, monto: "" });
     return "Saldo inicial del banco registrado";
   });
-  const quitar = (url: string, msg: string) => {
-    if (!window.confirm(`¿Quitar este saldo de arranque? (${msg})`)) return;
+  const quitar = async (url: string, msg: string) => {
+    if (!(await confirmar(`¿Quitar este saldo de arranque? (${msg})`))) return;
     void correr(async () => { await apiOk(url, { method: "DELETE" }); return "Saldo de arranque quitado"; });
   };
 
@@ -3128,7 +3129,7 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
           <TablaSaldos vacio="Nadie cargado todavía." filas={(data?.cobrar ?? []).map((x) => ({
             id: x.id, fecha: x.fecha, nombre: x.cliente, detalle: [x.tipo === "cosecha" ? "Cosecha" : "Flete", (x.notas ?? "").replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, "")].filter(Boolean).join(" · "),
             monto: x.valor, movido: x.cobrado, saldo: x.saldo,
-            quitar: x.cobrado <= 0.005 ? () => quitar(`/campo/saldos-iniciales/cobrar/${x.id}`, `${x.cliente} · ${money(x.valor)}`) : undefined
+            quitar: x.cobrado <= 0.005 ? async () => (await quitar(`/campo/saldos-iniciales/cobrar/${x.id}`, `${x.cliente} · ${money(x.valor)}`)) : undefined
           }))} movidoTxt="Cobrado" />
         </>
       )}
@@ -3146,7 +3147,7 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
           <TablaSaldos vacio="Nada cargado todavía." filas={(data?.pagar ?? []).map((x) => ({
             id: x.id, fecha: x.fecha, nombre: x.acreedor, detalle: (x.concepto ?? "").replace(/^Saldo inicial \(deuda de antes del sistema\)( · )?/, ""),
             monto: x.monto, movido: x.pagado, saldo: x.saldo,
-            quitar: x.pagado <= 0.005 ? () => quitar(`/campo/cxp/${x.id}`, `${x.acreedor} · ${money(x.monto)}`) : undefined
+            quitar: x.pagado <= 0.005 ? async () => (await quitar(`/campo/cxp/${x.id}`, `${x.acreedor} · ${money(x.monto)}`)) : undefined
           }))} movidoTxt="Pagado" />
         </>
       )}
@@ -3157,7 +3158,7 @@ function SaldosArranqueCampo({ onChanged, onError }: { onChanged: (msg: string) 
             {data!.banco.map((b) => (
               <div key={b.id}>
                 <span>Al arrancar había en el banco <b>{money(b.monto)}</b> <small className="muted">(al {String(b.fecha).slice(0, 10)})</small></span>
-                <button type="button" className="btnSecondary" disabled={busy} onClick={() => quitar(`/campo/saldos-iniciales/banco/${b.id}`, money(b.monto))}>🗑 Quitar</button>
+                <button type="button" className="btnSecondary" disabled={busy} onClick={async () => (await quitar(`/campo/saldos-iniciales/banco/${b.id}`, money(b.monto)))}>🗑 Quitar</button>
               </div>
             ))}
           </div>
@@ -3613,8 +3614,8 @@ function DocumentosFlotaCampo({ activos, onChanged, onError }: { activos: Activo
     setRenovando(null);
     return `${nombreDoc(d)} de ${d.activo_nombre} renovado hasta el ${fechaDoc(hasta)}`;
   });
-  const quitar = (d: DocumentoFlota) => {
-    if (!window.confirm(`¿Quitar ${nombreDoc(d)} de ${d.activo_nombre}?`)) return;
+  const quitar = async (d: DocumentoFlota) => {
+    if (!(await confirmar(`¿Quitar ${nombreDoc(d)} de ${d.activo_nombre}?`))) return;
     void correr(async () => { await apiOk(`/campo/documentos/${d.id}`, { method: "DELETE" }); return "Documento quitado"; });
   };
   const estado = (d: DocumentoFlota) => d.dias < 0
@@ -3662,7 +3663,7 @@ function DocumentosFlotaCampo({ activos, onChanged, onError }: { activos: Activo
                 ) : (
                   <div className="campoDocs__acc">
                     <button type="button" className="btnSecondary" onClick={() => setRenovando({ id: d.id, vence: "", numero: d.numero ?? "" })}>🔄 Renovar</button>
-                    <button type="button" className="btnGhost" disabled={busy} onClick={() => quitar(d)}>Quitar</button>
+                    <button type="button" className="btnGhost" disabled={busy} onClick={async () => (await quitar(d))}>Quitar</button>
                   </div>
                 )}
               </div>

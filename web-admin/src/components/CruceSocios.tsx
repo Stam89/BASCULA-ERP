@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { apiGet, apiPost } from "../api";
 import { money } from "../format";
+import { confirmar, pedirTexto } from "./Dialogo";
 
 // ⇄ CRUZAR CUENTAS CON UN SOCIO (Por Cobrar / Por Pagar). La Matriz le debe a un socio y ese socio le
 // debe a la Matriz: se compensa lo que se deben SIN mover caja (baja por igual las dos caras de cada
@@ -46,7 +47,7 @@ export function CruceSocios({ accionistas, activoId, avisar, onCambio }: {
     if (!res) return;
     const m = Number(monto);
     if (!(m > 0)) { avisar("Escribe el monto a cruzar", "error"); return; }
-    if (!window.confirm(`¿Cruzar ${money(m)} con ${nombre}?\n\nBaja ${money(m)} de lo que ${nombre} te debe y ${money(m)} de lo que tú le debes. No mueve caja.`)) return;
+    if (!(await confirmar(`¿Cruzar ${money(m)} con ${nombre}?\n\nBaja ${money(m)} de lo que ${nombre} te debe y ${money(m)} de lo que tú le debes. No mueve caja.`))) return;
     setBusy(true);
     try {
       const r = await apiPost<{ monto: number; me_debe_queda: number; le_debo_queda: number }>("/receivable/cruce-socios", { contraparte_id: socio, monto: m, nota: nota.trim() || undefined });
@@ -56,7 +57,7 @@ export function CruceSocios({ accionistas, activoId, avisar, onCambio }: {
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo cruzar", "error"); } finally { setBusy(false); }
   }
   async function anular(c: Cruce) {
-    const motivo = window.prompt(`Anular el cruce de ${money(c.monto)} con ${c.contraparte}. Las deudas vuelven a como estaban.\n\nMotivo:`);
+    const motivo = (await pedirTexto(`Anular el cruce de ${money(c.monto)} con ${c.contraparte}. Las deudas vuelven a como estaban.\n\nMotivo:`));
     if (!motivo || motivo.trim().length < 3) return;
     setBusy(true);
     try {

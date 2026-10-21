@@ -47,6 +47,7 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import * as XLSX from "xlsx";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
+import { confirmar, pedirTexto } from "./components/Dialogo";
 
 // Módulos bajo demanda: si la pestaña quedó con una versión anterior y el
 // archivo ya no existe, se recarga sola en vez de quedar en blanco.
@@ -3034,7 +3035,7 @@ export function App() {
   // Antes de guardar valores que mueven dinero (tarifas, precios, parámetros) se muestra QUÉ cambia
   // —incluido lo editado en otras tarjetas que se guardan juntas— y se marca lo que parece error de
   // tecleo: un valor que queda en 0, o que se multiplica o divide por 3 o más. Sin cambios no guarda.
-  function confirmarCambiosCfg(titulo: string, cambios: CambioCfg[]): boolean {
+  async function confirmarCambiosCfg(titulo: string, cambios: CambioCfg[]): Promise<boolean> {
     const reales = cambios.filter((c) => Math.abs((Number(c.antes) || 0) - (Number(c.despues) || 0)) > 1e-9);
     if (reales.length === 0) { addToast("No hay cambios que guardar", "warn"); return false; }
     const f = (n: number) => (Number(n) || 0).enReal(2, 4);
@@ -3047,7 +3048,7 @@ export function App() {
       return `• ${c.etiqueta}: ${f(a)} → ${f(d)}${aviso}`;
     });
     const sospechoso = lineas.some((l) => l.includes("⚠️"));
-    return window.confirm(`${titulo}\n\n${lineas.join("\n")}\n\n${sospechoso ? "⚠️ Revisa lo marcado: puede ser un error de tecleo.\n\n" : ""}¿Guardar?`);
+    return (await confirmar(`${titulo}\n\n${lineas.join("\n")}\n\n${sospechoso ? "⚠️ Revisa lo marcado: puede ser un error de tecleo.\n\n" : ""}¿Guardar?`));
   }
   // ── Accesos directos a Configuración desde cualquier módulo ──────────────
   // Lleva a la subpestaña de la tarjeta (por su título en CONFIG_INDICE), la
@@ -3560,12 +3561,10 @@ export function App() {
     if (seccion) { try { localStorage.setItem("bascula-erp:campo-seccion", seccion); } catch { /* almacenamiento no disponible */ } }
     irATab("Caja de Campo");
   }
-  function irATab(tab: typeof activeTab) {
+  async function irATab(tab: typeof activeTab) {
     if (tab !== activeTab && activeTab === "Configuracion" && configPendientes.length > 0) {
-      const ok = window.confirm(
-        `Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\n` +
-        "Si sales ahora se descartarán (al volver se recargan los valores del servidor).\n¿Salir de todas formas?"
-      );
+      const ok = (await confirmar(`Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\n` +
+        "Si sales ahora se descartarán (al volver se recargan los valores del servidor).\n¿Salir de todas formas?"));
       if (!ok) return;
     }
     setActiveTab(tab);
@@ -4173,7 +4172,7 @@ export function App() {
   // Candado contra error humano de la báscula: si un mismo secado junta ingresos
   // 0.11 y CORRIENTE se pide confirmar, mostrando los tickets del tipo minoritario
   // (lo normal es que todo el túnel sea de un solo tipo).
-  const confirmarMezclaTipos = (ids: string[], donde: string): boolean => {
+  const confirmarMezclaTipos = async (ids: string[], donde: string): Promise<boolean> => {
     const tipoDe = (e: MateriaPrimaEntry) => {
       const t = (e.rice_type ?? "").toUpperCase();
       return t.includes("0.11") ? "0.11" : t ? "CORRIENTE" : null;
@@ -4184,10 +4183,8 @@ export function App() {
     if (grupos.size < 2) return true;
     const [mayor, menor] = [...grupos.entries()].sort((a, b) => b[1].length - a[1].length);
     const lista = menor[1].map((e) => `  • ${entryLabel(e)} · ${e.farmer_name ?? "—"} · ${Number(e.quintals ?? 0).enReal()} QQ`).join("\n");
-    return window.confirm(
-      `⚠️ ${donde}: estás mezclando arroz ${mayor[0]} (${mayor[1].length} ingreso/s) con ${menor[0]} (${menor[1].length}):\n\n${lista}\n\n` +
-      `¿Es correcto? Si en la báscula se eligió mal el tipo, pulsa Cancelar, quita ese ingreso y corrígelo antes de secar.`
-    );
+    return (await confirmar(`⚠️ ${donde}: estás mezclando arroz ${mayor[0]} (${mayor[1].length} ingreso/s) con ${menor[0]} (${menor[1].length}):\n\n${lista}\n\n` +
+      `¿Es correcto? Si en la báscula se eligió mal el tipo, pulsa Cancelar, quita ese ingreso y corrígelo antes de secar.`));
   };
   // Un ingreso agregado en una secadora no debe aparecer en la otra.
   const idsUsados = new Set(Object.values(dryingSelections).flat());
@@ -4828,9 +4825,11 @@ export function App() {
   }
 
   async function reverseCashMovement(m: CashMovement) {
-    const reason = window.prompt(
-      `Anular ${m.movement === "INCOME" ? "ingreso" : "egreso"} de ${money(Number(m.amount))}?\n\nEscribe el motivo (queda registrado y no se puede deshacer):`
-    );
+    const reason = (await pedirTexto({
+      titulo: `Anular ${m.movement === "INCOME" ? "ingreso" : "egreso"} de ${money(Number(m.amount))}`,
+      mensaje: "Se crea un movimiento contrario; el original queda para auditoría. Escribe el motivo (queda registrado y no se puede deshacer).",
+      confirmar: "Anular", tono: "peligro", minimo: 3, placeholder: "Ej: se registró dos veces"
+    }));
     if (reason === null) return;
     if (reason.trim().length < 3) { addToast("El motivo debe tener al menos 3 caracteres", "error"); return; }
     const registerId = dashboard.current_cash_register?.id;
@@ -5335,7 +5334,7 @@ export function App() {
     const hasta = secadorGuardia?.week_end ?? (() => {
       const d = new Date(`${semanaOperativaKey()}T12:00:00`); d.setDate(d.getDate() + 4); return fechaLocalIso(d);
     })();
-    if (!window.confirm(`¿Asignar a ${workerName} como secador de guardia desde ${desde} hasta ${hasta}?\n\nSe generará la guardianía de lunes a viernes aunque no haya túneles. Los túneles realizados se sumarán automáticamente.`)) return;
+    if (!(await confirmar(`¿Asignar a ${workerName} como secador de guardia desde ${desde} hasta ${hasta}?\n\nSe generará la guardianía de lunes a viernes aunque no haya túneles. Los túneles realizados se sumarán automáticamente.`))) return;
     setSecadorGuardiaBusy(true);
     try {
       const data = await apiPut<SecadorGuardiaSemana>("/labor/secador-guardia", {
@@ -5366,11 +5365,11 @@ export function App() {
   }
   async function savePackagingRates() {
     const a = packagingRatesPristine.current, d = packagingRatesForm;
-    if (!confirmarCambiosCfg("Tarifas de empaque (lo que la Matriz cobra por bulto):", [
+    if (!(await confirmarCambiosCfg("Tarifas de empaque (lo que la Matriz cobra por bulto):", [
       { etiqueta: "Saco de 10 lb ($)", antes: a.precio_saco_10lb, despues: Number(d.precio_saco_10lb) || 0 },
       { etiqueta: "Saco de 25 lb ($)", antes: a.precio_saco_25lb, despues: Number(d.precio_saco_25lb) || 0 },
       { etiqueta: "Saco de 50 lb ($)", antes: a.precio_saco_50lb, despues: Number(d.precio_saco_50lb) || 0 }
-    ])) return;
+    ]))) return;
     const saved = await apiPut<PackagingRates>("/settings/packaging-rates", packagingRatesForm);
     const norm = {
       precio_saco_10lb: Number(saved.precio_saco_10lb) || 0,
@@ -5423,7 +5422,7 @@ export function App() {
     const mismoCodigo = adminAccionistas.find((a) => a.code.trim().toUpperCase() === code);
     if (mismoCodigo) { addToast(`El código ${code} ya es de «${mismoCodigo.name}»`, "error"); return; }
     const mismoNombre = adminAccionistas.find((a) => a.name.trim().toUpperCase() === name.toUpperCase());
-    if (mismoNombre && !window.confirm(`Ya existe un accionista llamado «${mismoNombre.name}» (código ${mismoNombre.code}).\n\n¿Crear otro con el mismo nombre?`)) return;
+    if (mismoNombre && !(await confirmar(`Ya existe un accionista llamado «${mismoNombre.name}» (código ${mismoNombre.code}).\n\n¿Crear otro con el mismo nombre?`))) return;
     await apiPost("/auth/accionistas", { name, code });
     setNewAccionistaForm({ name: "", code: "" });
     addToast("Accionista creado", "success");
@@ -5479,7 +5478,7 @@ export function App() {
     const cambios = (Object.keys(ETIQUETAS_TARIFAS) as Array<keyof LaborRates>)
       .map((k) => ({ etiqueta: ETIQUETAS_TARIFAS[k] ?? k, antes: Number(antes[k]) || 0, despues: Number(laborRatesForm[k]) || 0 }));
     // Nómina, Combustible y Secado como servicio comparten este guardado: el aviso lista TODO lo que cambia.
-    if (!confirmarCambiosCfg("Se guardarán estas tarifas:", cambios)) return;
+    if (!(await confirmarCambiosCfg("Se guardarán estas tarifas:", cambios))) return;
     const n = cambios.filter((c) => Math.abs(c.antes - c.despues) > 1e-9).length;
     const saved = coerceLaborRates(await apiPut<Record<string, unknown>>("/labor/rates", { ...laborRatesForm, accionista_id: activeAccionistaId }));
     laborRatesPristine.current = saved; // nueva referencia "limpia": apaga el aviso de sin guardar
@@ -5576,7 +5575,7 @@ export function App() {
   async function guardarBajadaDesde() {
     const numero = Math.trunc(Number(bajadaDesde));
     if (!(numero >= 1)) return;
-    if (!window.confirm(`¿Contar la bajada de carro desde el ticket #${numero}?\n\nLos tickets anteriores a ese número no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`)) return;
+    if (!(await confirmar(`¿Contar la bajada de carro desde el ticket #${numero}?\n\nLos tickets anteriores a ese número no se pagan por aquí (se asumen pagados por fuera). Lo ya pagado no cambia.`))) return;
     try {
       await apiPut("/cuadrilla/bajadas/desde", { numero });
       addToast(`Bajada de carro: se cuenta desde el ticket #${numero}`, "success");
@@ -5732,15 +5731,15 @@ export function App() {
     if (tarifaForm.editingId) {
       const orig = servicioTarifas.find((t) => t.id === tarifaForm.editingId);
       if (orig && Math.abs(Number(orig.precio_por_qq) - precio) > 1e-9
-        && !confirmarCambiosCfg("Editar tarifa (cambia el precio desde su fecha de vigencia):", [{ etiqueta, antes: Number(orig.precio_por_qq), despues: precio }])) return;
+        && !(await confirmarCambiosCfg("Editar tarifa (cambia el precio desde su fecha de vigencia):", [{ etiqueta, antes: Number(orig.precio_por_qq), despues: precio }]))) return;
     } else {
       const mismaFecha = mismas.find((t) => String(t.fecha_vigencia ?? "").slice(0, 10) === fechaNueva);
-      if (mismaFecha && !window.confirm(`${ent.nombre} ya tiene una tarifa de ${tarifaForm.servicio} desde ese mismo día (${money(Number(mismaFecha.precio_por_qq))}/QQ).\n\nSi guardas, quedarán dos y se usará la más nueva. Lo normal es EDITAR la que ya existe.\n\n¿Guardar otra igual?`)) return;
+      if (mismaFecha && !(await confirmar(`${ent.nombre} ya tiene una tarifa de ${tarifaForm.servicio} desde ese mismo día (${money(Number(mismaFecha.precio_por_qq))}/QQ).\n\nSi guardas, quedarán dos y se usará la más nueva. Lo normal es EDITAR la que ya existe.\n\n¿Guardar otra igual?`))) return;
       const anterior = mismas
         .filter((t) => String(t.fecha_vigencia ?? "").slice(0, 10) < fechaNueva)
         .sort((x, y) => String(y.fecha_vigencia).localeCompare(String(x.fecha_vigencia)))[0];
-      if (!mismaFecha && anterior && !confirmarCambiosCfg(`Nueva tarifa desde el ${fechaNueva.split("-").reverse().join("/")} (la anterior sigue para fechas previas):`,
-        [{ etiqueta, antes: Number(anterior.precio_por_qq), despues: precio }])) return;
+      if (!mismaFecha && anterior && !(await confirmarCambiosCfg(`Nueva tarifa desde el ${fechaNueva.split("-").reverse().join("/")} (la anterior sigue para fechas previas):`,
+        [{ etiqueta, antes: Number(anterior.precio_por_qq), despues: precio }]))) return;
     }
     const payload = {
       cliente_tipo: tarifaForm.entidad.tipo,
@@ -5799,7 +5798,7 @@ export function App() {
   };
   // Editar (renombrar) una categoría/concepto de caja. Backend: PATCH nombre.
   const editCashCategory = async (c: CashCat) => {
-    const nuevo = window.prompt(`Nuevo nombre para el concepto "${c.nombre}":`, c.nombre)?.trim();
+    const nuevo = (await pedirTexto(`Nuevo nombre para el concepto "${c.nombre}":`, c.nombre))?.trim();
     if (!nuevo || nuevo === c.nombre) return;
     try {
       await apiOk(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nombre: nuevo }) });
@@ -5810,7 +5809,7 @@ export function App() {
   // Eliminación FÍSICA de una categoría de caja. El backend bloquea si ya tiene
   // movimientos asociados (integridad referencial) → usar Desactivar.
   const deleteCashCategory = async (c: CashCat) => {
-    if (!window.confirm(`¿Está seguro de eliminar la categoría "${c.nombre}" permanentemente? Esta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`¿Está seguro de eliminar la categoría "${c.nombre}" permanentemente? Esta acción no se puede deshacer.`))) return;
     try {
       const r = await apiFetch(`/cash/categories/${c.id}`, { method: "DELETE" });
       if (!r.ok) {
@@ -6136,7 +6135,7 @@ export function App() {
   }
 
   async function cancelBatch(batchId: string) {
-    if (!window.confirm("¿Cancelar este lote? Se devuelve el producto a bodega y se anula la cuenta por pagar.")) return;
+    if (!(await confirmar("¿Cancelar este lote? Se devuelve el producto a bodega y se anula la cuenta por pagar."))) return;
     await apiPost(`/selection/batches/${batchId}/cancel`, {});
     setSelectionView("historial");
     addToast("Lote cancelado y producto devuelto a bodega", "success");
@@ -6161,10 +6160,10 @@ export function App() {
     e.preventDefault();
     const sel = Number(selectionRatesForm.seleccion_rate), env = Number(selectionRatesForm.envejecimiento_rate);
     if (!(sel >= 0) || !(env >= 0)) { addToast("Las tarifas deben ser números válidos", "error"); return; }
-    if (!confirmarCambiosCfg("Tarifas de procesos:", [
+    if (!(await confirmarCambiosCfg("Tarifas de procesos:", [
       { etiqueta: "Selección ($ por QQ)", antes: Number(selectionRates.seleccion_rate) || 0, despues: sel },
       { etiqueta: "Envejecido ($ por QQ)", antes: Number(selectionRates.envejecimiento_rate) || 0, despues: env }
-    ])) return;
+    ]))) return;
     await apiPut("/selection/rates", { seleccion_rate: sel, envejecimiento_rate: env });
     addToast("Tarifas de procesos guardadas", "success");
     await refreshSelection();
@@ -6384,7 +6383,7 @@ export function App() {
     const nombreNuevo = newActivityForm.name.trim().toUpperCase();
     const repetida = cuadActivities.find((x) => x.is_active !== false && x.name.trim().toUpperCase() === nombreNuevo);
     if (repetida) { addToast(`Ya existe la actividad «${repetida.name}»: cambia su tarifa en la lista`, "error"); return; }
-    if (rate === 0 && !window.confirm(`«${newActivityForm.name.trim()}» quedará con tarifa $0 (no se pagará nada por ella). ¿Crearla así?`)) return;
+    if (rate === 0 && !(await confirmar(`«${newActivityForm.name.trim()}» quedará con tarifa $0 (no se pagará nada por ella). ¿Crearla así?`))) return;
     await apiPost("/cuadrilla/activities", { name: newActivityForm.name.trim(), unit_rate: rate, accionista_id: activeAccionistaId });
     setNewActivityForm({ name: "", unit_rate: "" });
     addToast("Actividad guardada", "success");
@@ -6401,7 +6400,7 @@ export function App() {
   // los registros históricos conservan su tarifa; solo deja de aparecer aquí y
   // en «Nómina → Cuadrilla».
   async function inactivarActividad(id: string, name: string) {
-    if (!window.confirm(`¿Ocultar la actividad "${name}"?\n\nDejará de aparecer al registrar cuadrilla. Los registros ya hechos no cambian.`)) return;
+    if (!(await confirmar(`¿Ocultar la actividad "${name}"?\n\nDejará de aparecer al registrar cuadrilla. Los registros ya hechos no cambian.`))) return;
     await apiPut(`/cuadrilla/activities/${id}`, { is_active: false, accionista_id: activeAccionistaId });
     addToast(`Actividad "${name}" ocultada`, "success");
     await refreshCuadrilla();
@@ -6767,11 +6766,11 @@ export function App() {
   async function registerAdvance(row: WorkerSummary) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para dar anticipos", "error"); return; }
-    const amtStr = window.prompt(`Anticipo a ${row.worker_name} (${row.worker_role.toLowerCase()}). Monto $:`, "");
+    const amtStr = (await pedirTexto(`Anticipo a ${row.worker_name} (${row.worker_role.toLowerCase()}). Monto $:`, ""));
     if (amtStr === null) return;
     const amount = Number(amtStr);
     if (!amount || amount <= 0) { addToast("Monto inválido", "error"); return; }
-    const desc = window.prompt("Descripción (opcional):", "Anticipo") ?? undefined;
+    const desc = (await pedirTexto("Descripción (opcional):", "Anticipo")) ?? undefined;
     try {
       await apiPost("/labor/advances", {
         worker_role: row.worker_role,
@@ -6790,11 +6789,11 @@ export function App() {
 
   // Anticipo a una cuadrilla (módulo aparte): registra un adelanto que baja su neto.
   async function registerCuadrillaAdvance(workerName: string) {
-    const amtStr = window.prompt(`Anticipo a la cuadrilla ${workerName}. Monto $:`, "");
+    const amtStr = (await pedirTexto(`Anticipo a la cuadrilla ${workerName}. Monto $:`, ""));
     if (amtStr === null) return;
     const amount = Number(amtStr);
     if (!amount || amount <= 0) { addToast("Monto inválido", "error"); return; }
-    const concept = window.prompt("Concepto (opcional):", "Anticipo") ?? undefined;
+    const concept = (await pedirTexto("Concepto (opcional):", "Anticipo")) ?? undefined;
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("Abre una caja para entregar el anticipo (el dinero sale de la caja)", "error"); return; }
     try {
@@ -6858,7 +6857,7 @@ export function App() {
     apiGet<Array<AdminStaff & { pagos: number }>>("/admin-payroll/staff/bajas").then(setAdminBajas).catch(() => setAdminBajas([]));
   }
   async function reactivarAdminStaff(st: AdminStaff) {
-    if (!window.confirm(`¿Reactivar a ${st.worker_name}?\n\nVuelve a la nómina administrativa y a los pagos pendientes, con su historial intacto.`)) return;
+    if (!(await confirmar(`¿Reactivar a ${st.worker_name}?\n\nVuelve a la nómina administrativa y a los pagos pendientes, con su historial intacto.`))) return;
     try {
       await apiPost(`/admin-payroll/staff/${st.id}/reactivar`, {});
       addToast(`${st.worker_name} reactivado`, "success");
@@ -6901,7 +6900,7 @@ export function App() {
       salario_fin_mes: st.salario_fin_mes == null ? "" : String(st.salario_fin_mes) });
   }
   async function removeAdminStaff(st: AdminStaff) {
-    if (!window.confirm(`¿Dar de baja a ${st.worker_name}?\n\nDeja de aparecer en la nómina administrativa y en los pagos pendientes. Su historial de sueldos ya pagados se CONSERVA.`)) return;
+    if (!(await confirmar(`¿Dar de baja a ${st.worker_name}?\n\nDeja de aparecer en la nómina administrativa y en los pagos pendientes. Su historial de sueldos ya pagados se CONSERVA.`))) return;
     // Optimista: quítalo de la lista al instante para que desaparezca sin refrescar.
     setAdminStaff((prev) => prev.filter((e) => e.id !== st.id));
     try {
@@ -7228,10 +7227,10 @@ export function App() {
     const humedad = Number(settingsForm.humedad_base_pct ?? 0);
     if (!(tarifa >= 0)) throw new Error("La tarifa de pilado no es válida");
     if (!(humedad >= 0 && humedad < 100)) throw new Error("La humedad base debe estar entre 0 y 100");
-    if (!confirmarCambiosCfg("Parámetros de planta:", [
+    if (!(await confirmarCambiosCfg("Parámetros de planta:", [
       { etiqueta: "Tarifa de pilado ($ por QQ)", antes: Number(appSettings.tarifa_pilado_qq ?? 0), despues: tarifa },
       { etiqueta: "Humedad base (%)", antes: Number(appSettings.humedad_base_pct ?? 0), despues: humedad }
-    ])) return;
+    ]))) return;
     const saved = await apiPut<AppSettings>("/settings/plant-params", {
       accionista_id: activeAccionistaId,
       tarifa_pilado_qq: tarifa,
@@ -7305,7 +7304,7 @@ export function App() {
     const actualNum = Number(actual?.next_number ?? 0);
     const mismoPrefijo = !seqModal.prefijo.trim() || seqModal.prefijo.trim() === (actual?.prefijo ?? "").trim();
     if (mismoPrefijo && actualNum > 0 && next < actualNum
-      && !window.confirm(`El próximo número iba en ${actualNum} y lo bajas a ${next}.\n\nLas guías del ${next} al ${actualNum - 1} ya pueden existir: se repetirían números. Solo hazlo si estás corrigiendo un error.\n\n¿Continuar?`)) return;
+      && !(await confirmar(`El próximo número iba en ${actualNum} y lo bajas a ${next}.\n\nLas guías del ${next} al ${actualNum - 1} ya pueden existir: se repetirían números. Solo hazlo si estás corrigiendo un error.\n\n¿Continuar?`))) return;
     await apiPut("/settings/sequences/guia", { prefijo: seqModal.prefijo.trim() || undefined, next_number: next });
     setSeqModal(null);
     addToast("Numeración de guías actualizada ✓", "success");
@@ -7733,7 +7732,7 @@ export function App() {
 
   // 🗑️ Quitar un ticket de los pendientes (no lo borra) / ↩️ restaurarlo.
   async function quitarTicketBascula(t: BasculaTicket) {
-    const motivo = window.prompt(`Quitar el ticket #${t.numero ?? ""} de ${t.farmer_name ?? "—"} de los pendientes.\n(No se borra: queda en «Todos» y se puede restaurar.)\n\n¿Por qué?`, "Se borró en la app de báscula");
+    const motivo = (await pedirTexto(`Quitar el ticket #${t.numero ?? ""} de ${t.farmer_name ?? "—"} de los pendientes.\n(No se borra: queda en «Todos» y se puede restaurar.)\n\n¿Por qué?`, "Se borró en la app de báscula"));
     if (!motivo || motivo.trim().length < 3) return;
     try {
       await apiPost(`/tickets/${t.id}/quitar`, { motivo: motivo.trim() });
@@ -7777,10 +7776,8 @@ export function App() {
     const destino = accionistas.find((a) => a.id === accionistaId)?.name ?? "";
     const origen = entry.accionista_name ?? "sin asignar";
     const etiqueta = entry.numero_bascula ? `#${entry.numero_bascula}` : entry.ticket_number;
-    const ok = window.confirm(
-      `¿Pasar el ingreso ${etiqueta} (${entry.farmer_name ?? "sin agricultor"}, ${Number(entry.quintals ?? 0).enReal()} QQ) ` +
-      `de ${origen} a ${destino}?\n\nSe mueve también su cáscara en el inventario.`
-    );
+    const ok = (await confirmar(`¿Pasar el ingreso ${etiqueta} (${entry.farmer_name ?? "sin agricultor"}, ${Number(entry.quintals ?? 0).enReal()} QQ) ` +
+      `de ${origen} a ${destino}?\n\nSe mueve también su cáscara en el inventario.`));
     if (!ok) return;
     await apiPut(`/weighing-tickets/${entry.id}/accionista`, { accionista_id: accionistaId });
     addToast(`Ingreso ${etiqueta} corregido: ahora es de ${destino}`, "success");
@@ -7871,9 +7868,7 @@ export function App() {
         const oficial = farmers.find((f) => f.id === linkFarmerId);
         const oficialName = (oficial?.full_name || "").trim();
         if (oficialName && oficialName.toLowerCase() !== externalName.toLowerCase()) {
-          guardarAlias = window.confirm(
-            `¿Deseas guardar “${externalName}” como un alias de “${oficialName}” para vincular automáticamente los próximos ingresos con ese nombre?`
-          );
+          guardarAlias = (await confirmar(`¿Deseas guardar “${externalName}” como un alias de “${oficialName}” para vincular automáticamente los próximos ingresos con ese nombre?`));
         }
       }
       const body = linkFarmerId === "__new__"
@@ -8099,7 +8094,7 @@ export function App() {
         ...pagos.map((p) => `• Pagó a ${p.nombre}: ${money(p.amount)}`),
         ...(cruzar > 0 ? [`• Se descuenta de lo que le debes a ${otro}: ${money(cruzar)}`] : [])
       ];
-      if (!window.confirm(`${otro} recibió ${money(total)} de este cliente. Con esa plata:\n\n${lineas.join("\n")}\n\n${totalPagos > 0 ? `Total pagado: ${money(totalPagos)}. ` : ""}¿Registrar todo junto?`)) return;
+      if (!(await confirmar(`${otro} recibió ${money(total)} de este cliente. Con esa plata:\n\n${lineas.join("\n")}\n\n${totalPagos > 0 ? `Total pagado: ${money(totalPagos)}. ` : ""}¿Registrar todo junto?`))) return;
       const rc = await apiPost<{ cobrado: number; pagado: number; cruzado: number; receptor: string; el_receptor_te_debe: number; tu_le_debes: number; se_puede_cruzar: number }>(
         "/receivable/cobro-y-pagos-por-socio",
         { receivable_ids: items.map((it) => it.id), amount: total, recibido_por: recibidoPor, medio_pago: medioOperacion,
@@ -8377,7 +8372,7 @@ export function App() {
     const prod = products.find((x) => x.id === productId);
     const antes = Number(prod?.price_per_pound ?? 0);
     const sospechoso = antes > 0 && (price === 0 || price / antes >= 3 || antes / price >= 3);
-    if (sospechoso && !confirmarCambiosCfg("Tarifa por libra:", [{ etiqueta: `${prod?.name ?? "Producto"} ($ por libra)`, antes, despues: price }])) {
+    if (sospechoso && !(await confirmarCambiosCfg("Tarifa por libra:", [{ etiqueta: `${prod?.name ?? "Producto"} ($ por libra)`, antes, despues: price }]))) {
       if (campo) campo.value = antes ? String(antes) : "";
       return;
     }
@@ -9234,7 +9229,7 @@ export function App() {
   // bloquea si la categoría ya tiene historiales (o secciones hijas, para un área).
   async function deleteMaintCat(cat: MaintCat) {
     if (!cat.id) return;
-    if (!window.confirm(`¿Está seguro de eliminar "${cat.nombre}" permanentemente? Esta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`¿Está seguro de eliminar "${cat.nombre}" permanentemente? Esta acción no se puede deshacer.`))) return;
     try {
       const r = await apiFetch(`/equipment/categories/${cat.id}`, { method: "DELETE" });
       if (!r.ok) {
@@ -9783,12 +9778,10 @@ export function App() {
 
     // El traspaso mueve plata: crea deuda entre accionistas. No se hace de un
     // clic sin avisar qué implica.
-    const ok = window.confirm(
-      `¿Pasar el lote ${lot?.lot_code ?? ""} de ${origen} a ${destino}?\n\n` +
+    const ok = (await confirmar(`¿Pasar el lote ${lot?.lot_code ?? ""} de ${origen} a ${destino}?\n\n` +
       `Se mueve el lote con su inventario, su proceso y sus liquidaciones.\n\n` +
       `Lo que ${origen} ya le pagó al agricultor queda como cuenta POR COBRAR suya, y como cuenta POR PAGAR de ${destino}. ` +
-      `Lo que aún se le deba al agricultor lo paga ${destino} de ahora en adelante.`
-    );
+      `Lo que aún se le deba al agricultor lo paga ${destino} de ahora en adelante.`));
     if (!ok) return;
 
     const res = await apiPut<LotTransferResult>(`/lots/${lotId}/accionista`, {
@@ -10142,7 +10135,7 @@ export function App() {
 
   // Anula un egreso A CRÉDITO (cancela su Cuenta por Pagar; no toca la caja).
   async function anularEgresoCredito(c: CajaCredito) {
-    const reason = window.prompt(`Anular el egreso a crédito de ${money(Number(c.amount))} a ${c.proveedor_nombre ?? "proveedor"}.\nMotivo:`);
+    const reason = (await pedirTexto(`Anular el egreso a crédito de ${money(Number(c.amount))} a ${c.proveedor_nombre ?? "proveedor"}.\nMotivo:`));
     if (!reason || reason.trim().length < 3) return;
     await apiPost(`/cash/creditos/${c.id}/anular`, { reason: reason.trim() });
     addToast("Egreso a crédito anulado: su Cuenta por Pagar quedó cancelada", "success");
@@ -10222,11 +10215,9 @@ export function App() {
   // Anular una liquidación (o el lote completo) con REVERSA total (solo admin).
   // Confirma y pide el MOTIVO (queda registrado). Revierte por cada liquidación.
   async function anularLiquidacion(b: LiqBatch) {
-    const motivo = window.prompt(
-      `Anular la liquidación de ${b.farmer_name} (neto ${money(b.net_total)}).\n\n` +
+    const motivo = (await pedirTexto(`Anular la liquidación de ${b.farmer_name} (neto ${money(b.net_total)}).\n\n` +
       "Esto revierte los pagos de fomento, la deuda inter-socios y la cuenta por pagar. " +
-      "NO se puede si ya hay pagos al agricultor.\n\nEscribe el MOTIVO (obligatorio, queda registrado):"
-    );
+      "NO se puede si ya hay pagos al agricultor.\n\nEscribe el MOTIVO (obligatorio, queda registrado):"));
     if (motivo === null) return;                 // cancelado
     if (motivo.trim().length < 3) { addToast("El motivo es obligatorio (mín. 3 caracteres).", "error"); return; }
     let anuladas = 0;
@@ -10243,7 +10234,7 @@ export function App() {
   // Eliminar DEFINITIVAMENTE una liquidación anulada (limpieza; el backend exige
   // estado CANCELLED y no re-dispara reversas). Solo admin, con confirmación.
   async function eliminarLiquidacion(b: LiqBatch) {
-    if (!window.confirm(`Eliminar definitivamente la liquidación ANULADA de ${b.farmer_name}?\n\nEsta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`Eliminar definitivamente la liquidación ANULADA de ${b.farmer_name}?\n\nEsta acción no se puede deshacer.`))) return;
     let borradas = 0;
     for (const id of b.liquidation_ids) {
       await apiOk(`/liquidations/${id}`, { method: "DELETE" });
@@ -10642,12 +10633,10 @@ export function App() {
   // deshace botada, cobro del servicio y, si estaba cerrado, el combustible del
   // motor; tiene frenos si algo ya se pagó o el arroz entró a Producción.
   async function reabrirTunel(report: DryingTunnelReport) {
-    const motivo = window.prompt(
-      `↩ Reabrir el Túnel ${report.tunnel_number} (vuelve a «en proceso»).\n\n` +
+    const motivo = (await pedirTexto(`↩ Reabrir el Túnel ${report.tunnel_number} (vuelve a «en proceso»).\n\n` +
       "Se quitan su hora final, la botada de la cuadrilla y el cobro del servicio de secado; " +
       "si el combustible del motor ya estaba cerrado, se deshace y se vuelve a pedir al finalizar.\n\n" +
-      "Escribe el MOTIVO (queda registrado):"
-    );
+      "Escribe el MOTIVO (queda registrado):"));
     if (motivo == null) return;
     if (motivo.trim().length < 5) { addToast("Escribe un motivo de al menos 5 letras.", "error"); return; }
     const r = await apiPost<{ tunnel_number: number; lotes: string; combustible_revertido: { costo_total: number; tuneles: number } | null; cobro_anulado: boolean }>(
@@ -10782,7 +10771,7 @@ export function App() {
       setSecadorSemana(secadorMotor.toUpperCase());
     }
     for (const secadora of conIngresos) {
-      if (!confirmarMezclaTipos(seleccionFinal(secadora), secadora)) return;
+      if (!(await confirmarMezclaTipos(seleccionFinal(secadora), secadora))) return;
     }
     for (const secadora of conIngresos) {
       const t = tunelDeSecadora(secadora);
@@ -10952,7 +10941,7 @@ export function App() {
       // ── Crear un tendal nuevo ──
       const ids = seleccionDe("TENDAL");
       if (ids.length === 0) { addToast("Agrega al menos un ingreso de materia prima al lote", "error"); return; }
-      if (!confirmarMezclaTipos(ids, "Tendal")) return;
+      if (!(await confirmarMezclaTipos(ids, "Tendal"))) return;
       await apiPost("/process-flow/drying-tendal", {
         entry_ids: ids,
         lot_code: tendalForm.lot_code.trim() || undefined,
@@ -11013,7 +11002,7 @@ export function App() {
   // ⏳ Finalizar sin combustible: libera los túneles; el combustible queda pendiente para cuando llegue el informe.
   async function finalizarSinCombustible() {
     if (sinCombustibleBusy) return;
-    if (!window.confirm(`¿Finalizar el secado del Motor ${motorActivo} SIN el combustible?\n\nLos túneles quedan libres para llenarlos otra vez. El combustible queda PENDIENTE: lo registras cuando llegue el informe (aviso «⛽ Combustible pendiente» en Secadoras).`)) return;
+    if (!(await confirmar(`¿Finalizar el secado del Motor ${motorActivo} SIN el combustible?\n\nLos túneles quedan libres para llenarlos otra vez. El combustible queda PENDIENTE: lo registras cuando llegue el informe (aviso «⛽ Combustible pendiente» en Secadoras).`))) return;
     setSinCombustibleBusy(true);
     try {
       const r = await apiPost<{ finalized: number; tuneles: number[]; total_quintals: number }>(`/process-flow/drying/motor/${motorActivo}/finalizar-sin-combustible`, { created_by: authUser?.id });
@@ -11380,7 +11369,7 @@ export function App() {
       addToast("Escribe fecha, hora de inicio o secador para aplicar a la corrida", "error");
       return;
     }
-    if (!window.confirm(`¿Aplicar esta fecha de llenado, hora de inicio y secador a TODOS los túneles activos del Motor ${motor}?`)) return;
+    if (!(await confirmar(`¿Aplicar esta fecha de llenado, hora de inicio y secador a TODOS los túneles activos del Motor ${motor}?`))) return;
     const res = await apiPost<{ sincronizados: number; cuadrilla_refechada: number }>(
       `/process-flow/drying/motor/${motor}/sync-run`,
       { filled_at: filled, dry_start_at: inicio, operator_name: secador || undefined }
@@ -11642,17 +11631,15 @@ export function App() {
   // Auto-captura: si hay un QQ escrito sin añadir, lo incorpora a las entradas y
   // limpia los inputs. Devuelve la lista EFECTIVA (con el renglón ya incluido)
   // para usarla en el mismo tick, sin esperar al re-render del estado.
-  function confirmarTulasEnCero(): boolean {
-    return window.confirm(
-      "⚠️ Ha colocado 0 tulas.\n\nEl arroz pilado sí se registrará, pero esta línea no generará pago por tulas al estibador.\n\n¿Desea continuar?"
-    );
+  async function confirmarTulasEnCero(): Promise<boolean> {
+    return (await confirmar("⚠️ Ha colocado 0 tulas.\n\nEl arroz pilado sí se registrará, pero esta línea no generará pago por tulas al estibador.\n\n¿Desea continuar?"));
   }
 
-  function flushPendingPiladoEntry(): MillingPiladoEntry[] | null {
+  async function flushPendingPiladoEntry(): Promise<MillingPiladoEntry[] | null> {
     const base = Array.isArray(millingPiladoEntries) ? millingPiladoEntries : [];
     const pending = buildPendingPiladoEntry();
     if (!pending) return base;
-    if (pending.destino === "TULA" && pending.tulas === 0 && !confirmarTulasEnCero()) return null;
+    if (pending.destino === "TULA" && pending.tulas === 0 && !(await confirmarTulasEnCero())) return null;
     const eff = [...base, pending];
     setMillingPiladoEntries(eff);
     setMillingPiladoQq("");
@@ -11662,7 +11649,7 @@ export function App() {
     return eff;
   }
 
-  function addMillingPiladoEntry() {
+  async function addMillingPiladoEntry() {
     const quantityQq = Number(millingPiladoQq);
     if (!Number.isFinite(quantityQq) || quantityQq <= 0) {
       setMessage("Ingrese una cantidad valida para el pilado");
@@ -11683,7 +11670,7 @@ export function App() {
         setMessage("La cantidad de tulas no puede ser negativa");
         return;
       }
-      if (count === 0 && !confirmarTulasEnCero()) return;
+      if (count === 0 && !(await confirmarTulasEnCero())) return;
       presentation = "🧺 Tula";
       tulas = count;
     } else {
@@ -11736,7 +11723,7 @@ export function App() {
       return;
     }
     // Auto-captura del QQ escrito sin añadir, para no perderlo en el borrador.
-    const effEntries = flushPendingPiladoEntry();
+    const effEntries = (await flushPendingPiladoEntry());
     if (!effEntries) return;
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
       report: { ...millingReport, juntos: productionDryingExtras },
@@ -11763,7 +11750,7 @@ export function App() {
   // borrador, el lote se LIBERA y vuelve a aparecer en el selector de producción
   // (se recargan los borradores y los reportes → has_draft se recalcula).
   async function descartarBorradorProduccion(d: MillingDraft) {
-    if (!window.confirm(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra solo el borrador; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra solo el borrador; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`))) return;
     try {
       const r = await apiFetch(`/processing-batches/drafts/${d.drying_report_id}`, { method: "DELETE" });
       if (!r.ok) throw new Error("No se pudo descartar el proceso guardado");
@@ -11934,7 +11921,7 @@ export function App() {
 
   // Elimina (descarta) un activo fijo/equipo del catálogo.
   async function eliminarActivoFijo(item: ActivoFijo) {
-    if (!confirm(`¿Descartar "${sanitizeEquipName(item.nombre)}" del catálogo de activos fijos?\n\nDejará de contar en el balance. Esta acción no se puede deshacer.`)) return;
+    if (!(await confirmar(`¿Descartar "${sanitizeEquipName(item.nombre)}" del catálogo de activos fijos?\n\nDejará de contar en el balance. Esta acción no se puede deshacer.`))) return;
     const res = await apiFetch(`/equipment/${item.id}`, { method: "DELETE" });
     if (!res.ok) throw new Error("No se pudo descartar el activo fijo");
     addToast(`${sanitizeEquipName(item.nombre)} descartado`, "success");
@@ -11944,7 +11931,7 @@ export function App() {
   // Borra los equipos con costo $0 que duplican a otro registro (nombres rotos
   // o repetidos), dejando siempre uno por nombre. La cuenta la calcula el server.
   async function limpiarDuplicadosActivos() {
-    if (!confirm("¿Eliminar los activos fijos con costo $0.00 que están repetidos?\n\nSe conserva uno por nombre y no se tocan los que tengan costo o historial de mantenimiento.")) return;
+    if (!(await confirmar("¿Eliminar los activos fijos con costo $0.00 que están repetidos?\n\nSe conserva uno por nombre y no se tocan los que tengan costo o historial de mantenimiento."))) return;
     const res = await apiFetch("/finance/fixed-assets/duplicados-sin-costo", { method: "DELETE" });
     if (!res.ok) throw new Error("No se pudo limpiar los duplicados");
     const r = (await res.json()) as { eliminados: number; protegidos: number };
@@ -12009,13 +11996,13 @@ export function App() {
   // ↩ Anula una producción YA CERRADA (solo administrador): devuelve el arroz y la cáscara, anula las cuentas del servicio y los
   // pagos pendientes del proceso, y deja el lote listo para volver a pilarse. El servidor rechaza si ya se usó el arroz o hay abonos.
   async function anularProduccion(batchId: string, etiqueta: string) {
-    const motivo = window.prompt(`Anular la producción de «${etiqueta}».
+    const motivo = (await pedirTexto(`Anular la producción de «${etiqueta}».
 
 Se devuelve la cáscara al lote, se quita el arroz producido de la bodega, se anulan el cobro del servicio y los pagos pendientes de nómina de este proceso, y el lote queda listo para pilarse de nuevo.
 
 No se puede si ya se vendió o usó parte del arroz, o si el cobro ya tiene abonos.
 
-Motivo (obligatorio):`, "");
+Motivo (obligatorio):`, ""));
     if (motivo === null) return;
     if (motivo.trim().length < 5) { addToast("Escribe el motivo (mínimo 5 letras).", "error"); return; }
     try {
@@ -12180,7 +12167,7 @@ Motivo (obligatorio):`, "");
     // Auto-captura: incorpora el QQ escrito en 'Cantidad en QQ' aunque no se haya
     // pulsado [+ Añadir]. effEntries/effTotalQq/effMix son la producción EFECTIVA
     // (con ese renglón ya incluido), usable en este mismo tick.
-    const effEntries = flushPendingPiladoEntry();
+    const effEntries = (await flushPendingPiladoEntry());
     if (!effEntries) return;
     const effTotalQq = effEntries.reduce((sum, e) => sum + e.quantityQq, 0);
     const effMix = computeMillingMix(effEntries);
@@ -12193,9 +12180,7 @@ Motivo (obligatorio):`, "");
       showFinalizeValidation("Registre al menos una salida real: arroz pilado, arrocillo o polvillo");
       return;
     }
-    if (effTotalQq <= 0 && !window.confirm(
-      `⚠️ No ha registrado arroz pilado.\n\nSolo constan ${effSubproductosQq.enReal()} QQ de subproductos. Si finaliza, el lote quedará cerrado con 0 QQ de arroz blanco.\n\n¿Confirma que este resultado es correcto?`
-    )) return;
+    if (effTotalQq <= 0 && !(await confirmar(`⚠️ No ha registrado arroz pilado.\n\nSolo constan ${effSubproductosQq.enReal()} QQ de subproductos. Si finaliza, el lote quedará cerrado con 0 QQ de arroz blanco.\n\n¿Confirma que este resultado es correcto?`))) return;
 
     const inputProduct = src.rice_type === "CORRIENTE" ? rawProductCorriente : rawProduct011;
     const outputProduct = src.rice_type === "CORRIENTE" ? whiteRiceCorrienteProduct : whiteRiceProduct;
@@ -12396,7 +12381,7 @@ Motivo (obligatorio):`, "");
       setMessage(`Agrega ingresos de materia prima a la ${secadora} para formar el lote`);
       return;
     }
-    if (!confirmarMezclaTipos(entryIds, secadora)) return;
+    if (!(await confirmarMezclaTipos(entryIds, secadora))) return;
 
     // Aquí nace el lote: el grupo de ingresos que entra al túnel.
     const created = await apiPost<DryingTunnelReport>("/process-flow/drying", {
@@ -12670,7 +12655,9 @@ Motivo (obligatorio):`, "");
     const registerId = dashboard.current_cash_register?.id;
     const quien = `${t.por_confirmar === "CHECK" ? "el cheque" : "la transferencia"} de ${t.cliente ?? "el cliente"} (${money(Number(t.monto))})`;
     if (llego && !registerId) { addToast("Abre la caja para registrar la transferencia que llegó.", "error"); return; }
-    if (!window.confirm(llego ? `¿Confirmas que llegó ${quien}? Entra a la caja por el banco.` : `¿${quien} NO llegó? Queda en Por Cobrar como deuda del cliente.`)) return;
+    if (!(await confirmar(llego
+      ? { titulo: `¿Llegó ${t.por_confirmar === "CHECK" ? "el cheque" : "la transferencia"}?`, mensaje: `${t.cliente ?? "Cliente"} · ${money(Number(t.monto))}\nEntra a la caja por el banco.`, confirmar: "Sí, llegó", tono: "normal" }
+      : { titulo: `¿No llegó ${t.por_confirmar === "CHECK" ? "el cheque" : "la transferencia"}?`, mensaje: `${t.cliente ?? "Cliente"} · ${money(Number(t.monto))}\nQueda en Por Cobrar como deuda del cliente.`, confirmar: "No llegó", tono: "peligro" }))) return;
     setConfirmandoId(t.id);
     try {
       if (llego) {
@@ -12805,7 +12792,7 @@ Motivo (obligatorio):`, "");
     if (!m || m.modo !== "editar") return;
     const total = round2(Number(m.total));
     if (!quitar && (!m.activoId || !(total > 0))) { addToast("Elige el carro y el valor del flete.", "error"); return; }
-    if (quitar && !window.confirm(`¿Quitar el flete del pedido ${m.order.order_number}?\n\nSe borra la cuenta por cobrar de Transporte y la cuenta por pagar del vendedor.`)) return;
+    if (quitar && !(await confirmar(`¿Quitar el flete del pedido ${m.order.order_number}?\n\nSe borra la cuenta por cobrar de Transporte y la cuenta por pagar del vendedor.`))) return;
     setFleteModal({ ...m, busy: true });
     try {
       if (quitar) await apiFetch(`/orders/${m.order.id}/flete`, { method: "DELETE" }).then(async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? "No se pudo quitar el flete"); });
@@ -13181,7 +13168,7 @@ Motivo (obligatorio):`, "");
   }
 
   async function cancelarPedido(order: SalesOrder) {
-    if (!window.confirm(`¿Cancelar el pedido ${order.order_number} de ${order.customer_name}?`)) return;
+    if (!(await confirmar(`¿Cancelar el pedido ${order.order_number} de ${order.customer_name}?`))) return;
     await apiPost(`/orders/${order.id}/cancel`, {}, optsPedido(order));
     addToast(`Pedido ${order.order_number} cancelado`, "success");
     await refreshCustomersAndSales();
@@ -13934,7 +13921,7 @@ Motivo (obligatorio):`, "");
                     <svg className="navChevron" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2.5 4L5 6.5 7.5 4" /></svg>
                   </button>
                   {!collapsed && group.tabs.map((tab) => (
-                    <button className={activeTab === tab ? "active" : ""} key={tab} onClick={() => irATab(tab)}>
+                    <button className={activeTab === tab ? "active" : ""} key={tab} onClick={async () => (await irATab(tab))}>
                       <NavIcon tab={tab} />
                       {tabLabel(tab)}
                       {tab === "Ventas" && pedidosPendientesCount > 0 && (
@@ -14035,10 +14022,10 @@ Motivo (obligatorio):`, "");
                 <button key={a.id} type="button" role="radio" aria-checked={a.id === activeAccionistaId}
                   className={`ventaSesion__chip ${a.id === activeAccionistaId ? "is-activo" : ""}`}
                   title={a.id === activeAccionistaId ? `Estás en ${a.name}` : `Ver ${tabLabel(activeTab)} de ${a.name}`}
-                  onClick={() => {
+                  onClick={async () => {
                     if (a.id === activeAccionistaId) return;
                     if (activeTab === "Configuracion" && configPendientes.length > 0 &&
-                      !window.confirm(`Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\nSi cambias de accionista se descartarán. ¿Cambiar de todas formas?`)) return;
+                      !(await confirmar(`Tienes cambios sin guardar en Configuración:\n\n• ${configPendientes.join("\n• ")}\n\nSi cambias de accionista se descartarán. ¿Cambiar de todas formas?`))) return;
                     irAOperacion(a.id);
                   }}>
                   {a.tipo === "MATRIZ" ? "🏭" : "🤝"} {a.name}
@@ -19944,7 +19931,7 @@ Motivo (obligatorio):`, "");
                     })()}
                     {(CASH_REUSE[movCategory] === "pilado" || CASH_REUSE[movCategory] === "fomento") && (() => {
                       const info = CASH_REUSE[movCategory] === "pilado"
-                        ? { txt: `Para que el pago abone la cuenta de ${matrizName}, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de la matriz).`, go: () => irATab("Por Pagar"), lbl: "Ir a Por Pagar" }
+                        ? { txt: `Para que el pago abone la cuenta de ${matrizName}, regístralo en Por Pagar (descuenta tu caja y abona la cuenta por cobrar de la matriz).`, go: async () => (await irATab("Por Pagar")), lbl: "Ir a Por Pagar" }
                         : { txt: "Para enlazarlo con el agricultor, regístralo en Fomentos.", go: () => setCajaSubTab("fomentos"), lbl: "Ir a Fomentos" };
                       return (
                         <div style={{ background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "10px 12px", marginBottom: 16, fontSize: 12 }}>
@@ -20373,7 +20360,7 @@ Motivo (obligatorio):`, "");
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
                         <h4 style={{ margin: 0 }}>Operación de Fomento desde Caja</h4>
                         {visibleTabs.includes("Fomentos") && (
-                          <button type="button" className="btnGhost" onClick={() => irATab("Fomentos")} style={{ fontSize: 11, padding: "5px 9px" }}>
+                          <button type="button" className="btnGhost" onClick={async () => (await irATab("Fomentos"))} style={{ fontSize: 11, padding: "5px 9px" }}>
                             Ver estado de cuenta
                           </button>
                         )}
@@ -23687,7 +23674,7 @@ Motivo (obligatorio):`, "");
                     hasta={semanaHasta}
                     onHasta={setSemanaHasta}
                     cajaAbierta={cajaAbierta}
-                    onAbrirCaja={() => irATab("Caja")}
+                    onAbrirCaja={async () => (await irATab("Caja"))}
                     onPagar={pagarSemana}
                   />
                 )}
@@ -23707,7 +23694,7 @@ Motivo (obligatorio):`, "");
                 {!cajaAbierta && totalPendientes > 0 && (
                   <div className="alertBox" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                     <span>No hay una caja abierta: aún no puedes registrar pagos.</span>
-                    <button type="button" className="primary" onClick={() => irATab("Caja")}>Abrir caja</button>
+                    <button type="button" className="primary" onClick={async () => (await irATab("Caja"))}>Abrir caja</button>
                   </div>
                 )}
 
@@ -23959,7 +23946,7 @@ Motivo (obligatorio):`, "");
                 {!cajaAbierta && adminStaff.length > 0 && (
                   <div className="alertBox" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
                     <span>No hay una caja abierta de {accName}: puedes registrar personal, pero para pagar abre una caja.</span>
-                    <button type="button" className="primary" onClick={() => irATab("Caja")}>Abrir caja</button>
+                    <button type="button" className="primary" onClick={async () => (await irATab("Caja"))}>Abrir caja</button>
                   </div>
                 )}
 
@@ -24831,7 +24818,7 @@ Motivo (obligatorio):`, "");
                         <button type="button" onClick={() => setConfigSubTab("planta")}>Planta y productos</button>
                         <button type="button" onClick={() => setConfigSubTab("socios")}>Socios y matriz</button>
                         <button type="button" onClick={() => setConfigSubTab("usuarios")}>Usuarios</button>
-                        <button type="button" onClick={() => irATab("Caja de Campo")}>Campo</button>
+                        <button type="button" onClick={async () => (await irATab("Caja de Campo"))}>Campo</button>
                         <button type="button" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
                           {systemStatusBusy ? "Actualizando..." : "Revisar de nuevo"}
                         </button>
@@ -24844,7 +24831,7 @@ Motivo (obligatorio):`, "");
                       {backupBusy ? "Respaldando..." : "Crear respaldo ahora"}
                     </button>
                     <button type="button" onClick={() => setConfigSubTab("planta")}>Revisar planta</button>
-                    <button type="button" onClick={() => irATab("Caja de Campo")}>Revisar Campo</button>
+                    <button type="button" onClick={async () => (await irATab("Caja de Campo"))}>Revisar Campo</button>
                     <button type="button" onClick={() => setConfigSubTab("usuarios")}>Revisar usuarios</button>
                   </div>
 
@@ -26576,12 +26563,12 @@ Motivo (obligatorio):`, "");
                       avisar={addToast}
                       onCambio={() => { refresh().catch(() => undefined); }}
                       ir={{
-                        caja: visibleTabs.includes("Caja") ? () => irATab("Caja") : undefined,
+                        caja: visibleTabs.includes("Caja") ? async () => (await irATab("Caja")) : undefined,
                         sacos: visibleTabs.includes("Inventario") ? irASacos : undefined,
                         repuestos: esMatrizActiva && visibleTabs.includes("Inventario") ? irARepuestos : undefined,
-                        fomentos: visibleTabs.includes("Fomentos") ? () => irATab("Fomentos") : undefined,
-                        campo: visibleTabs.includes("Caja de Campo") ? () => irATab("Caja de Campo") : undefined,
-                        bascula: visibleTabs.includes("Bascula") ? () => irATab("Bascula") : undefined
+                        fomentos: visibleTabs.includes("Fomentos") ? async () => (await irATab("Fomentos")) : undefined,
+                        campo: visibleTabs.includes("Caja de Campo") ? async () => (await irATab("Caja de Campo")) : undefined,
+                        bascula: visibleTabs.includes("Bascula") ? async () => (await irATab("Bascula")) : undefined
                       }}
                     />
                   )}
@@ -26602,7 +26589,7 @@ Motivo (obligatorio):`, "");
                       puedeEditar={isAdmin}
                       avisar={addToast}
                       onSucio={setParamContablesSucio}
-                      irAEstados={visibleTabs.includes("Estados Financieros") ? () => irATab("Estados Financieros") : undefined}
+                      irAEstados={visibleTabs.includes("Estados Financieros") ? async () => (await irATab("Estados Financieros")) : undefined}
                     />
                   )}
                 </details>
@@ -26620,7 +26607,7 @@ Motivo (obligatorio):`, "");
                     onCambio={() => { refresh().catch(() => undefined); refreshSacks().catch(() => undefined); }}
                     irASaldos={isAdmin ? () => irATarjeta("📥 Saldos iniciales") : undefined}
                     irATarifas={() => irATarjeta("🛒 Tarifas por libra")}
-                    irAInventario={visibleTabs.includes("Inventario") ? () => irATab("Inventario") : undefined}
+                    irAInventario={visibleTabs.includes("Inventario") ? async () => (await irATab("Inventario")) : undefined}
                   />
                 </details>
               </section>
@@ -26646,7 +26633,7 @@ Motivo (obligatorio):`, "");
                   ir: esMatrizActiva && visibleTabs.includes("Inventario") ? () => { setInvVista("repuestos"); irATab("Inventario"); } : undefined },
                 { icono: "🏛️", donde: "Estados Financieros → Activos fijos",
                   que: "Costo, vida útil y valor residual de cada equipo (depreciación del balance).",
-                  ir: visibleTabs.includes("Estados Financieros") ? () => irATab("Estados Financieros") : undefined }
+                  ir: visibleTabs.includes("Estados Financieros") ? async () => (await irATab("Estados Financieros")) : undefined }
               ];
               return (
                 <section className="panelGrid" style={{ order: 3 }}>
@@ -27009,13 +26996,13 @@ Motivo (obligatorio):`, "");
                             <td className="num">
                               <input type="number" step="0.001" min="0" key={`cuad-${a.id}-${a.unit_rate}`} defaultValue={fmtTarifa(a.unit_rate)} disabled={!isAdmin} style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #d1d5db", textAlign: "right" }}
                                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-                                onBlur={(e) => {
+                                onBlur={async (e) => {
                                   const v = Number(e.target.value);
                                   const antes = Number(a.unit_rate) || 0;
                                   if (!(v >= 0) || v === antes) { e.target.value = fmtTarifa(antes); return; }
                                   // Queda en 0 o cambia 3 veces o más: puede ser un error de tecleo → preguntar.
                                   if (antes > 0 && (v === 0 || v / antes >= 3 || antes / v >= 3)
-                                    && !confirmarCambiosCfg("Tarifa de cuadrilla:", [{ etiqueta: `${a.name} ($ por unidad)`, antes, despues: v }])) {
+                                    && !(await confirmarCambiosCfg("Tarifa de cuadrilla:", [{ etiqueta: `${a.name} ($ por unidad)`, antes, despues: v }]))) {
                                     e.target.value = fmtTarifa(antes);
                                     return;
                                   }

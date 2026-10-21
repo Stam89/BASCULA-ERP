@@ -5,6 +5,7 @@
 // flota de Transporte y Cosechadora). Solo lectura.
 import { useEffect, useMemo, useState } from "react";
 import { apiGet } from "../api";
+import { pedirTexto } from "./Dialogo";
 
 type Fila = {
   fuente: "CAJA" | "MANTENIMIENTO" | string;
@@ -77,7 +78,7 @@ export function BuscadorHistorial({ ambito, titulo }: { ambito: "matriz" | "tran
 
   async function copiar() {
     try { await navigator.clipboard.writeText(respuesta); setCopiado(true); window.setTimeout(() => setCopiado(false), 1800); }
-    catch { window.prompt("Copia la respuesta:", respuesta); }
+    catch { (await pedirTexto("Copia la respuesta:", respuesta)); }
   }
 
   return (

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { apiFetch, apiGet, apiPatch, apiPost } from "../api";
+import { confirmar } from "./Dialogo";
 
 // 🧺 CATÁLOGO DE PRODUCTOS (Configuración → Operación y Planta). Crea un producto y
 // lo ENLAZA con lo que necesita para funcionar, en un solo paso:
@@ -403,12 +404,12 @@ function EditarProducto({ fila, puedeEditar, avisar, onCerrar, onCambio }: {
   // Eliminar: si nunca se usó se borra con sus presentaciones y sacos (al volver a crear uno con
   // el mismo nombre queda enlazado de nuevo); si tiene historial se desactiva.
   async function eliminar() {
-    if (!window.confirm(`¿Eliminar «${fila.name}»?
+    if (!(await confirmar(`¿Eliminar «${fila.name}»?
 
 Si nunca se usó (pedidos, inventario, compras, procesos) se BORRA con sus presentaciones${esMarca ? " y sacos" : ""}.
 Si tiene historial se DESACTIVA para no romper ese historial.
 
-Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`)) return;
+Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`))) return;
     setOcupado(true);
     try {
       const r = await apiFetch(`/products/${fila.id}`, { method: "DELETE" });
@@ -527,7 +528,7 @@ Si algún día lo vuelves a crear con el mismo nombre, queda enlazado otra vez.`
             {fila.is_active ? (
               <button type="button" className="btnSecondary" disabled={ocupado}
                 title="Un producto con stock o pedidos pendientes no se puede desactivar"
-                onClick={() => { if (window.confirm(`¿Desactivar «${fila.name}»? Deja de ofrecerse, pero su historial se conserva.`)) void ejecutar(() => apiPatch(`/products/${fila.id}`, { is_active: false }), "Producto desactivado"); }}>
+                onClick={async () => { if ((await confirmar(`¿Desactivar «${fila.name}»? Deja de ofrecerse, pero su historial se conserva.`))) void ejecutar(() => apiPatch(`/products/${fila.id}`, { is_active: false }), "Producto desactivado"); }}>
                 Desactivar producto
               </button>
             ) : (
