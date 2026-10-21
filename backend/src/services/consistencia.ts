@@ -46,6 +46,18 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
      WHERE cm.category IN ('PAGO_POR_SOCIO', 'GASTO_POR_SOCIO') AND cm.reversal_of IS NULL
        AND ((cm.reversed_at IS NULL AND abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - cm.amount) > 0.005)
             OR (cm.reversed_at IS NOT NULL AND (COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL)))` },
+  { modulo: "Cuentas", nombre: "Dinero entre socios: sale de una caja y entra a la otra por el mismo valor, y lo descontado + el préstamo = el monto (anulado, nada vigente)", sql: `
+    SELECT d.id, d.monto::float AS monto, md.amount::float AS salio, mp.amount::float AS entro,
+           COALESCE(x.cruzado, 0)::float AS descontado, COALESCE(p.amount, 0)::float AS prestamo, d.anulado_at IS NOT NULL AS anulado
+      FROM dinero_entre_socios d
+      LEFT JOIN cash_movements md ON md.id = d.mov_de_id
+      LEFT JOIN cash_movements mp ON mp.id = d.mov_para_id
+      LEFT JOIN LATERAL (SELECT sum(c.monto) AS cruzado FROM cruces_entre_socios c WHERE c.cash_movement_id = d.mov_de_id AND c.anulado_at IS NULL) x ON true
+      LEFT JOIN accounts_payable p ON p.reference_type = 'pago_por_socio' AND p.reference_id = d.mov_de_id AND p.status <> 'CANCELLED'
+     WHERE (d.anulado_at IS NULL AND (md.id IS NULL OR mp.id IS NULL OR md.reversed_at IS NOT NULL OR mp.reversed_at IS NOT NULL
+              OR abs(md.amount - d.monto) > 0.005 OR abs(mp.amount - d.monto) > 0.005
+              OR abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - d.monto) > 0.005))
+        OR (d.anulado_at IS NOT NULL AND (md.reversed_at IS NULL OR mp.reversed_at IS NULL OR COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL))` },
   { modulo: "Cuentas", nombre: "Gastos de un socio pagados por la Matriz: tienen el socio y su categoría real", sql: `
     SELECT cm.id FROM cash_movements cm
      WHERE cm.category = 'GASTO_POR_SOCIO' AND cm.reversal_of IS NULL

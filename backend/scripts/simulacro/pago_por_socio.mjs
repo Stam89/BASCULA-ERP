@@ -30,6 +30,12 @@ try {
   const deposito = (await movsDe(cajaC.id)).find((m) => m.category === "COBRO_POR_SOCIO");
   const debeC = (await q("SELECT id FROM accounts_payable WHERE reference_type='cobro_por_socio' AND reference_id=$1", [deposito.id]))[0].id;
   const debeS = (await q("SELECT id FROM accounts_receivable WHERE reference_type='cobro_por_socio' AND reference_id=$1", [deposito.id]))[0].id;
+  // Desde 2026-10-21 el pago por otro socio se descuenta de CUALQUIER deuda de CEYRO con STALYN (la más vieja
+  // primero): en la COPIA se dejan en $0 las demás para que el caso sea exacto (solo queda la del depósito).
+  await q(`UPDATE accounts_payable p SET balance=0, status='PAID' FROM accounts_receivable r WHERE r.reference_type=p.reference_type AND r.reference_id=p.reference_id
+             AND p.accionista_id=$1 AND r.accionista_id=$2 AND p.id<>$3 AND p.status IN ('CONFIRMED','PARTIAL')`, [ceyro, stalyn, debeC]);
+  await q(`UPDATE accounts_receivable r SET balance=0, status='PAID' FROM accounts_payable p WHERE r.reference_type=p.reference_type AND r.reference_id=p.reference_id
+             AND p.accionista_id=$1 AND r.accionista_id=$2 AND r.id<>$3 AND r.status IN ('CONFIRMED','PARTIAL')`, [ceyro, stalyn, debeS]);
   // STALYN le debe $150 a un cosechador contratado.
   const cosech = (await q("INSERT INTO accounts_payable (accionista_id, reference_type, description, amount, balance, status) VALUES ($1,'cosechadora_tercero','Cosechadora (tercero) - DON PEDRO - sim',150,150,'CONFIRMED') RETURNING id", [stalyn]))[0].id;
   const antesS = (await movsDe(cajaS.id)).length;

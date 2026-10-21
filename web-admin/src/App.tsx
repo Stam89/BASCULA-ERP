@@ -19,6 +19,7 @@ import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
 import { TrabajoEquipo } from "./components/TrabajoEquipo";
 import { CruceSocios } from "./components/CruceSocios";
+import { CuentasEntreSocios, type OpEntreSocios } from "./components/CuentasEntreSocios";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
@@ -2830,6 +2831,8 @@ export function App() {
   const [movModalidad, setMovModalidad] = useState<"CONTADO" | "CREDITO">("CONTADO");
   // «¿De quién es este gasto?» (solo la caja de la Matriz): "" = de esta caja; si no, el id del socio dueño del gasto.
   const [movPorCuentaDe, setMovPorCuentaDe] = useState("");
+  // 🤝 Cuentas entre socios (pantalla + los tres movimientos); `op` abre directo uno desde el buscador de Caja.
+  const [entreSocios, setEntreSocios] = useState<null | { op?: OpEntreSocios; con?: string }>(null);
   const [movDeudaSocio, setMovDeudaSocio] = useState<{ socio: string; le_debe: number } | null>(null);
   useEffect(() => {
     if (!movPorCuentaDe) { setMovDeudaSocio(null); return; }
@@ -14095,6 +14098,18 @@ Motivo (obligatorio):`, ""));
       </aside>
 
       <section className="workspace">
+        {entreSocios && authUser && (
+          <CuentasEntreSocios
+            accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
+            activoId={activeAccionistaId}
+            cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
+            categoriasGasto={cashCategories.filter((c) => c.activo && c.tipo === "EGRESO" && (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS") && gastoDeSocioPosible(c.codigo))
+              .map((c) => ({ codigo: c.codigo, nombre: c.nombre }))}
+            inicial={entreSocios}
+            avisar={addToast}
+            onCambio={() => Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined), refreshReceivables().catch(() => undefined), refreshPayables().catch(() => undefined)])}
+            onCerrar={() => setEntreSocios(null)} />
+        )}
         <BuscadorGlobal
           abierto={buscadorAbierto && !!authUser}
           onCerrar={() => setBuscadorAbierto(false)}
@@ -19369,6 +19384,9 @@ Motivo (obligatorio):`, ""));
                           {acciones.filter((x) => visibles.includes(x.key) && x.key !== "mantenimiento").map((x) => (
                             <button key={x.key} type="button" className={cajaSubTab === x.key ? "is-on" : ""} title={x.hint} onClick={() => abrir(x.key)}>{x.icon} {x.label}</button>
                           ))}
+                          {accionistas.length > 1 && (
+                            <button type="button" title="Quién le debe a quién entre la Matriz y los socios; dinero que se dan y pagos por su cuenta" onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios</button>
+                          )}
                           {cajaSubTab !== "resumen" && (
                             <button type="button" onClick={() => abrir("resumen")}>📋 Movimientos</button>
                           )}
@@ -19717,6 +19735,11 @@ Motivo (obligatorio):`, ""));
                           ]) : []),
                           ...subcatsConCategoria.filter((s) => s.categoria && codigosVisibles.has(s.categoria))
                             .map((s) => ({ key: `SUB:${s.categoria}|${s.nombre}`, titulo: s.nombre, detalle: visibles.find((c) => c.codigo === s.categoria)?.nombre })),
+                          // 🤝 Entre socios: se registran una vez y bajan primero lo que se debían (pantalla «Cuentas entre socios»).
+                          ...(accionistas.length > 1 ? (movType === "EXPENSE"
+                            ? [{ key: "SOC:pago", titulo: "🤝 Pagué algo de un socio", detalle: "una deuda suya (agricultor, cosechador…) o un gasto suyo", etiqueta: "entre socios", buscar: "socio pago deuda agricultor gasto rovinson stalyn" },
+                               { key: "SOC:dar", titulo: "🤝 Le di dinero a un socio", detalle: "abono a lo que le debo o préstamo", etiqueta: "entre socios", buscar: "socio dinero préstamo prestamo abono" }]
+                            : [{ key: "SOC:recibir", titulo: "🤝 Un socio me dio dinero", detalle: "abono a lo que me debe o préstamo", etiqueta: "entre socios", buscar: "socio dinero préstamo prestamo abono" }]) : []),
                           ...cxcPendientes.map((ar) => ({ key: `CXC:${ar.id}`, titulo: `Cobro: ${ar.customer_name || ar.description || "Cliente"}`, detalle: `${ar.customer_name && ar.description ? `${String(ar.description).slice(0, 60)} · ` : ""}saldo ${money(Number(ar.balance))}`, etiqueta: "por cobrar" }))
                         ];
                         const recientes = (cajaRecientes[movType] ?? []).filter((c) => codigosVisibles.has(c)).slice(0, 6);
@@ -19752,6 +19775,7 @@ Motivo (obligatorio):`, ""));
                                       setMaintenanceForm((f) => ({ ...f, area, section: section ?? "", maintenance_type: section ? "CORRECTIVO" : f.maintenance_type }));
                                     }
                                     else if (key.startsWith("SUB:")) { const [cat, ...rest] = key.slice(4).split("|"); elegirCategoria(cat, rest.join("|")); }
+                                    else if (key.startsWith("SOC:")) setEntreSocios({ op: key.slice(4) as OpEntreSocios });
                                     else if (key.startsWith("CXC:")) {
                                       setMovReceivableId(key.slice(4)); setMovCategory(""); setMovSubcategoria("");
                                       setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 80);
@@ -19760,8 +19784,7 @@ Motivo (obligatorio):`, ""));
                                 {movType === "INCOME" && (
                                   <small className="muted" style={{ display: "block", marginTop: 4 }}>
                                     ¿Cobro de un cliente o abono de una deuda? Hazlo en{" "}
-                                    <button type="button" className="btnGhost" style={{ padding: 0, fontWeight: 700, textDecoration: "underline" }}
-                                      onClick={() => { void irATab("Por Cobrar"); }}>Por Cobrar</button>: ahí se baja la cuenta y entra a la caja.
+                                    <button type="button" className="vdTarifaLink" onClick={() => { void irATab("Por Cobrar"); }}>Por Cobrar</button>: ahí se baja la cuenta y entra a la caja.
                                   </small>
                                 )}
                                 {sugeridas.length > 0 && (
@@ -19879,33 +19902,8 @@ Motivo (obligatorio):`, ""));
                       );
                     })()}
 
-                    {/* 🤝 ¿De quién es este gasto? La caja de la Matriz paga un gasto de un socio: sale de esta caja,
-                        queda en los gastos del socio, se descuenta de lo que se le debe y el resto se lo debe el socio. */}
-                    {movType === "EXPENSE" && esMatrizActiva && movCategory && gastoDeSocioPosible(movCategory) && sociosDelGasto.length > 0 && (() => {
-                      const socioSel = sociosDelGasto.find((a) => a.id === movPorCuentaDe);
-                      const chip = (id: string, txt: string) => (
-                        <button key={id || "propio"} type="button" className={`cj-dequien__op ${movPorCuentaDe === id ? "is-on" : ""}`} onClick={() => setMovPorCuentaDe(id)}>{txt}</button>
-                      );
-                      return (
-                        <div className={`cj-dequien ${socioSel ? "is-socio" : ""}`}>
-                          <span className="cj-dequien__tit">¿De quién es este gasto?</span>
-                          <div className="cj-dequien__ops">
-                            {chip("", `🏭 De ${matrizName || "la Matriz"}`)}
-                            {sociosDelGasto.map((a) => chip(a.id, `🤝 De ${a.name}`))}
-                          </div>
-                          {socioSel && (
-                            <small className="cj-dequien__info">
-                              La plata sale de esta caja, pero el gasto queda en las cuentas de <b>{socioSel.name}</b> (no es costo de la piladora).{" "}
-                              {movDeudaSocio?.socio !== socioSel.id ? "Revisando cuánto se le debe…"
-                                : movDeudaSocio.le_debe > 0
-                                  ? <>Hoy le debes <b>{money(movDeudaSocio.le_debe)}</b> a {socioSel.name}: se descuenta primero de ahí y lo que pase queda en Por Cobrar.</>
-                                  : <>Hoy no le debes nada a {socioSel.name}: todo queda en Por Cobrar ({socioSel.name} te lo debe).</>}
-                              {" "}Es de contado (sin crédito ni fondo).
-                            </small>
-                          )}
-                        </div>
-                      );
-                    })()}
+                    {/* «¿De quién es este gasto?» pasó a «🤝 Pagué algo de un socio» (buscador / Cuentas entre socios), pedido
+                        del dueño 2026-10-21: los gastos comunes (diésel, gas, alimentación…) ya no preguntan de quién son. */}
 
                     {/* Dinero a Rendir Cuentas (fondo provisional): egreso que queda
                         Por Liquidar a nombre de un responsable. (En Mantenimiento va dentro
@@ -22224,6 +22222,7 @@ Motivo (obligatorio):`, ""));
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· quién te debe, agrupado por persona o entidad</span></h2>
+                <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
                 <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
@@ -22403,6 +22402,7 @@ Motivo (obligatorio):`, ""));
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
+                <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
                 <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>

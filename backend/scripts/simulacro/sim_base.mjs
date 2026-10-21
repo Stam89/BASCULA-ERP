@@ -5,6 +5,7 @@ import { createRequire } from "module";
 import { fileURLToPath, pathToFileURL } from "url";
 import path from "path";
 import os from "os";
+import fs from "fs";
 import { spawnSync } from "child_process";
 const BACKEND = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const require = createRequire(path.join(BACKEND, "package.json"));
@@ -45,6 +46,22 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   // Los túneles que estén en uso en la base REAL (operación del día) estorbarían a los simulacros: SOLO en la COPIA se dan por terminados.
   // (El control de arriba ya garantizó que `c` y la app apuntan a la copia.)
   if ((await c.query("SELECT current_database() AS d")).rows[0].d !== COPIA) throw new Error("ABORTADO: la conexión del simulacro no es la copia.");
+  // Migraciones del código que se prueba y que la base real aún no tiene (se aplican al publicar): SOLO en la COPIA,
+  // cada una en su transacción, así el simulacro prueba el mismo esquema que quedará después de publicar.
+  const dirMig = path.join(BACKEND, "..", "database", "migrations");
+  const hechas = new Set((await c.query("SELECT filename FROM schema_migrations").catch(() => ({ rows: [] }))).rows.map((r) => r.filename));
+  for (const f of fs.readdirSync(dirMig).filter((x) => x.endsWith(".sql")).sort()) {
+    if (hechas.has(f)) continue;
+    try {
+      await c.query("BEGIN");
+      await c.query(fs.readFileSync(path.join(dirMig, f), "utf8"));
+      await c.query("INSERT INTO schema_migrations (filename) VALUES ($1) ON CONFLICT DO NOTHING", [f]);
+      await c.query("COMMIT");
+    } catch (e) {
+      await c.query("ROLLBACK");
+      console.warn(`[simulacro] la migración ${f} no se aplicó en la copia: ${e.message}`);
+    }
+  }
   // Las cajas abiertas en la base REAL (operación del día) harían fallar los simulacros que abren su caja:
   // SOLO en la COPIA se cierran al empezar (la base real no se toca).
   if (cerrarCajas) await c.query("UPDATE cash_registers SET status = 'CLOSED', closed_at = COALESCE(closed_at, now()) WHERE status = 'OPEN'");

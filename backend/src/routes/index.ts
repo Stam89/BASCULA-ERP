@@ -15,6 +15,7 @@ import { processFlowRouter } from "./modules/process-flow.js";
 import { processingRouter } from "./modules/processing.js";
 import { salesRouter } from "./modules/sales.js";
 import { ordersRouter } from "./modules/orders.js";
+import { entreSociosRouter } from "./modules/entre-socios.js";
 import { guiasRouter } from "./modules/guias.js";
 import { financeRouter } from "./modules/finance.js";
 import { weighingRouter } from "./modules/weighing-tickets.js";
@@ -99,6 +100,8 @@ routes.use("/customers", customersRouter);
 routes.use("/products", productsRouter);
 routes.use("/productos", productsRouter);
 routes.use("/receivable", receivableRouter);
+// 🤝 Cuentas entre socios: quién le debe a quién, dinero entre socios (abono o préstamo) e historial.
+routes.use("/entre-socios", entreSociosRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
 routes.use("/audit", auditRouter);

@@ -63,7 +63,7 @@ try {
 
   // ── E. Cruce total (sin monto = el máximo) ──
   const tot = exigir(await api("POST", "/receivable/cruce-socios", { contraparte_id: stalyn }, matriz), "E1. cruce del máximo");
-  check(Math.abs(tot.monto - res.maximo) < 0.01 && tot.le_debo_queda < 0.01, "E2. la Matriz queda sin deberle a STALYN y STALYN debe la diferencia", tot);
+  check(Math.abs(tot.monto - res.maximo) < 0.01 && Math.min(tot.le_debo_queda, tot.me_debe_queda) < 0.01, "E2. el lado menor queda en $0 y el otro debe la diferencia (un solo saldo)", tot);
 
   const h = await revisar((sql) => q(sql));
   check(h.length === 0, `Z. los ${TOTAL_REGLAS} controles de integridad se cumplen`, h.map((x) => x.error ? `${x.regla}: ${x.error}` : `${x.regla} → ${JSON.stringify(x.filas)}`));

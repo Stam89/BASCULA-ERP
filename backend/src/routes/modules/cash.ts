@@ -11,6 +11,7 @@ import { etiquetaMaquina, resolverMaquina, type Maquina } from "../../services/m
 import { resolverProveedor } from "../../services/proveedores.js";
 import { anularGastoTransporte } from "../../services/gasto-transporte.js";
 import { cruzarGastoPorSocio, cuantoLeDebeAlSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
+import { anularDineroEntreSocios, bajarDeudasDe, crearDeudaEntreSocios } from "../../services/entre-socios.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -696,6 +697,10 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     }
     // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
     if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
+    // Dinero entre socios (sale de una caja y entra a la otra): se anulan las dos líneas, lo descontado y el préstamo.
+    if (m.reference_type === "dinero_entre_socios" && m.reference_id) {
+      await anularDineroEntreSocios(client, { id: m.reference_id, motivo: body.reason, userId: user?.id ?? null });
+    }
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
 
@@ -1655,45 +1660,15 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
     let porSocio: { pagador: string; descontado: number; deuda_nueva: number } | null = null;
     if (pagador) {
       const movId = mov.rows[0].id;
-      const deudas = (await client.query(
-        `SELECT p.id AS pid, p.balance::float AS pb, r.id AS rid, r.balance::float AS rb
-           FROM accounts_payable p
-           JOIN accounts_receivable r ON r.reference_type = p.reference_type AND r.reference_id = p.reference_id
-          WHERE p.reference_type = 'cobro_por_socio' AND p.accionista_id = $1 AND r.accionista_id = $2
-            AND p.status IN ('CONFIRMED', 'PARTIAL') AND p.balance > 0.005
-          ORDER BY p.created_at, p.id
-          FOR UPDATE OF p, r`,
-        [pagador.id, accionistaId]
-      )).rows as Array<{ pid: string; pb: number; rid: string; rb: number }>;
-      let falta = body.amount;
-      let descontado = 0;
-      for (const d of deudas) {
-        if (falta <= 0.005) break;
-        const m = round2(Math.min(falta, d.pb, d.rb));
-        if (m <= 0.005) continue;
-        const np = round2(d.pb - m), nr = round2(d.rb - m);
-        await client.query("UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1", [d.pid, np, np < 0.01 ? "PAID" : "PARTIAL"]);
-        await client.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [d.rid, nr, nr < 0.01 ? "PAID" : "PARTIAL"]);
-        await client.query(
-          "INSERT INTO cruces_entre_socios (cash_movement_id, payable_id, receivable_id, monto) VALUES ($1, $2, $3, $4)",
-          [movId, d.pid, d.rid, m]
-        );
-        falta = round2(falta - m);
-        descontado = round2(descontado + m);
-      }
-      if (falta > 0.005) {
-        await client.query(
-          `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
-           VALUES ($1, 'pago_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
-          [accionistaId, movId, `${pagador.name} pagó por ti a ${aQuien}`, falta]
-        );
-        await client.query(
-          `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
-           VALUES ($1, 'pago_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
-          [pagador.id, movId, `Pagaste por ${socio} a ${aQuien}`, falta]
-        );
-      }
-      const detalle = `${descontado > 0 ? ` Se descontaron ${dinero(descontado)} de lo que ${pagador.name} te debía por cobros que recibió por ti.` : ""}` +
+      // Primero baja lo que el que pagó le debía a este socio (cualquier deuda entre los dos, la más vieja primero;
+      // antes solo los cobros recibidos por él); lo que pase queda como deuda de este socio con el que pagó.
+      const { descontado, resto: falta } = await bajarDeudasDe(client, { movimientoId: movId, deudorId: pagador.id, acreedorId: accionistaId!, monto: body.amount });
+      await crearDeudaEntreSocios(client, {
+        movimientoId: movId, deudorId: accionistaId!, acreedorId: pagador.id, monto: falta,
+        descDeudor: `${pagador.name} pagó por ti a ${aQuien}`,
+        descAcreedor: `Pagaste por ${socio} a ${aQuien}`
+      });
+      const detalle = `${descontado > 0 ? ` Se descontaron ${dinero(descontado)} de lo que ${pagador.name} te debía.` : ""}` +
         `${falta > 0.005 ? ` Le debes ${dinero(falta)} a ${pagador.name} (Por Pagar).` : ""}`;
       await notificar(client, {
         accionistaId, tipo: "PAGO",

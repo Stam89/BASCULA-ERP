@@ -51,6 +51,12 @@ async function pares(client: PoolClient, accionistaId: string, contraparteId: st
   return out;
 }
 
+/** Lo que `deudorId` le debe hoy a `acreedorId` (sus Por Pagar con cara espejo en el otro), de la más vieja a la más
+ *  nueva, de cualquier concepto (saldo inicial, pilada, sacos, préstamos…). Lo usa «Cuentas entre socios». */
+export async function deudasDe(client: PoolClient, deudorId: string, acreedorId: string, lock = false): Promise<ParCruce[]> {
+  return pares(client, deudorId, acreedorId, "le_debo", lock);
+}
+
 /** Lo que se deben entre el accionista activo y la contraparte, y cuánto se puede cruzar. */
 export async function resumenCruce(client: PoolClient, accionistaId: string, contraparteId: string, lock = false): Promise<ResumenCruce> {
   if (accionistaId === contraparteId) throw new ApiError(400, "Elige otro accionista.");

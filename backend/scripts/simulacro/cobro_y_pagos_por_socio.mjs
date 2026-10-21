@@ -67,13 +67,13 @@ try {
 
   // ── C. Pagó MÁS de lo que recibió: la diferencia queda como deuda de STALYN con CEYRO ──
   const cxc2 = exigir(await api("POST", "/saldos-iniciales/cxc", { corte: CORTE, contraparte_tipo: "CLIENTE", nombre: "SIM CLIENTE DOS", monto: 100 }, stalyn), "C0. otro cliente debe $100");
-  const cxp2 = exigir(await api("POST", "/saldos-iniciales/cxp", { corte: CORTE, contraparte_tipo: "PROVEEDOR", nombre: "SIM AGRICULTOR DOS", monto: 2000 }, stalyn), "C0b. otro agricultor $2000");
+  const cxp2 = exigir(await api("POST", "/saldos-iniciales/cxp", { corte: CORTE, contraparte_tipo: "PROVEEDOR", nombre: "SIM AGRICULTOR DOS", monto: r2(e1.total_me_debe + 2000) }, stalyn), "C0b. otro agricultor $2000");
   const ar2 = (await q("SELECT ref_id FROM saldos_iniciales WHERE id = $1", [cxc2.id]))[0].ref_id;
   const ap2 = (await q("SELECT ref_id FROM saldos_iniciales WHERE id = $1", [cxp2.id]))[0].ref_id;
   const yaDebia = e1.total_me_debe;
   const r3 = exigir(await api("POST", "/receivable/cobro-y-pagos-por-socio", {
     receivable_ids: [ar2], amount: 100, recibido_por: matriz, pagos: [{ payable_ids: [ap2], amount: yaDebia + 100 + 50 }]
-  }, stalyn), "C1. recibe $100 y paga más de lo que tenía de STALYN");
+  }, stalyn, { "x-confirmar": "SOBREGIRO" }), "C1. recibe $100 y paga más de lo que tenía de STALYN (se confirma que la caja queda en negativo)");
   check(r3.el_receptor_te_debe < 0.01 && Math.abs(r3.deuda_nueva - 50) < 0.01 && Math.abs(r3.tu_le_debes - (e1.total_le_debo + 50)) < 0.01,
     "C2. se descuenta todo lo que CEYRO le debía y STALYN queda debiéndole $50 más", { r3, antes: e1.total_le_debo });
 
