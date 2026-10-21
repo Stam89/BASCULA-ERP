@@ -1,6 +1,20 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-14
+Actualizado: 2026-10-21
+
+## Último cambio: Cuentas entre socios (Matriz ↔ socios)
+
+- Pantalla «🤝 Cuentas entre socios» (Caja › Otros registros, y Por Cobrar / Por Pagar): por pareja, lo que cada uno
+  le debe al otro por concepto y un saldo único (`GET /entre-socios/cuentas`, `services/entre-socios.ts`).
+- Tres movimientos que se anotan UNA vez: «Pagué algo de un socio» (deuda suya con un tercero → `pay-group` con
+  `pagado_por`; o gasto suyo → `por_cuenta_de`), «Le di dinero a un socio» y «Un socio me dio dinero»
+  (`POST /entre-socios/dinero`: sale de una caja y entra a la otra; tabla `dinero_entre_socios`, migración 20261112).
+- Regla: lo que A paga o le da a B baja primero CUALQUIER deuda de A con B (`deudasDe` + `bajarDeudasDe`, la más
+  vieja primero); lo que pase queda como `pago_por_socio` (préstamo). Las deudas por concepto (pilada, sacos, saldo
+  inicial) se cruzan SOLO con el botón «Cruzar» (decisión del dueño).
+- Caja: «¿De quién es este gasto?» ya no sale en los gastos comunes; el buscador ofrece los tres movimientos.
+- Anular (solo admin) desde Caja o el historial deshace las dos cajas, lo descontado y el préstamo.
+- Los simulacros aplican en la copia las migraciones pendientes (sim_base). Simulacro `cuentas_entre_socios`.
 
 ## Último cambio: Producción protegida y reapertura de lote accidental
 
