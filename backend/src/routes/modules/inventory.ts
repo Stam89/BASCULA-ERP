@@ -6,6 +6,7 @@ import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { conSaldo, nombreMovimiento } from "../../services/kardex.js";
 
 export const inventoryRouter = Router();
 
@@ -261,6 +262,79 @@ inventoryRouter.get("/movements", asyncRoute(async (req, res) => {
     [accionistaId]
   );
   res.json(result.rows);
+}));
+
+// 📄 KARDEX: productos con movimientos del accionista activo (para elegir) y su saldo actual por bodega.
+inventoryRouter.get("/kardex/productos", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const r = await pool.query(
+    `SELECT p.id AS product_id, p.code, p.name, p.unit, w.id AS warehouse_id, w.name AS warehouse_name, w.type AS warehouse_type,
+            SUM(m.quantity)::float AS saldo, COUNT(*)::int AS movimientos
+       FROM inventory_movements m
+       JOIN products p ON p.id = m.product_id
+       JOIN warehouses w ON w.id = m.warehouse_id
+      WHERE m.accionista_id = $1
+      GROUP BY p.id, p.code, p.name, p.unit, w.id, w.name, w.type
+      ORDER BY p.name, w.name`,
+    [accionistaId]
+  );
+  res.json(r.rows);
+}));
+
+// 📄 KARDEX de un producto: todos sus movimientos (del período) con nombre claro, detalle y saldo después de cada uno.
+inventoryRouter.get("/kardex", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const q = z.object({
+    product_id: z.string().uuid(),
+    warehouse_id: z.string().uuid().optional(),
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.query);
+  const params: unknown[] = [accionistaId, q.product_id, q.warehouse_id ?? null];
+  const base = `m.accionista_id = $1 AND m.product_id = $2 AND ($3::uuid IS NULL OR m.warehouse_id = $3::uuid)`;
+  const dia = `(m.created_at AT TIME ZONE 'America/Guayaquil')::date`;
+  const saldoInicial = q.from
+    ? Number((await pool.query(`SELECT COALESCE(SUM(m.quantity), 0)::float AS s FROM inventory_movements m WHERE ${base} AND ${dia} < $4::date`, [...params, q.from])).rows[0].s)
+    : 0;
+  const filtros: string[] = [];
+  const extra: unknown[] = [];
+  if (q.from) { extra.push(q.from); filtros.push(`${dia} >= $${params.length + extra.length}::date`); }
+  if (q.to) { extra.push(q.to); filtros.push(`${dia} <= $${params.length + extra.length}::date`); }
+  const filas = (await pool.query(
+    `SELECT m.id, m.created_at, m.movement::text AS movement, m.quantity::float AS cantidad, m.reference_type, m.notes,
+            w.name AS warehouse_name, l.lot_code,
+            COALESCE(
+              CASE WHEN m.reference_type = 'weighing_tickets' THEN concat_ws(' · ', 'ticket #' || COALESCE(mst.raw_payload->>'numeroTicket', wt.ticket_number), fw.full_name) END,
+              CASE WHEN m.reference_type IN ('processing_batches', 'processing_batch') THEN 'lote ' || COALESCE(l.lot_code, pl.lot_code) END,
+              CASE WHEN m.reference_type = 'sales_order' THEN concat_ws(' · ', so.order_number, soc.full_name) END,
+              CASE WHEN m.reference_type = 'sales' THEN concat_ws(' · ', sa.sale_number, sac.full_name) END
+            ) AS detalle
+       FROM inventory_movements m
+       JOIN warehouses w ON w.id = m.warehouse_id
+       LEFT JOIN lots l ON l.id = m.lot_id
+       LEFT JOIN weighing_tickets wt ON m.reference_type = 'weighing_tickets' AND wt.id::text = m.reference_id::text
+       LEFT JOIN farmers fw ON fw.id = wt.farmer_id
+       LEFT JOIN LATERAL (SELECT raw_payload FROM mobile_synced_tickets x WHERE x.weighing_ticket_id = wt.id LIMIT 1) mst ON true
+       LEFT JOIN processing_batches pb ON m.reference_type IN ('processing_batches', 'processing_batch') AND pb.id::text = m.reference_id::text
+       LEFT JOIN lots pl ON pl.id = pb.lot_id
+       LEFT JOIN sales_orders so ON m.reference_type = 'sales_order' AND so.id::text = m.reference_id::text
+       LEFT JOIN customers soc ON soc.id = so.customer_id
+       LEFT JOIN sales sa ON m.reference_type = 'sales' AND sa.id::text = m.reference_id::text
+       LEFT JOIN customers sac ON sac.id = sa.customer_id
+      WHERE ${base} ${filtros.length ? "AND " + filtros.join(" AND ") : ""}
+      ORDER BY m.created_at, m.id
+      LIMIT 3000`,
+    [...params, ...extra]
+  )).rows.map((f) => ({ ...f, nombre: nombreMovimiento(f.movement, f.reference_type, Number(f.cantidad)) }));
+  const movimientos = conSaldo(filas, saldoInicial);
+  const entradas = movimientos.filter((x) => x.cantidad > 0).reduce((s, x) => s + x.cantidad, 0);
+  const salidas = movimientos.filter((x) => x.cantidad < 0).reduce((s, x) => s + x.cantidad, 0);
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  res.json({
+    saldo_inicial: r3(saldoInicial), entradas: r3(entradas), salidas: r3(salidas),
+    saldo_final: movimientos.length ? movimientos[movimientos.length - 1].saldo : r3(saldoInicial),
+    movimientos: movimientos.reverse() // lo más reciente primero
+  });
 }));
 
 // Diagnóstico: lista stocks negativos con los movimientos que los originaron.

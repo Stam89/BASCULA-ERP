@@ -43,7 +43,11 @@ const NOMBRE_CALIDAD: Record<CalidadArroz, string> = { "0.11": "Arroz 0.11", COR
 
 type ModalMarcas = { calidad: CalidadArroz | null; granel?: FilaStock };
 
-export function InventarioExistencias({ grupos, empacados }: { grupos: GrupoStock[]; empacados?: Empacados }) {
+export function InventarioExistencias({ grupos, empacados, onKardex }: {
+  grupos: GrupoStock[]; empacados?: Empacados;
+  /** Abre el kardex de ese producto (por nombre). */
+  onKardex?: (productName: string) => void;
+}) {
   const [buscar, setBuscar] = useState("");
   const [soloConExistencias, setSoloConExistencias] = useState(false);
   const [modal, setModal] = useState<ModalMarcas | null>(null);
@@ -141,14 +145,18 @@ export function InventarioExistencias({ grupos, empacados }: { grupos: GrupoStoc
                       )}
                     </>
                   );
+                  const kardex = onKardex ? (
+                    <button type="button" className="invx__kardex" onClick={() => onKardex(f.product_name)} title={`Ver los movimientos de ${f.product_name}`}>📄 Kardex</button>
+                  ) : null;
                   return calidad ? (
                     <li key={f.product_name} className={`invx__fila invx__fila--${estado} invx__fila--tocable`}>
                       <button type="button" className="invx__filaBtn" onClick={() => setModal({ calidad, granel: f })} aria-label={`Ver en qué marcas está empacado ${f.product_name}`}>
                         {contenido}
                       </button>
+                      {kardex}
                     </li>
                   ) : (
-                    <li key={f.product_name} className={`invx__fila invx__fila--${estado}`}>{contenido}</li>
+                    <li key={f.product_name} className={`invx__fila invx__fila--${estado}`}>{contenido}{kardex}</li>
                   );
                 })}
               </ul>

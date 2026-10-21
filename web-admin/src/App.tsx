@@ -3958,6 +3958,15 @@ export function App() {
   // Inventario como dashboard: el cuadre vive en un modal y el kardex en un drawer.
   const [cuadreOpen, setCuadreOpen] = useState(false);
   const [kardexOpen, setKardexOpen] = useState(false);
+  // 📄 Kardex por producto (2026-10-21): producto + bodega + período; saldo después de cada movimiento.
+  type KardexProducto = { product_id: string; code: string; name: string; unit: string; warehouse_id: string; warehouse_name: string; warehouse_type: string; saldo: number; movimientos: number };
+  type KardexMov = { id: string; created_at: string; movement: string; cantidad: number; nombre: string; detalle: string | null; notes: string | null; warehouse_name: string; lot_code: string | null; saldo: number };
+  const [kardexProductos, setKardexProductos] = useState<KardexProducto[] | null>(null);
+  const [kardexProd, setKardexProd] = useState("");
+  const [kardexBod, setKardexBod] = useState("");
+  const [kardexRango, setKardexRango] = useState<"hoy" | "mes" | "todo">("mes");
+  const [kardexPedido, setKardexPedido] = useState<string | null>(null); // nombre pedido desde una tarjeta
+  const [kardexData, setKardexData] = useState<{ saldo_inicial: number; entradas: number; salidas: number; saldo_final: number; movimientos: KardexMov[] } | null>(null);
   const [catalogoOpen, setCatalogoOpen] = useState(false);
   const [newProductOpen, setNewProductOpen] = useState(false);
   const [newProductForm, setNewProductForm] = useState({
@@ -9394,6 +9403,57 @@ export function App() {
   ]);
   const exportPurchCsv = () => exportReportCsv(PURCH_HEADERS, purchReportRows(), "compras.csv");
   const printPurchReport = () => printReport("Reporte de Compras", PURCH_HEADERS, purchReportRows());
+  // Kardex: al abrir (o al cambiar de accionista con la ventana abierta) se cargan los productos con movimientos.
+  useEffect(() => {
+    if (!kardexOpen) return;
+    setKardexProductos(null);
+    apiGet<KardexProducto[]>("/inventory/kardex/productos").then((lista) => {
+      setKardexProductos(lista);
+      const ids = new Set(lista.map((x) => x.product_id));
+      const pedido = kardexPedido ? lista.find((x) => x.name === kardexPedido) : undefined;
+      if (pedido) { setKardexProd(pedido.product_id); setKardexBod(""); }
+      else if (!ids.has(kardexProd)) { setKardexProd(lista[0]?.product_id ?? ""); setKardexBod(""); }
+      setKardexPedido(null);
+    }).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo cargar el kardex", "error"));
+  }, [kardexOpen, activeAccionistaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!kardexOpen || !kardexProd) { setKardexData(null); return; }
+    const hoy = hoyLocal();
+    const d = new Date();
+    const desde = kardexRango === "hoy" ? hoy : kardexRango === "mes" ? fechaLocal(new Date(d.getFullYear(), d.getMonth(), 1)) : "";
+    const qs = new URLSearchParams({ product_id: kardexProd });
+    if (kardexBod) qs.set("warehouse_id", kardexBod);
+    if (desde) { qs.set("from", desde); qs.set("to", hoy); }
+    setKardexData(null);
+    apiGet<NonNullable<typeof kardexData>>(`/inventory/kardex?${qs.toString()}`).then(setKardexData)
+      .catch((e) => addToast(e instanceof Error ? e.message : "No se pudo cargar el kardex", "error"));
+  }, [kardexOpen, kardexProd, kardexBod, kardexRango, activeAccionistaId]); // eslint-disable-line react-hooks/exhaustive-deps
+  function abrirKardex(productName?: string) {
+    setKardexPedido(productName ?? null);
+    setKardexOpen(true);
+  }
+  async function exportarKardexExcel() {
+    if (!kardexData) return;
+    const prod = kardexProductos?.find((x) => x.product_id === kardexProd);
+    const XLSX = await import("xlsx");
+    const filas = [...kardexData.movimientos].reverse().map((m) => ({
+      Fecha: new Date(m.created_at).toLocaleString("es-EC"), Movimiento: m.nombre, Detalle: [m.detalle, m.lot_code ? `lote ${m.lot_code}` : "", m.notes].filter(Boolean).join(" · "),
+      Bodega: m.warehouse_name, Entrada: m.cantidad > 0 ? m.cantidad : "", Salida: m.cantidad < 0 ? -m.cantidad : "", Saldo: m.saldo
+    }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(filas), "Kardex");
+    XLSX.writeFile(wb, `kardex_${(prod?.name ?? "producto").replace(/[^\w.-]+/g, "_")}_${hoyLocal()}.xlsx`);
+  }
+  function imprimirKardex() {
+    if (!kardexData) return;
+    const prod = kardexProductos?.find((x) => x.product_id === kardexProd);
+    printReport(`Kardex · ${prod?.name ?? ""}`, ["Fecha", "Movimiento", "Detalle", "Bodega", "Entrada", "Salida", "Saldo"],
+      [...kardexData.movimientos].reverse().map((m) => [
+        new Date(m.created_at).toLocaleString("es-EC"), m.nombre, [m.detalle, m.lot_code ? `lote ${m.lot_code}` : "", m.notes].filter(Boolean).join(" · "),
+        m.warehouse_name, m.cantidad > 0 ? m.cantidad.enReal() : "", m.cantidad < 0 ? (-m.cantidad).enReal() : "", m.saldo.enReal()
+      ]));
+  }
+
   const refreshInvMovs = async () => {
     try { setInvMovs(await apiGet<any[]>("/inventory/movements")); }
     catch { /* noop */ }
@@ -16281,7 +16341,7 @@ Motivo (obligatorio):`, ""));
                 {accionistas.length > 1 && (
                   <button type="button" className="btnSecondary" onClick={() => setTransferLoteOpen(true)}>🔄 Transferir Lote</button>
                 )}
-                <button type="button" className="btnSecondary" onClick={() => setKardexOpen(true)}>📄 Ver Kardex / Movimientos</button>
+                <button type="button" className="btnSecondary" onClick={() => abrirKardex()}>📄 Ver kardex</button>
                 {isAdmin && <button type="button" className="btnSecondary" onClick={() => setCatalogoOpen(true)}>⚙️ Catálogo de Productos</button>}
                 <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
               </div>
@@ -16296,7 +16356,7 @@ Motivo (obligatorio):`, ""));
                 { clave: "subproductos", titulo: "Subproductos", ayuda: "Arrocillo, polvillo y otros que salen del pilado", icono: "🌿", color: "#60a5fa", color2: "#1d4ed8", filas: byproductStockRows },
                 ...(externalStockRows.length > 0 ? [{ clave: "externo", titulo: "Fuera de piladora", ayuda: "Producto propio que continúa donde el proveedor y todavía no está disponible en planta", icono: "📍", color: "#fb923c", color2: "#c2410c", filas: externalStockRows }] : []),
                 ...(otherStockRows.length > 0 ? [{ clave: "otros", titulo: "Otros stocks", ayuda: "Productos fuera de las categorías anteriores", icono: "📦", color: "#94a3b8", color2: "#475569", filas: otherStockRows }] : [])
-              ] as GrupoStock[]} empacados={{ marcas: marcasEmpacadas, calidadDe: calidadDeProductoTerminado }} />
+              ] as GrupoStock[]} empacados={{ marcas: marcasEmpacadas, calidadDe: calidadDeProductoTerminado }} onKardex={(n) => abrirKardex(n)} />
             </div>
 
             <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
@@ -16457,57 +16517,86 @@ Motivo (obligatorio):`, ""));
               </div>
             )}
 
-            {/* Drawer lateral: Kardex / Movimientos de inventario (mismos filtros y datos) */}
-            {kardexOpen && (
-              <div className="modalOverlay" onClick={() => setKardexOpen(false)} style={{ justifyContent: "flex-end", alignItems: "stretch", padding: 0 }}>
-                <div onClick={(e) => e.stopPropagation()} style={{ width: "min(960px, 96vw)", height: "100vh", background: "var(--c-surface, #fff)", boxShadow: "-8px 0 24px rgba(0,0,0,0.18)", overflowY: "auto", padding: 20 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <h2 style={{ margin: 0 }}>📄 Kardex / Movimientos de inventario</h2>
-                    <button type="button" onClick={() => setKardexOpen(false)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 10px" }}>✕</button>
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8, alignItems: "flex-end" }}>
-                    <label style={{ margin: 0 }}><span>Desde</span>
-                      <input type="date" value={invFilter.from} onChange={(e: any) => setInvFilter({ ...invFilter, from: e.target.value })} /></label>
-                    <label style={{ margin: 0 }}><span>Hasta</span>
-                      <input type="date" value={invFilter.to} onChange={(e: any) => setInvFilter({ ...invFilter, to: e.target.value })} /></label>
-                    <label style={{ margin: 0 }}><span>Movimiento</span>
-                      <select value={invFilter.movement} onChange={(e: any) => setInvFilter({ ...invFilter, movement: e.target.value })}>
-                        <option value="">Todos</option>
-                        <option value="IN">Entrada (IN)</option>
-                        <option value="OUT">Salida (OUT)</option>
-                        <option value="ADJUSTMENT">Ajuste</option>
-                        <option value="PROCESS_INPUT">Consumo proceso</option>
-                        <option value="PROCESS_OUTPUT">Salida proceso</option>
-                        <option value="REVERSAL">Reversa</option>
-                      </select></label>
-                    <button type="button" onClick={exportInvCsv}>Exportar CSV</button>
-                    <button type="button" onClick={printInvReport}>Imprimir</button>
-                  </div>
-                  {(() => {
-                    const vis = invMovsFiltered();
-                    const entradas = vis.filter((m: any) => Number(m.quantity) > 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
-                    const salidas = vis.filter((m: any) => Number(m.quantity) < 0).reduce((s: number, m: any) => s + Number(m.quantity), 0);
-                    return (
-                      <>
-                        <p style={{ fontWeight: 600, margin: "4px 0" }}>{vis.length} mov. · Entradas: {entradas.enReal()} · Salidas: {salidas.enReal()}</p>
-                        {vis.length === 0 && <p className="muted">Sin movimientos</p>}
-                        <div className="equipList">
-                          {vis.slice(0, 300).map((m: any) => (
-                            <div key={m.id} className="equipItem">
-                              <div>
-                                <strong>{m.product_name}</strong>
-                                <small>{(m.created_at || "").slice(0, 10)} · {m.warehouse_name} · {m.movement}{m.reference_type ? " · " + m.reference_type : ""}</small>
-                              </div>
-                              <strong>{Number(m.quantity).enReal()}</strong>
-                            </div>
+            {/* 📄 Kardex por producto: producto, bodega y período; saldo después de cada movimiento (2026-10-21). */}
+            {kardexOpen && (() => {
+              const lista = kardexProductos ?? [];
+              const productos = [...new Map(lista.map((x) => [x.product_id, x])).values()];
+              const bodegas = lista.filter((x) => x.product_id === kardexProd);
+              const prod = productos.find((x) => x.product_id === kardexProd);
+              const nombreAcc = accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "este accionista";
+              const saldoProd = bodegas.filter((b) => !kardexBod || b.warehouse_id === kardexBod).reduce((s2, b) => s2 + Number(b.saldo), 0);
+              return (
+                <div className="modalOverlay kdx-fondo" onClick={() => setKardexOpen(false)}>
+                  <div className="kdx" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Kardex">
+                    <div className="kdx__cabeza">
+                      <div><h2>📄 Kardex</h2><small className="muted">Movimientos de {nombreAcc}</small></div>
+                      <button type="button" className="kdx__cerrar" onClick={() => setKardexOpen(false)} aria-label="Cerrar">✕</button>
+                    </div>
+                    {kardexProductos === null ? <p className="muted">Cargando…</p> : productos.length === 0 ? (
+                      <div className="kdx__vacio">
+                        <strong>{nombreAcc} no tiene movimientos de inventario.</strong>
+                        <p>El kardex muestra solo el socio activo. Si buscas la cáscara o el producto de otro socio, cámbialo arriba en «Trabajando en».</p>
+                      </div>
+                    ) : (<>
+                      <div className="kdx__filtros">
+                        <label><span>Producto</span>
+                          <select value={kardexProd} onChange={(e) => { setKardexProd(e.target.value); setKardexBod(""); }}>
+                            {productos.map((x) => {
+                              const total = lista.filter((y) => y.product_id === x.product_id).reduce((s2, y) => s2 + Number(y.saldo), 0);
+                              return <option key={x.product_id} value={x.product_id}>{x.name} · {total.enReal()} {x.unit}</option>;
+                            })}
+                          </select>
+                        </label>
+                        {bodegas.length > 1 && (
+                          <label><span>Bodega</span>
+                            <select value={kardexBod} onChange={(e) => setKardexBod(e.target.value)}>
+                              <option value="">Todas las bodegas</option>
+                              {bodegas.map((b) => <option key={b.warehouse_id} value={b.warehouse_id}>{b.warehouse_name} · {Number(b.saldo).enReal()}</option>)}
+                            </select>
+                          </label>
+                        )}
+                        <div className="kdx__rango" role="group" aria-label="Período">
+                          {([["hoy", "Hoy"], ["mes", "Este mes"], ["todo", "Todo"]] as const).map(([k, t]) => (
+                            <button key={k} type="button" className={kardexRango === k ? "is-on" : ""} onClick={() => setKardexRango(k)}>{t}</button>
                           ))}
                         </div>
-                      </>
-                    );
-                  })()}
+                      </div>
+                      {!kardexData ? <p className="muted">Cargando…</p> : (<>
+                        <div className="kdx__totales">
+                          {kardexRango !== "todo" && <div><small>Saldo al inicio</small><b>{kardexData.saldo_inicial.enReal()}</b></div>}
+                          <div className="is-entra"><small>Entró</small><b>+{kardexData.entradas.enReal()}</b></div>
+                          <div className="is-sale"><small>Salió</small><b>{kardexData.salidas.enReal()}</b></div>
+                          <div><small>Saldo</small><b>{kardexData.saldo_final.enReal()} {prod?.unit ?? ""}</b></div>
+                        </div>
+                        {Math.abs(kardexData.saldo_final - saldoProd) > 0.01 && (
+                          <p className="muted" style={{ fontSize: 12, margin: 0 }}>El saldo de hoy en bodega es {saldoProd.enReal()} (el período elegido termina hoy).</p>
+                        )}
+                        {kardexData.movimientos.length === 0 ? <p className="muted">Sin movimientos en este período.</p> : (
+                          <ul className="kdx__lista">
+                            {kardexData.movimientos.map((m) => (
+                              <li key={m.id}>
+                                <div className="kdx__mov">
+                                  <b>{m.nombre}{m.detalle ? ` · ${m.detalle}` : ""}</b>
+                                  <small>{new Date(m.created_at).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" })}{bodegas.length > 1 && !kardexBod ? ` · ${m.warehouse_name}` : ""}{m.lot_code && !(m.detalle ?? "").includes(m.lot_code) ? ` · lote ${m.lot_code}` : ""}{m.notes ? ` · ${m.notes}` : ""}</small>
+                                </div>
+                                <div className="kdx__num">
+                                  <b className={m.cantidad >= 0 ? "is-entra" : "is-sale"}>{m.cantidad >= 0 ? "+" : ""}{m.cantidad.enReal()}</b>
+                                  <small>saldo {m.saldo.enReal()}</small>
+                                </div>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <div className="kdx__acciones">
+                          <button type="button" className="btnSecondary" onClick={() => { exportarKardexExcel().catch((e) => addToast(e.message, "error")); }}>📊 Excel</button>
+                          <button type="button" className="btnSecondary" onClick={imprimirKardex}>🖨 Imprimir</button>
+                        </div>
+                      </>)}
+                    </>)}
+                  </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {negativeStockOpen && (
               <div className="modalOverlay" onClick={() => setNegativeStockOpen(false)}>
@@ -20211,7 +20300,7 @@ Motivo (obligatorio):`, ""));
                     </div>
                     {/* Stock actual por marca y peso */}
                     <div className="formPanel">
-                      <SacosTablero sacos={sacosDelActivo} onVerKardex={() => setKardexOpen(true)} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
+                      <SacosTablero sacos={sacosDelActivo} onVerKardex={() => abrirKardex()} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />
                     </div>
                     {/* Kárdex / Historial de compras (movimientos recientes) */}
                     <div className="formPanel">
