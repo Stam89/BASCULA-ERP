@@ -1145,6 +1145,21 @@ export async function importBasculaTickets(
          JSON.stringify({ pesoBruto: t.pesoBruto, pesoTara: t.pesoTara, calificacion: t.calificacion, en: new Date().toISOString() }),
          t.pesoTara, t.calificacion]
       );
+      // 💲 El PRECIO/QQ que se escribe en la báscula DESPUÉS de ingresar el ticket sí se trae (Liquidaciones lo sugiere).
+      // Solo ese campo del ticket: no toca pesos, inventario ni cuentas. Un ticket ya liquidado no cambia.
+      await pool.query(
+        `UPDATE mobile_synced_tickets
+            SET raw_payload = jsonb_set(raw_payload, '{valorPagar}', to_jsonb($4::text))
+          WHERE COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
+            AND lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) = 'principal'
+            AND COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') = $2
+            AND weighing_ticket_id IS NOT NULL AND liquidated_at IS NULL
+            AND NOT EXISTS (SELECT 1 FROM liquidations l
+                             WHERE l.weighing_ticket_id = mobile_synced_tickets.weighing_ticket_id AND l.status <> 'CANCELLED')
+            AND mobile_updated_at <= $3
+            AND COALESCE(raw_payload->>'valorPagar', '') IS DISTINCT FROM $4::text`,
+        [idScope || "principal", numero, ts, String(t.valorPagar ?? "").trim()]
+      );
     }
     } catch (err) {
       // Un ticket que falle al guardar (dato raro que pasa el esquema pero no la

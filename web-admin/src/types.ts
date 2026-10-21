@@ -101,4 +101,6 @@ export type PendingEntry = {
   /** Vehículo de la Flota Propia (campo_activos) auto-detectado por la placa; null = tercero/particular. */
   flota_activo_id?: string | null;
   flota_activo_nombre?: string | null;
+  /** 💲 Precio/QQ escrito en la app de báscula (sugerido al liquidar; se puede cambiar). null = no se puso. */
+  precio_bascula?: number | null;
 };

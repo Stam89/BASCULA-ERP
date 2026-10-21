@@ -13,6 +13,7 @@ import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../a
 import { registrarCargoCampoLiquidacion, type CargoCampoLiquidacion } from "../../services/campo-cxc-liquidacion.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 import { getMatrizId } from "../../services/matriz.js";
+import { precioDeBascula } from "../../utils/precio-bascula.js";
 
 export const liquidationsRouter = Router();
 
@@ -46,6 +47,8 @@ liquidationsRouter.get("/pending-entries", asyncRoute(async (req, res) => {
             f.full_name AS farmer_name,
             m.raw_payload->>'numeroTicket' AS numero_bascula,
             m.raw_payload->>'placa' AS placa,
+            -- 💲 Precio/QQ escrito en la app de báscula (sugerido en la liquidación; se puede cambiar).
+            m.raw_payload->>'valorPagar' AS valor_pagar_bascula,
             -- Auto-detección del transporte: si la placa del ticket coincide con un
             -- vehículo de la Flota Propia (campo_activos), se devuelve para prellenar
             -- el cruce de flete como 'propia'. Si no, queda 'tercero'.
@@ -76,7 +79,7 @@ liquidationsRouter.get("/pending-entries", asyncRoute(async (req, res) => {
      ORDER BY w.created_at DESC`,
     [accionistaId, q.farmer_id ?? null]
   );
-  res.json(result.rows);
+  res.json(result.rows.map(({ valor_pagar_bascula, ...r }) => ({ ...r, precio_bascula: precioDeBascula(valor_pagar_bascula) })));
 }));
 
 // Auto-jalado de COSECHADORA: devuelve cada maquina/Parte Diario por separado.

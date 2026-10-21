@@ -2350,6 +2350,8 @@ export function App() {
     if (v !== activeAccionistaId) {
       // Recordar el módulo para volver a él tras recargar con el nuevo accionista.
       try { localStorage.setItem("bascula-erp:tab-pending", activeTab === "Caja de Campo" ? antesDeCampo() : activeTab); } catch { /* ignore */ }
+      // En Ventas también se recuerda la pestaña (p. ej. la Cola de Despachos) para volver a ella tras recargar.
+      if (activeTab === "Ventas") { try { localStorage.setItem("bascula-erp:ventas-view-pending", ventasView); } catch { /* ignore */ } }
       switchAccionista(v);
     } else if (activeTab === "Caja de Campo") setActiveTab(antesDeCampo());
   }
@@ -2642,7 +2644,8 @@ export function App() {
   // sigue siendo flete_monto (Total) — la tarifa es solo ayuda de captura.
   // price_manual / flete_manual: la fila ya se editó a mano → deja de heredar el
   // Precio/QQ y el Flete $/QQ de la primera fila (override individual).
-  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string; flete_prestador: string; price_manual: boolean; flete_manual: boolean };
+  // precio_bascula: el $/QQ que se escribió en la app de báscula para ese ticket (se sugiere; el campo sigue editable).
+  type LiqLine = { lot_id: string; quintals: string; price: string; flete_tarifa: string; flete_monto: string; flete_tipo: "propia" | "tercero"; flete_activo_id: string; flete_prestador: string; price_manual: boolean; flete_manual: boolean; precio_bascula?: number | null };
   const nuevaLiqLine = (): LiqLine => ({ lot_id: "", quintals: "", price: "", flete_tarifa: "", flete_monto: "", flete_tipo: "tercero", flete_activo_id: "", flete_prestador: "", price_manual: false, flete_manual: false });
   // Nueva fila que HEREDA el precio y la tarifa de flete de la primera fila.
   const liqLineHeredada = (base: LiqLine | undefined): LiqLine => ({ ...nuevaLiqLine(), price: base?.price ?? "", flete_tarifa: base?.flete_tarifa ?? "" });
@@ -3815,7 +3818,14 @@ export function App() {
   const [salesOrders, setSalesOrders] = useState<SalesOrder[]>([]);
   // Ventas se divide en dos sub-vistas: "nuevo" (POS limpio, tomar pedido) y
   // "despachos" (cola de carga/fulfillment para bodega).
-  const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias" | "historial">("nuevo");
+  const [ventasView, setVentasView] = useState<"nuevo" | "despachos" | "guias" | "historial">(() => {
+    try {
+      const v = localStorage.getItem("bascula-erp:ventas-view-pending");
+      localStorage.removeItem("bascula-erp:ventas-view-pending");
+      if (v === "despachos" || v === "guias" || v === "historial") return v;
+    } catch { /* ignore */ }
+    return "nuevo";
+  });
   // Modal de "Cantidades por Despachar y Entregar" (saldos pendientes de la cola).
   const [pendientesModalOpen, setPendientesModalOpen] = useState(false);
   // Pedido a enfocar/resaltar al pulsar "⚡ Ir a Despachar" desde el modal.
@@ -13338,15 +13348,23 @@ Motivo (obligatorio):`, ""));
       return;
     }
     setLiqLines((current) => {
-      const base = current[0];
-      return [...current, ...entries.map((entry) => {
+      // 💲 Cada ticket trae el precio/QQ que se escribió en la báscula (editable). Si no lo trae, hereda el precio de la
+      // primera fila como siempre (o el del primer ticket que sí lo trae, si recién se empieza).
+      const conPrecio = entries.find((e) => Number(e.precio_bascula) > 0);
+      const base = current[0] ?? (conPrecio ? { ...nuevaLiqLine(), price: String(conPrecio.precio_bascula) } : undefined);
+      return [...current, ...entries.map((entry, k) => {
         const esPropia = Boolean(entry.flota_activo_id);
+        const precioBascula = Number(entry.precio_bascula) > 0 ? Number(entry.precio_bascula) : null;
+        const esPrimeraFila = current.length === 0 && k === 0;
         let line: LiqLine = {
           ...liqLineHeredada(base),
           lot_id: entry.id,
           quintals: Number(entry.quintals ?? 0).enReal(),
           flete_tipo: esPropia ? "propia" : "tercero",
-          flete_activo_id: esPropia ? String(entry.flota_activo_id) : ""
+          flete_activo_id: esPropia ? String(entry.flota_activo_id) : "",
+          // Con precio propio de báscula, la fila no se pisa al cambiar el precio de la 1ª fila.
+          ...(precioBascula != null ? { price: String(precioBascula), price_manual: !esPrimeraFila } : {}),
+          precio_bascula: precioBascula
         };
         if (line.flete_tarifa.trim()) line = aplicarTarifaFleteLiq(line, line.flete_tarifa);
         return line;
@@ -14123,7 +14141,7 @@ Motivo (obligatorio):`, ""));
 
         {/* 📂 Cambio rápido de accionista dentro del módulo (como «Vendiendo como» de Ventas): solo los
             accionistas en los que el usuario tiene ESTE módulo. Ventas ya tiene el suyo; Transporte es de la Matriz. */}
-        {authUser && activeTab !== "Ventas" && activeTab !== "Caja de Campo" && (() => {
+        {authUser && (activeTab !== "Ventas" || ventasView !== "nuevo") && activeTab !== "Caja de Campo" && (() => {
           const soloMatrizTab = activeTab === "Cuadrilla" || activeTab === "Servicio Pilado";
           const opciones = accionistas.filter((a) => {
             if (soloMatrizTab && a.tipo !== "MATRIZ") return false;
@@ -17649,15 +17667,15 @@ Motivo (obligatorio):`, ""));
               })}
             </div>
             {avisoSoloLectura("Ventas", ventasView)}
-            {/* SalesSessionSwitcher: socio que vende (inventario del pedido). En la Cola de Despachos NO se muestra:
-                la cola y las ventas realizadas siguen al socio elegido en el menú (CEYRO = todos; un socio = solo los suyos). */}
+            {/* SalesSessionSwitcher («Vendiendo como»): socio del pedido NUEVO; solo en Nuevo Pedido. En Cola, Guías e
+                Historial manda «Trabajando en» (arriba): CEYRO = pedidos de todos; un socio = solo los suyos. */}
             {ventasView === "despachos" ? (
               <div className="colaDeQuien">
                 {esMatrizActiva
                   ? <>📦 Estás en <strong>{matrizName}</strong>: ves los pedidos pendientes de <strong>todos</strong> los socios.</>
-                  : <>👤 Estás en <strong>{activeAccionista?.name ?? "el socio"}</strong>: solo ves <strong>sus</strong> pedidos. Para ver los de todos, cambia a {matrizName} en el menú.</>}
+                  : <>👤 Estás en <strong>{activeAccionista?.name ?? "el socio"}</strong>: solo ves <strong>sus</strong> pedidos. Para ver los de todos, toca <strong>{matrizName}</strong> arriba en «Trabajando en».</>}
               </div>
-            ) : (
+            ) : ventasView !== "nuevo" ? null : (
             <div className="ventaSesionBarra">
               <SalesSessionSwitcher
                 socios={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
@@ -20909,6 +20927,7 @@ Motivo (obligatorio):`, ""));
                               <input type="checkbox" checked={checked} onChange={() => toggleLiqEntryPick(entry.id)} style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                               <span style={{ fontSize: 13, lineHeight: 1.35 }}>
                                 <strong>{entryLabel(entry)}</strong> · {entry.placa?.trim() || "S/P"} · {entry.rice_type ?? "—"} · {Number(entry.quintals ?? 0).enReal()} QQ
+                                {Number(entry.precio_bascula) > 0 && <> · <span style={{ color: "#15803d", fontWeight: 700 }}>⚖️ {money(Number(entry.precio_bascula))}/QQ</span></>}
                               </span>
                             </label>
                           );
@@ -20961,6 +20980,11 @@ Motivo (obligatorio):`, ""));
                               });
                             }}
                             required />
+                          {line.precio_bascula != null && (
+                            Math.abs(Number(line.price) - line.precio_bascula) < 0.00005
+                              ? <small className="liqPrecioBascula">⚖️ Precio de la báscula</small>
+                              : <small className="liqPrecioBascula is-cambiado" title="Se cambió el precio que vino de la báscula">✏️ Báscula: {money(line.precio_bascula)}</small>
+                          )}
                         </label>
                         {liqLines.length > 1 && (
                           <button type="button" className="liqRemoveBtn"
