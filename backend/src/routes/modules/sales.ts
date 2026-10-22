@@ -101,6 +101,8 @@ const retailSaleInputSchema = z.object({
   // 📝 FIADO (pedido del dueño 2026-10-21): cuánto pagó ahora. Sin dato = pagó todo (contado). Si es menos, la venta
   // queda a crédito y lo que falta es Por Cobrar del DUEÑO del arroz a esa persona (lo pagado entra a esta caja).
   pagado: z.number().nonnegative().max(100000000).optional(),
+  // 🕒 «Decidir después»: se cobra ahora y al final del día se adjudica a quien tenga el arroz (ver /retail/por-asignar).
+  por_asignar: z.boolean().optional(),
   product_name: z.string().trim().min(1).max(180),
   buyer: z.object({
     full_name: z.string().trim().min(2).max(180),
@@ -162,6 +164,132 @@ async function ventaDetalleFiada(
   };
 }
 
+// 🕒 VENTA DETALLE POR ASIGNAR (pedido del dueño 2026-10-21): se cobra ahora (la plata entra a esta caja) sin decidir
+// de quién es el arroz; el inventario NO se descuenta hasta asignarla (POST /retail/por-asignar/asignar).
+async function ventaDetallePorAsignar(client: PoolClient, req: AuthenticatedRequest, body: z.infer<typeof retailSaleInputSchema>, unitPriceQq: number) {
+  const accionistaId = req.accionistaId;
+  await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+  const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
+  const total = round2(body.quantity_qq * unitPriceQq);
+  const caja = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
+  const medio = caja?.tipo === "BANCO" ? "BANCO" : caja?.tipo === "MIXTO" ? (body.medio ?? "EFECTIVO") : "EFECTIVO";
+  const id = (await client.query(
+    `INSERT INTO ventas_detalle_por_asignar (accionista_id, cash_register_id, product_id, warehouse_id, product_name, quantity_qq, unit_price_qq, total, libras, customer_id, customer_name, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+    [accionistaId, body.cash_register_id, body.product_id, body.warehouse_id, body.product_name, body.quantity_qq, unitPriceQq, total,
+     round2(body.quantity_qq * QQ_TO_LB), cliente.id, cliente.full_name, req.user?.id ?? null]
+  )).rows[0].id as string;
+  const mov = (await client.query(
+    `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, created_by)
+     VALUES ($1, 'INCOME', 'VENTA_DETALLE_POR_ASIGNAR', 'venta_detalle_por_asignar', $2, $3, $4, $5, $6) RETURNING id`,
+    [body.cash_register_id, id, total, `Venta detalle por asignar: ${body.product_name} · ${cliente.full_name}`, medio, req.user?.id ?? null]
+  )).rows[0].id as string;
+  await client.query("UPDATE ventas_detalle_por_asignar SET cash_movement_id = $2 WHERE id = $1", [id, mov]);
+  return { id, total_amount: total, customer_id: cliente.id, customer_name: cliente.full_name, por_asignar: true };
+}
+
+// Ventas por asignar de esta caja + cuánto arroz tiene cada accionista de esos productos (para decidir a quién).
+salesRouter.get("/retail/por-asignar", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const ventas = (await pool.query(
+    `SELECT v.id, v.product_id, v.warehouse_id, v.product_name, v.quantity_qq::float AS qq, v.libras::float AS libras, v.total::float AS total,
+            v.customer_name, v.created_at
+       FROM ventas_detalle_por_asignar v
+       JOIN cash_movements m ON m.id = v.cash_movement_id
+      WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND m.reversed_at IS NULL
+      ORDER BY v.created_at`,
+    [accionistaId]
+  )).rows;
+  const productos = [...new Set(ventas.map((v) => `${v.product_id}|${v.warehouse_id}`))];
+  const stock: Array<{ product_id: string; warehouse_id: string; accionista_id: string; qq: number }> = [];
+  for (const k of productos) {
+    const [productId, warehouseId] = k.split("|");
+    const r = (await pool.query(
+      `SELECT a.id AS accionista_id, COALESCE(SUM(m.quantity), 0)::float AS qq
+         FROM accionistas a
+         LEFT JOIN inventory_movements m ON m.accionista_id = a.id AND m.product_id = $1 AND m.warehouse_id = $2 AND m.ownership = 'OWNED'
+        WHERE a.is_active = true AND a.tipo IN ('MATRIZ', 'SOCIO')
+        GROUP BY a.id`,
+      [productId, warehouseId]
+    )).rows as Array<{ accionista_id: string; qq: number }>;
+    for (const x of r) stock.push({ product_id: productId, warehouse_id: warehouseId, accionista_id: x.accionista_id, qq: round2(Number(x.qq)) });
+  }
+  res.json({ ventas, stock });
+}));
+
+// Adjudicar ventas por asignar a un dueño: nace la venta suya (sale de SU inventario; si no le alcanza, no se asigna)
+// y el ingreso de caja pasa a VENTA (si es de esta caja) o a COBRO_POR_SOCIO con su deuda: esta caja se lo debe.
+salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
+  const r = req as AuthenticatedRequest;
+  const accionistaId = r.accionistaId;
+  const body = z.object({ ids: z.array(z.string().uuid()).min(1).max(300), dueno_id: z.string().uuid() }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const dueno = (await client.query("SELECT id, name, tipo FROM accionistas WHERE id = $1 AND is_active = true", [body.dueno_id])).rows[0];
+    if (!dueno) throw new ApiError(404, "Ese dueño no existe o está inactivo.");
+    const esPropia = dueno.id === accionistaId;
+    const cajero = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
+    const filas = (await client.query(
+      `SELECT v.*, m.reversed_at FROM ventas_detalle_por_asignar v JOIN cash_movements m ON m.id = v.cash_movement_id
+        WHERE v.id = ANY($1::uuid[]) AND v.accionista_id = $2 ORDER BY v.created_at FOR UPDATE OF v`,
+      [body.ids, accionistaId]
+    )).rows;
+    if (filas.length !== new Set(body.ids).size) throw new ApiError(404, "Alguna venta no existe o es de otra caja. Refresca la pantalla.");
+    let total = 0;
+    for (const v of filas) {
+      if (v.asignado_at || v.anulado_at || v.reversed_at) throw new ApiError(409, "Alguna venta ya se asignó o se anuló. Refresca la pantalla.");
+      const fecha = new Date(v.created_at).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" });
+      let venta;
+      try {
+        venta = await crearVenta(client, dueno.id, {
+          customer_id: v.customer_id,
+          payment_method: "CASH",
+          sack_weight_lb: 100,
+          description: `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"} (del ${fecha}${esPropia ? "" : `, cobró ${cajero}`})`,
+          items: [{ product_id: v.product_id, warehouse_id: v.warehouse_id, quantity: Number(v.quantity_qq), unit_price: Number(v.unit_price_qq) }]
+        });
+      } catch (e) {
+        if (e instanceof ApiError && e.statusCode === 409) {
+          throw new ApiError(409, `${dueno.name} no tiene suficiente ${v.product_name} para esta venta (${round2(Number(v.quantity_qq))} QQ): elige otro dueño. (${e.message})`);
+        }
+        throw e;
+      }
+      const monto = round2(Number(v.total));
+      await client.query(
+        `UPDATE cash_movements SET category = $2, reference_type = 'sales', reference_id = $3, description = $4 WHERE id = $1`,
+        [v.cash_movement_id, esPropia ? "VENTA" : "COBRO_POR_SOCIO", venta.id,
+         esPropia ? `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"}` : `Venta detalle de ${dueno.name}: ${v.product_name} · ${v.customer_name ?? "cliente"} (se lo debes)`]
+      );
+      if (!esPropia) {
+        await client.query(
+          `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [dueno.id, v.cash_movement_id, `${cajero} cobró tu venta detalle: ${v.product_name} · ${v.customer_name ?? "cliente"}`, monto]
+        );
+        await client.query(
+          `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [accionistaId, v.cash_movement_id, `Cobraste una venta detalle de ${dueno.name}: ${v.product_name} · ${v.customer_name ?? "cliente"}`, monto]
+        );
+      }
+      await client.query(
+        "UPDATE ventas_detalle_por_asignar SET asignado_a = $2, sale_id = $3, asignado_at = now(), asignado_by = $4 WHERE id = $1",
+        [v.id, dueno.id, venta.id, r.user?.id ?? null]
+      );
+      total = round2(total + monto);
+    }
+    if (!esPropia) {
+      await notificar(client, {
+        accionistaId: dueno.id, tipo: "PAGO",
+        titulo: `${cajero} te asignó ventas al detalle`,
+        mensaje: `${cajero} te asignó ${filas.length} venta(s) al detalle por ${dinero(total)}. Salieron de tu inventario y ${cajero} te lo debe (Por Cobrar).`,
+        monto: total, referenciaTipo: "ventas_detalle_por_asignar", referenciaId: filas[0].id
+      });
+    }
+    return { asignadas: filas.length, total, dueno: dueno.name, se_lo_debes: esPropia ? 0 : total };
+  });
+  res.json(out);
+}));
+
 salesRouter.post("/retail", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = retailSaleInputSchema.parse(req.body);
@@ -170,8 +298,12 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
   if (aCredito && /consumidor\s*final/i.test(body.buyer.full_name)) {
     throw new ApiError(400, "Para fiar escribe el nombre de la persona que queda debiendo (no «Consumidor final»).");
   }
+  if (body.por_asignar && (aCredito || dueno)) {
+    throw new ApiError(400, "«Decidir después» es solo para ventas pagadas completas: para fiar, elige de quién es el arroz.");
+  }
   const result = await inTransaction(async (client) => {
     const unitPriceQq = Math.round((body.total_amount / body.quantity_qq) * 10000) / 10000;
+    if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, unitPriceQq);
     if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, unitPriceQq);
     if (dueno) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);

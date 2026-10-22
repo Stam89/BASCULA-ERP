@@ -49,13 +49,15 @@ const normalizarNombre = (s: string) => s.normalize("NFD").replace(/[\u0300-\u03
 
 type FormaPago = "todo" | "fiado" | "parte";
 
-export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO, duenos = [], dueno = "", onDueno, duenoPropio = "esta caja" }: {
+export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO, duenos = [], dueno = "", onDueno, duenoPropio = "esta caja", permitirDespues = false }: {
   /** «¿De quién es el arroz?» (caja de la Matriz): socios cuyo arroz se puede vender aquí. Vacío = no se pregunta. */
   duenos?: Array<{ id: string; name: string }>;
   dueno?: string;
   onDueno?: (id: string) => void;
   /** Nombre del dueño por defecto (la caja activa, p. ej. CEYRO). */
   duenoPropio?: string;
+  /** 🕒 Ofrecer «Decidir después» (se cobra ahora y se asigna al cierre del día). Valor del dueño: "POR_ASIGNAR". */
+  permitirDespues?: boolean;
   /** Descuento en $ por quintal para Consumidor Final y clientes sin el suyo. */
   descuentoQqDefecto?: number;
   /** Productos de mostrador con su tarifa por libra (0 = sin tarifa). */
@@ -135,6 +137,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
     if (!hayCantidad) { onAviso(`Digita ${enDolares ? "el monto en dólares" : enQQ ? "la cantidad en QQ" : "la cantidad en libras"}`); cantidadRef.current?.focus(); return; }
     if (compradorTexto.trim().length < 2) { onAviso("Escriba o seleccione el nombre del cliente"); return; }
     if (!calculo || !(calculo.total > 0)) { onAviso("El total debe ser mayor a 0"); cantidadRef.current?.focus(); return; }
+    if (formaPago !== "todo" && dueno === "POR_ASIGNAR") { onAviso("Para fiar elige de quién es el arroz (no «Decidir después»)"); return; }
     if (formaPago !== "todo" && /consumidor\s*final/i.test(compradorTexto)) { onAviso("Para fiar escribe el nombre de la persona que queda debiendo"); return; }
     const pagadoAhora = formaPago === "fiado" ? 0 : formaPago === "parte" ? Math.round(Number(pagadoTxt) * 100) / 100 : undefined;
     if (formaPago === "parte" && !(Number(pagadoAhora) > 0 && Number(pagadoAhora) < calculo.total)) {
@@ -288,8 +291,17 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
             {duenos.map((a) => (
               <button key={a.id} type="button" className={`cj-dequien__op ${dueno === a.id ? "is-on" : ""}`} onClick={() => onDueno(a.id)}>🤝 De {a.name}</button>
             ))}
+            {permitirDespues && (
+              <button type="button" className={`cj-dequien__op ${dueno === "POR_ASIGNAR" ? "is-on" : ""}`} onClick={() => { onDueno("POR_ASIGNAR"); setFormaPago("todo"); }}>🕒 Decidir después</button>
+            )}
           </div>
-          {dueno && (
+          {dueno === "POR_ASIGNAR" && (
+            <small className="cj-dequien__info">
+              La plata entra ahora a esta caja y el arroz <b>todavía no sale de ningún inventario</b>. Al cierre del día (o cuando se sepa)
+              lo asignas arriba en «🕒 Ventas por asignar»: si es de un socio, {duenoPropio} se lo queda debiendo.
+            </small>
+          )}
+          {dueno && dueno !== "POR_ASIGNAR" && (
             <small className="cj-dequien__info">
               El arroz sale del inventario de <b>{duenos.find((a) => a.id === dueno)?.name}</b> y la venta es suya. Lo que pague entra a esta caja y
               {" "}{duenoPropio} se lo queda debiendo (Por Cobrar de {duenos.find((a) => a.id === dueno)?.name}).
@@ -303,7 +315,9 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         <span className="vdPago__tit">¿Cómo paga?</span>
         <div className="vdPago__ops" role="radiogroup" aria-label="Cómo paga">
           {([["todo", "💵 Pagó todo"], ["fiado", "📝 Fiado (paga después)"], ["parte", "💵📝 Pagó una parte"]] as Array<[FormaPago, string]>).map(([k, t]) => (
-            <button key={k} type="button" role="radio" aria-checked={formaPago === k} className={formaPago === k ? "is-on" : ""} onClick={() => setFormaPago(k)}>{t}</button>
+            <button key={k} type="button" role="radio" aria-checked={formaPago === k} className={formaPago === k ? "is-on" : ""}
+              disabled={k !== "todo" && dueno === "POR_ASIGNAR"} title={k !== "todo" && dueno === "POR_ASIGNAR" ? "Para fiar elige de quién es el arroz" : undefined}
+              onClick={() => setFormaPago(k)}>{t}</button>
           ))}
         </div>
         {formaPago === "parte" && (

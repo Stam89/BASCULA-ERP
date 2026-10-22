@@ -20,6 +20,7 @@ import { HistorialVentas } from "./components/HistorialVentas";
 import { TrabajoEquipo } from "./components/TrabajoEquipo";
 import { CruceSocios } from "./components/CruceSocios";
 import { CuentasEntreSocios, type OpEntreSocios } from "./components/CuentasEntreSocios";
+import { VentasPorAsignar } from "./components/VentasPorAsignar";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
@@ -5066,6 +5067,7 @@ export function App() {
     if (tab === "Por Pagar" && sub === "prestamos") { irATab("Por Pagar"); setTimeout(() => setPrestamosFoco(Date.now()), 150); return; }
     if (tab === "Configuracion" && sub === "puesta") { irAConfig("✅ Puesta en marcha"); return; }
     if (tab === "Configuracion" && sub === "integridad") { irAConfig("Estado del sistema"); return; }
+    if (tab === "Caja" && sub === "venta_detalle") { irATab("Caja"); setCajaSubTab("venta_detalle"); return; }
     irATab(tab as typeof activeTab);
   }
   // Cada tarea de «Hoy» lleva a la pantalla donde se resuelve.
@@ -8362,7 +8364,11 @@ export function App() {
   // Venta, salida de inventario, cliente e ingreso de Caja se escriben juntos en
   // el backend. Si una validación falla, la transacción completa se revierte.
   // «¿De quién es el arroz?» en Venta Detalle de la caja de la Matriz: "" = de esta caja; si no, el socio dueño.
-  const [ventaDetalleDueno, setVentaDetalleDueno] = useState("");
+  // Se recuerda en el equipo (muchas cajas trabajan siempre con «Decidir después»).
+  const [ventaDetalleDueno, setVentaDetalleDuenoState] = useState(() => { try { return localStorage.getItem("bascula-erp:vd-dueno") ?? ""; } catch { return ""; } });
+  const setVentaDetalleDueno = (v: string) => { setVentaDetalleDuenoState(v); try { localStorage.setItem("bascula-erp:vd-dueno", v); } catch { /* ignore */ } };
+  // 🕒 Ventas por asignar: se vuelven a leer después de cada venta.
+  const [porAsignarKey, setPorAsignarKey] = useState(0);
   async function registrarVentaDetalle(v: VentaDetalleRegistro): Promise<boolean> {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
@@ -8381,11 +8387,13 @@ export function App() {
         ? `${money(v.total)} = ${librasStr} lb @ ${money(v.precioLibra)}/lb`
       : `${librasStr} lb @ ${money(v.precioLibra)}/lb`;
 
-    const duenoVenta = esMatrizActiva && ventaDetalleDueno ? ventaDetalleDueno : undefined;
+    const porAsignar = esMatrizActiva && ventaDetalleDueno === "POR_ASIGNAR";
+    const duenoVenta = esMatrizActiva && ventaDetalleDueno && !porAsignar && sociosDelGasto.some((a) => a.id === ventaDetalleDueno) ? ventaDetalleDueno : undefined;
     let venta: { customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } };
     try {
       venta = await apiPost<{ customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } }>("/sales/retail", {
         dueno_id: duenoVenta,
+        por_asignar: porAsignar || undefined,
         pagado: v.pagado,
         cash_register_id: registerId,
         product_id: v.product_id,
@@ -8410,7 +8418,9 @@ export function App() {
     try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
     const cr = venta.credito;
+    if (porAsignar) setPorAsignarKey((k) => k + 1);
     addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb` +
+      (porAsignar ? " · 🕒 por asignar: al cierre decide de quién es el arroz" : "") +
       (cr ? ` · 📝 ${cr.pagado > 0 ? `pagó ${money(cr.pagado)} y ` : ""}queda debiendo ${money(cr.debe)} a ${cr.de} (Por Cobrar)` : "") +
       (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario${(venta.se_lo_debes ?? 0) > 0 ? ` y le debes ${money(venta.se_lo_debes ?? 0)}` : ""}` : ""), "success");
     // Ticket térmico 80mm (comprobante de mostrador).
@@ -20547,6 +20557,12 @@ Motivo (obligatorio):`, ""));
                   </div>
                 )}
                 {/* «¿De quién es el arroz?» y «¿Cómo paga?» van al final de la tarjeta (VentaDetalleCard). */}
+                {cajaSubTab === "venta_detalle" && esMatrizActiva && (
+                  <VentasPorAsignar
+                    accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
+                    activoId={activeAccionistaId} recargar={porAsignarKey} avisar={addToast}
+                    onCambio={() => Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined)])} />
+                )}
                 {cajaSubTab === "venta_detalle" && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
@@ -20564,6 +20580,7 @@ Motivo (obligatorio):`, ""));
                     dueno={ventaDetalleDueno}
                     onDueno={setVentaDetalleDueno}
                     duenoPropio={matrizName || "la Matriz"}
+                    permitirDespues={esMatrizActiva && sociosDelGasto.length > 0}
                     onAviso={(m) => addToast(m, "error")}
                     enlaceTarifas={(texto) => cfgLink("🛒 Tarifas por libra", texto)} />
                 )}

@@ -119,4 +119,14 @@ describe("construirTareas («Hoy»)", () => {
     expect(t[1].nivel).toBe("atencion");
     expect(construirTareas({ ...base(), prestamos: { vencidas: [], proximas: [] } })).toEqual([]);
   });
+
+  it("recuerda las ventas al detalle por asignar (más fuerte si son de días anteriores)", () => {
+    const hoy = construirTareas({ ...base(), ventasPorAsignar: { n: 3, monto: 15, viejas: 0 } });
+    expect(hoy[0].key).toBe("ventas-por-asignar");
+    expect(hoy[0].titulo).toBe("3 ventas al detalle por asignar ($15.00)");
+    expect(hoy[0].nivel).toBe("info");
+    expect(hoy[0].sub).toBe("venta_detalle");
+    expect(construirTareas({ ...base(), ventasPorAsignar: { n: 1, monto: 5, viejas: 1 } })[0].nivel).toBe("atencion");
+    expect(construirTareas({ ...base(), ventasPorAsignar: { n: 0, monto: 0, viejas: 0 } })).toEqual([]);
+  });
 });

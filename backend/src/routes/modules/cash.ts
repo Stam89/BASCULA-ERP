@@ -697,6 +697,10 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     }
     // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
     if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
+    // Venta detalle POR ASIGNAR (aún sin dueño ni inventario descontado): solo queda anulada.
+    if (m.reference_type === "venta_detalle_por_asignar" && m.reference_id) {
+      await client.query("UPDATE ventas_detalle_por_asignar SET anulado_at = now() WHERE id = $1 AND asignado_at IS NULL", [m.reference_id]);
+    }
     // Dinero entre socios (sale de una caja y entra a la otra): se anulan las dos líneas, lo descontado y el préstamo.
     if (m.reference_type === "dinero_entre_socios" && m.reference_id) {
       await anularDineroEntreSocios(client, { id: m.reference_id, motivo: body.reason, userId: user?.id ?? null });

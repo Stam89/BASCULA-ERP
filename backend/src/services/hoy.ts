@@ -45,6 +45,8 @@ export type DatosHoy = {
   };
   /** Documentos de la flota de Transporte (solo la Matriz): vencidos y por vencer (opcional). */
   documentosFlota?: { vencidos: Array<{ maquina: string; documento: string; fecha: string; dias: number }>; proximos: Array<{ maquina: string; documento: string; fecha: string; dias: number }> };
+  /** Ventas al detalle cobradas sin decidir de quién es el arroz (opcional). `viejas` = de antes de hoy. */
+  ventasPorAsignar?: { n: number; monto: number; viejas: number };
   /** Solo administrador: controles de integridad entre módulos que fallan (opcional: sin dato no se muestra nada). */
   integridad?: { problemas: number; nombres: string[] };
 };
@@ -131,6 +133,19 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
       titulo: d.caja.diasAbierta === 1 ? "La caja sigue abierta desde ayer" : `La caja lleva ${d.caja.diasAbierta} días abierta`,
       detalle: "Haz el cierre y el arqueo del día para que los saldos queden bien cortados.",
       tab: "Caja", accion: "Cerrar caja"
+    });
+  }
+
+  // ── Venta detalle por asignar ────────────────────────────────────────────
+  if (d.ventasPorAsignar && d.ventasPorAsignar.n > 0) {
+    const v = d.ventasPorAsignar;
+    t.push({
+      key: "ventas-por-asignar", nivel: v.viejas > 0 ? "atencion" : "info", icono: "🕒",
+      titulo: `${plural(v.n, "venta al detalle", "ventas al detalle")} por asignar (${dinero(v.monto)})`,
+      detalle: v.viejas > 0
+        ? `${plural(v.viejas, "es de días anteriores", "son de días anteriores")}: decide de quién es el arroz para descontar su inventario.`
+        : "Al cierre del día decide de quién es el arroz (la Matriz o un socio) para descontar su inventario.",
+      tab: "Caja", sub: "venta_detalle", accion: "Asignar"
     });
   }
 
@@ -337,6 +352,17 @@ export async function reunirDatos(
     return ctx.esMatriz ? await documentosPorVencer(db) : { vencidos: [], proximos: [] };
   });
 
+  const porAsignar$ = seguro<DatosHoy["ventasPorAsignar"]>("ventas-por-asignar", undefined, async () => {
+    const r = (await db.query(
+      `SELECT COUNT(*)::int AS n, COALESCE(SUM(v.total), 0)::float AS monto,
+              COUNT(*) FILTER (WHERE (v.created_at AT TIME ZONE 'America/Guayaquil')::date < (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS viejas
+         FROM ventas_detalle_por_asignar v JOIN cash_movements m ON m.id = v.cash_movement_id
+        WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND m.reversed_at IS NULL`,
+      [acc]
+    )).rows[0];
+    return { n: Number(r.n), monto: Number(r.monto), viejas: Number(r.viejas) };
+  });
+
   const puesta$ = ctx.esAdmin
     ? seguro("puesta", { aplica: true, faltantes: [] as string[] }, async () => ({ aplica: true, faltantes: await ctx.faltantesPuesta() }))
     : Promise.resolve({ aplica: false, faltantes: [] as string[] });
@@ -349,11 +375,11 @@ export async function reunirDatos(
     : Promise.resolve(undefined);
 
   // Todas las consultas son independientes: corren al mismo tiempo (antes una tras otra, ~1.3 s; auditoría fase 5).
-  const [dow, caja, tuneles, nomina, [cxc, cxp], pedidos, prestamos, documentosFlota, puesta, integridad] = await Promise.all([
-    dow$, caja$, tuneles$, nomina$, cxcxp$, pedidos$, prestamos$, documentosFlota$, puesta$, integridad$
+  const [dow, caja, tuneles, nomina, [cxc, cxp], pedidos, prestamos, documentosFlota, puesta, integridad, ventasPorAsignar] = await Promise.all([
+    dow$, caja$, tuneles$, nomina$, cxcxp$, pedidos$, prestamos$, documentosFlota$, puesta$, integridad$, porAsignar$
   ]);
 
-  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, ...(integridad ? { integridad } : {}) };
+  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, ...(integridad ? { integridad } : {}), ...(ventasPorAsignar ? { ventasPorAsignar } : {}) };
 }
 
 export async function tareasDeHoy(ctx: Parameters<typeof reunirDatos>[1]): Promise<TareaHoy[]> {

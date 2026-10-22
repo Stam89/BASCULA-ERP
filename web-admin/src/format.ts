@@ -102,6 +102,7 @@ export function categoryLabel(cat: string): string {
     COBRO_SERVICIO_PILADO: "Cobro servicio de pilado",
     PAGO_ENTRE_SOCIOS: "Pago entre socios",
     COBRO_ENTRE_SOCIOS: "Cobro entre socios",
+    VENTA_DETALLE_POR_ASIGNAR: "Venta detalle por asignar",
     COBRO_POR_SOCIO: "Cobro recibido para otro socio",
     PAGO_PRESTAMO: "Cuota de préstamo bancario",
     PRESTAMO_RECIBIDO: "Préstamo bancario recibido",
