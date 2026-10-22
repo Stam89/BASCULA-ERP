@@ -15,6 +15,7 @@ import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
 import { cobrarCuentasEnGrupo } from "./receivable.js";
+import { registrarAnticipo } from "../../services/anticipo.js";
 
 export const salesRouter = Router();
 
@@ -103,6 +104,17 @@ const retailSaleInputSchema = z.object({
   pagado: z.number().nonnegative().max(100000000).optional(),
   // 🕒 «Decidir después»: se cobra ahora y al final del día se adjudica a quien tenga el arroz (ver /retail/por-asignar).
   por_asignar: z.boolean().optional(),
+  // 🛒 Varios productos para el mismo cliente (2026-10-21). Sin dato = el producto de arriba solo.
+  items: z.array(z.object({
+    product_id: z.string().uuid(),
+    warehouse_id: z.string().uuid(),
+    quantity_qq: z.number().positive().max(100000),
+    total_amount: z.number().positive().max(100000000),
+    product_name: z.string().trim().min(1).max(180)
+  })).min(1).max(20).optional(),
+  // 🌾 A cuenta de la persona (sin caja): AGRICULTOR = se descuenta de lo que se le debe (o en su próxima liquidación);
+  // FOMENTO = se suma a su fomento. Siempre en las cuentas del dueño del arroz.
+  a_cuenta: z.enum(["AGRICULTOR", "FOMENTO"]).optional(),
   product_name: z.string().trim().min(1).max(180),
   buyer: z.object({
     full_name: z.string().trim().min(2).max(180),
@@ -115,12 +127,88 @@ const retailSaleInputSchema = z.object({
 
 // Mostrador: cliente + venta + salida de inventario + ingreso a Caja quedan en
 // UNA transacción. Si algo falla, no queda medio cobro ni doble descuento.
+// 🛒 Líneas de una venta detalle (uno o varios productos) con su precio por QQ.
+type RetailBody = z.infer<typeof retailSaleInputSchema>;
+type LineaDetalle = { product_id: string; warehouse_id: string; quantity_qq: number; total: number; unit_price_qq: number; product_name: string };
+function lineasDeVenta(body: RetailBody): LineaDetalle[] {
+  const crudas = body.items?.length ? body.items
+    : [{ product_id: body.product_id, warehouse_id: body.warehouse_id, quantity_qq: body.quantity_qq, total_amount: body.total_amount, product_name: body.product_name }];
+  return crudas.map((l) => ({
+    product_id: l.product_id, warehouse_id: l.warehouse_id, quantity_qq: l.quantity_qq, product_name: l.product_name,
+    total: round2(l.total_amount), unit_price_qq: Math.round((l.total_amount / l.quantity_qq) * 10000) / 10000
+  }));
+}
+const nombresDe = (ls: LineaDetalle[]) => ls.map((l) => l.product_name).join(" + ");
+const itemsDe = (ls: LineaDetalle[]) => ls.map((l) => ({ product_id: l.product_id, warehouse_id: l.warehouse_id, quantity: l.quantity_qq, unit_price: l.unit_price_qq }));
+
+// 🌾 Venta detalle A CUENTA de la persona (sin caja): la venta es del dueño del arroz y queda pagada; el valor se
+// carga a la persona en las cuentas de ese dueño: AGRICULTOR → anticipo que se descuenta de lo que se le debe (o de
+// su próxima liquidación); FOMENTO → entrega de su fomento.
+async function ventaDetalleACuenta(client: PoolClient, req: AuthenticatedRequest, body: RetailBody, dueno: string | null, lineas: LineaDetalle[]) {
+  const accionistaId = req.accionistaId;
+  const duenoId = dueno ?? accionistaId;
+  const duenoNombre = (await client.query("SELECT name FROM accionistas WHERE id = $1", [duenoId])).rows[0]?.name ?? "el socio";
+  const nombres = nombresDe(lineas);
+  const cliente = await resolverClienteVentaDetalle(client, body.buyer, duenoId);
+  let destino: { tipo: "AGRICULTOR"; aplicado: number; anticipo: number } | { tipo: "FOMENTO"; fomento: string };
+  // Primero se valida a quién se carga (antes de mover inventario).
+  let farmerId: string | null = null;
+  let fomento: { id: string; farmer_name: string } | null = null;
+  if (body.a_cuenta === "AGRICULTOR") {
+    farmerId = body.buyer.farmer_id ?? (await client.query(
+      "SELECT id FROM farmers WHERE upper(trim(full_name)) = upper(trim($1)) ORDER BY created_at LIMIT 1", [cliente.full_name]
+    )).rows[0]?.id ?? null;
+    if (!farmerId) throw new ApiError(400, `${cliente.full_name} no está registrado como agricultor: elige su nombre de la lista de agricultores.`);
+  } else {
+    fomento = (await client.query(
+      `SELECT id, farmer_name FROM fomentos
+        WHERE accionista_id = $1 AND status = 'ACTIVOS' AND liquidado_at IS NULL
+          AND (($2::uuid IS NOT NULL AND farmer_id = $2) OR upper(trim(farmer_name)) = upper(trim($3)))
+        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [duenoId, body.buyer.farmer_id ?? null, cliente.full_name]
+    )).rows[0] ?? null;
+    if (!fomento) throw new ApiError(400, `${cliente.full_name} no tiene un fomento activo con ${duenoNombre}: elige «Pagó todo», «Fiado» u otro dueño del arroz.`);
+  }
+  const venta = await crearVenta(client, duenoId, {
+    customer_id: cliente.id,
+    payment_method: "CASH",
+    sack_weight_lb: 100,
+    description: `Venta detalle ${nombres} · ${cliente.full_name} (a ${body.a_cuenta === "AGRICULTOR" ? "su cuenta de agricultor" : "su fomento"})`,
+    items: itemsDe(lineas)
+  });
+  const total = round2(Number(venta.total_amount));
+  const concepto = `Arroz ${nombres} (venta ${venta.sale_number})`;
+  if (farmerId) {
+    const { aplicado } = await registrarAnticipo(client, {
+      farmerId, accionistaId: duenoId, amount: total, concept: concepto, createdBy: req.user?.id ?? null, aplicarAPagar: true
+    });
+    destino = { tipo: "AGRICULTOR", aplicado, anticipo: round2(total - aplicado) };
+  } else {
+    await client.query(
+      "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
+      [fomento!.id, total, concepto]
+    );
+    destino = { tipo: "FOMENTO", fomento: fomento!.farmer_name };
+  }
+  if (dueno) {
+    const cajero = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
+    await notificar(client, {
+      accionistaId: dueno, tipo: "COBRO",
+      titulo: `${cajero} vendió arroz tuyo a cuenta`,
+      mensaje: `${cajero} entregó ${nombres} a ${cliente.full_name} por ${dinero(total)}: salió de tu inventario y se cargó ${destino.tipo === "AGRICULTOR" ? "a su cuenta de agricultor contigo" : "a su fomento contigo"}.`,
+      monto: total, referenciaTipo: "sales", referenciaId: venta.id
+    });
+  }
+  return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name, a_cuenta: { ...destino, total, de: duenoNombre }, ...(dueno ? { dueno: duenoNombre, se_lo_debes: 0 } : {}) };
+}
+
 // 📝 Venta detalle FIADA (toda o en parte): la venta es del dueño del arroz (esta caja o el socio elegido) y queda
 // a crédito a nombre de la persona; lo que pagó ahora se cobra con el mismo camino de Por Cobrar (si el arroz es de
 // otro socio, el dinero entra a esta caja como cobro recibido por él y esta caja se lo debe).
 async function ventaDetalleFiada(
-  client: PoolClient, req: AuthenticatedRequest, body: z.infer<typeof retailSaleInputSchema>, dueno: string | null, unitPriceQq: number
+  client: PoolClient, req: AuthenticatedRequest, body: RetailBody, dueno: string | null, lineas: LineaDetalle[]
 ) {
+  const nombres = nombresDe(lineas);
   const accionistaId = req.accionistaId;
   await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
   const duenoId = dueno ?? accionistaId;
@@ -131,8 +219,8 @@ async function ventaDetalleFiada(
     customer_id: cliente.id,
     payment_method: "CREDIT",
     sack_weight_lb: 100,
-    description: `Venta detalle ${body.product_name} · ${cliente.full_name} (fiado${dueno ? `, vendió ${cajero}` : ""})`,
-    items: [{ product_id: body.product_id, warehouse_id: body.warehouse_id, quantity: body.quantity_qq, unit_price: unitPriceQq }]
+    description: `Venta detalle ${nombres} · ${cliente.full_name} (fiado${dueno ? `, vendió ${cajero}` : ""})`,
+    items: itemsDe(lineas)
   });
   const total = round2(Number(venta.total_amount));
   const pagado = round2(Math.min(Number(body.pagado ?? 0), total));
@@ -144,7 +232,7 @@ async function ventaDetalleFiada(
     await cobrarCuentasEnGrupo(client, { accionistaId: duenoId, user: req.user } as AuthenticatedRequest, {
       receivable_ids: [cxc.id], amount: pagado,
       ...(dueno ? { recibido_por: accionistaId, medio_pago: body.medio ?? "EFECTIVO" } : { cash_register_id: body.cash_register_id }),
-      concepto: `Abono al comprar ${body.product_name}`
+      concepto: `Abono al comprar ${nombres}`
     });
   }
   const debe = round2(total - pagado);
@@ -152,7 +240,7 @@ async function ventaDetalleFiada(
     await notificar(client, {
       accionistaId: dueno, tipo: "COBRO",
       titulo: `${cajero} vendió arroz tuyo fiado`,
-      mensaje: `${cajero} vendió ${body.product_name} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario; ${cliente.full_name} te debe ${dinero(debe)} (Por Cobrar).` +
+      mensaje: `${cajero} vendió ${nombres} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario; ${cliente.full_name} te debe ${dinero(debe)} (Por Cobrar).` +
         (pagado > 0.005 ? ` Pagó ${dinero(pagado)} que recibió ${cajero} (te lo debe).` : ""),
       monto: total, referenciaTipo: "sales", referenciaId: venta.id
     });
@@ -166,26 +254,32 @@ async function ventaDetalleFiada(
 
 // 🕒 VENTA DETALLE POR ASIGNAR (pedido del dueño 2026-10-21): se cobra ahora (la plata entra a esta caja) sin decidir
 // de quién es el arroz; el inventario NO se descuenta hasta asignarla (POST /retail/por-asignar/asignar).
-async function ventaDetallePorAsignar(client: PoolClient, req: AuthenticatedRequest, body: z.infer<typeof retailSaleInputSchema>, unitPriceQq: number) {
+async function ventaDetallePorAsignar(client: PoolClient, req: AuthenticatedRequest, body: RetailBody, lineas: LineaDetalle[]) {
   const accionistaId = req.accionistaId;
   await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
   const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
-  const total = round2(body.quantity_qq * unitPriceQq);
   const caja = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
   const medio = caja?.tipo === "BANCO" ? "BANCO" : caja?.tipo === "MIXTO" ? (body.medio ?? "EFECTIVO") : "EFECTIVO";
-  const id = (await client.query(
-    `INSERT INTO ventas_detalle_por_asignar (accionista_id, cash_register_id, product_id, warehouse_id, product_name, quantity_qq, unit_price_qq, total, libras, customer_id, customer_name, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
-    [accionistaId, body.cash_register_id, body.product_id, body.warehouse_id, body.product_name, body.quantity_qq, unitPriceQq, total,
-     round2(body.quantity_qq * QQ_TO_LB), cliente.id, cliente.full_name, req.user?.id ?? null]
-  )).rows[0].id as string;
-  const mov = (await client.query(
-    `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, created_by)
-     VALUES ($1, 'INCOME', 'VENTA_DETALLE_POR_ASIGNAR', 'venta_detalle_por_asignar', $2, $3, $4, $5, $6) RETURNING id`,
-    [body.cash_register_id, id, total, `Venta detalle por asignar: ${body.product_name} · ${cliente.full_name}`, medio, req.user?.id ?? null]
-  )).rows[0].id as string;
-  await client.query("UPDATE ventas_detalle_por_asignar SET cash_movement_id = $2 WHERE id = $1", [id, mov]);
-  return { id, total_amount: total, customer_id: cliente.id, customer_name: cliente.full_name, por_asignar: true };
+  // Una fila (y un ingreso) por producto: cada uno se puede asignar a un dueño distinto.
+  const ids: string[] = [];
+  let total = 0;
+  for (const l of lineas) {
+    const id = (await client.query(
+      `INSERT INTO ventas_detalle_por_asignar (accionista_id, cash_register_id, product_id, warehouse_id, product_name, quantity_qq, unit_price_qq, total, libras, customer_id, customer_name, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      [accionistaId, body.cash_register_id, l.product_id, l.warehouse_id, l.product_name, l.quantity_qq, l.unit_price_qq, l.total,
+       round2(l.quantity_qq * QQ_TO_LB), cliente.id, cliente.full_name, req.user?.id ?? null]
+    )).rows[0].id as string;
+    const mov = (await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, created_by)
+       VALUES ($1, 'INCOME', 'VENTA_DETALLE_POR_ASIGNAR', 'venta_detalle_por_asignar', $2, $3, $4, $5, $6) RETURNING id`,
+      [body.cash_register_id, id, l.total, `Venta detalle por asignar: ${l.product_name} · ${cliente.full_name}`, medio, req.user?.id ?? null]
+    )).rows[0].id as string;
+    await client.query("UPDATE ventas_detalle_por_asignar SET cash_movement_id = $2 WHERE id = $1", [id, mov]);
+    ids.push(id);
+    total = round2(total + l.total);
+  }
+  return { id: ids[0], ids, total_amount: total, customer_id: cliente.id, customer_name: cliente.full_name, por_asignar: true };
 }
 
 // Ventas por asignar de esta caja + cuánto arroz tiene cada accionista de esos productos (para decidir a quién).
@@ -294,17 +388,20 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = retailSaleInputSchema.parse(req.body);
   const dueno = body.dueno_id && body.dueno_id !== accionistaId ? body.dueno_id : null;
-  const aCredito = body.pagado != null && round2(body.pagado) < round2(body.total_amount) - 0.005;
+  const lineas = lineasDeVenta(body);
+  const totalVenta = round2(lineas.reduce((t, l) => t + l.total, 0));
+  const aCredito = !body.a_cuenta && body.pagado != null && round2(body.pagado) < totalVenta - 0.005;
   if (aCredito && /consumidor\s*final/i.test(body.buyer.full_name)) {
     throw new ApiError(400, "Para fiar escribe el nombre de la persona que queda debiendo (no «Consumidor final»).");
   }
-  if (body.por_asignar && (aCredito || dueno)) {
-    throw new ApiError(400, "«Decidir después» es solo para ventas pagadas completas: para fiar, elige de quién es el arroz.");
+  if (body.por_asignar && (aCredito || dueno || body.a_cuenta)) {
+    throw new ApiError(400, "«Decidir después» es solo para ventas pagadas completas: para fiar o cargar a su cuenta, elige de quién es el arroz.");
   }
   const result = await inTransaction(async (client) => {
-    const unitPriceQq = Math.round((body.total_amount / body.quantity_qq) * 10000) / 10000;
-    if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, unitPriceQq);
-    if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, unitPriceQq);
+    if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, lineas);
+    if (body.a_cuenta) return await ventaDetalleACuenta(client, req as AuthenticatedRequest, body, dueno, lineas);
+    if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, lineas);
+    const nombres = nombresDe(lineas);
     if (dueno) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
       const socio = (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [dueno])).rows[0];
@@ -316,8 +413,8 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
         customer_id: cliente.id,
         payment_method: "CASH",
         sack_weight_lb: 100,
-        description: `Venta detalle ${body.product_name} · ${cliente.full_name} (cobró ${cajero})`,
-        items: [{ product_id: body.product_id, warehouse_id: body.warehouse_id, quantity: body.quantity_qq, unit_price: unitPriceQq }]
+        description: `Venta detalle ${nombres} · ${cliente.full_name} (cobró ${cajero})`,
+        items: itemsDe(lineas)
       });
       const total = round2(Number(venta.total_amount));
       const caja = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
@@ -325,23 +422,23 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
       const mov = await client.query(
         `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
          VALUES ($1, 'INCOME', 'COBRO_POR_SOCIO', 'sales', $2, $3, $4, $5) RETURNING id`,
-        [body.cash_register_id, venta.id, total, `Venta detalle de ${socio.name}: ${body.product_name} · ${cliente.full_name} (se lo debes)`, medio]
+        [body.cash_register_id, venta.id, total, `Venta detalle de ${socio.name}: ${nombres} · ${cliente.full_name} (se lo debes)`, medio]
       );
       const movId = mov.rows[0].id;
       await client.query(
         `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
          VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
-        [dueno, movId, `${cajero} cobró tu venta detalle: ${body.product_name} · ${cliente.full_name}`, total]
+        [dueno, movId, `${cajero} cobró tu venta detalle: ${nombres} · ${cliente.full_name}`, total]
       );
       await client.query(
         `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
          VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
-        [accionistaId, movId, `Cobraste una venta detalle de ${socio.name}: ${body.product_name} · ${cliente.full_name}`, total]
+        [accionistaId, movId, `Cobraste una venta detalle de ${socio.name}: ${nombres} · ${cliente.full_name}`, total]
       );
       await notificar(client, {
         accionistaId: dueno, tipo: "PAGO",
         titulo: `${cajero} vendió arroz tuyo`,
-        mensaje: `${cajero} vendió ${body.product_name} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario y ${cajero} te lo debe (Por Cobrar).`,
+        mensaje: `${cajero} vendió ${nombres} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario y ${cajero} te lo debe (Por Cobrar).`,
         monto: total, referenciaTipo: "sales", referenciaId: venta.id
       });
       return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name, dueno: socio.name, se_lo_debes: total };
@@ -353,13 +450,8 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
       payment_method: body.medio === "BANCO" ? "TRANSFER" : "CASH",
       sack_weight_lb: 100,
       medio: body.medio,
-      description: `Venta detalle ${body.product_name} · ${cliente.full_name}`,
-      items: [{
-        product_id: body.product_id,
-        warehouse_id: body.warehouse_id,
-        quantity: body.quantity_qq,
-        unit_price: unitPriceQq
-      }]
+      description: `Venta detalle ${nombres} · ${cliente.full_name}`,
+      items: itemsDe(lineas)
     });
     return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name };
   });

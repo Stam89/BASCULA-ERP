@@ -2385,6 +2385,27 @@ export function App() {
     } catch { /* ignore */ }
     return "Dashboard";
   });
+  // 📱 Botón «atrás» del celular (pedido del dueño 2026-10-21): vuelve a la pantalla anterior en vez de salir de la
+  // app. Cada cambio de pantalla queda en el historial del navegador; desde Inicio, «atrás» sí sale.
+  const pantallaDesdeAtras = useRef(false);
+  useEffect(() => {
+    try {
+      window.history.replaceState({ ...(window.history.state ?? {}), tab: "Dashboard" }, "");
+      if (activeTab !== "Dashboard") window.history.pushState({ tab: activeTab }, "");
+    } catch { /* sin historial disponible */ }
+    const alVolver = (e: PopStateEvent) => {
+      const tab = (e.state as { tab?: string } | null)?.tab;
+      if (tab) { pantallaDesdeAtras.current = true; setActiveTab(tab); }
+    };
+    window.addEventListener("popstate", alVolver);
+    return () => window.removeEventListener("popstate", alVolver);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (pantallaDesdeAtras.current) { pantallaDesdeAtras.current = false; return; }
+    if ((window.history.state as { tab?: string } | null)?.tab === activeTab) return;
+    try { window.history.pushState({ tab: activeTab }, ""); } catch { /* sin historial disponible */ }
+  }, [activeTab]);
   // Nombre editable de la operación Campo (campo_config). Solo la etiqueta de
   // Campo lo usa; las demás operaciones no cambian.
   const [campoNombre, setCampoNombre] = useState("Campo");
@@ -8373,7 +8394,7 @@ export function App() {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
     if (!finishedWarehouse?.id) { addToast("No está configurada la bodega de producto terminado", "error"); return false; }
-    if (!v.product_id || !(v.libras > 0) || !(v.qq > 0) || !(v.precioAplicado > 0)) {
+    if (!v.lineas?.length || v.lineas.some((l) => !l.product_id || !(l.libras > 0) || !(l.qq > 0) || !(l.precioAplicado > 0))) {
       addToast("Completa producto, cantidad y precio", "error");
       return false;
     }
@@ -8389,17 +8410,22 @@ export function App() {
 
     const porAsignar = esMatrizActiva && ventaDetalleDueno === "POR_ASIGNAR";
     const duenoVenta = esMatrizActiva && ventaDetalleDueno && !porAsignar && sociosDelGasto.some((a) => a.id === ventaDetalleDueno) ? ventaDetalleDueno : undefined;
-    let venta: { customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } };
+    type ACuenta = { tipo: "AGRICULTOR"; aplicado: number; anticipo: number; total: number; de: string } | { tipo: "FOMENTO"; fomento: string; total: number; de: string };
+    let venta: { customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string }; a_cuenta?: ACuenta };
     try {
-      venta = await apiPost<{ customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } }>("/sales/retail", {
+      venta = await apiPost<typeof venta>("/sales/retail", {
+        items: v.lineas.length > 1
+          ? v.lineas.map((l) => ({ product_id: l.product_id, warehouse_id: finishedWarehouse.id, quantity_qq: l.qq, total_amount: l.total, product_name: l.producto }))
+          : undefined,
+        a_cuenta: v.a_cuenta,
         dueno_id: duenoVenta,
         por_asignar: porAsignar || undefined,
         pagado: v.pagado,
         cash_register_id: registerId,
         product_id: v.product_id,
         warehouse_id: finishedWarehouse.id,
-        quantity_qq: v.qq,
-        total_amount: v.total,
+        quantity_qq: v.lineas[0].qq,
+        total_amount: v.lineas[0].total,
         price_per_pound: v.precioLibra,
         mode: v.modo,
         input_amount: v.cantidad,
@@ -8418,8 +8444,11 @@ export function App() {
     try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
     const cr = venta.credito;
+    const ac = venta.a_cuenta;
     if (porAsignar) setPorAsignarKey((k) => k + 1);
-    addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb` +
+    addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${v.lineas.length > 1 ? v.lineas.map((l) => `${l.libras.toFixed(2)} lb ${l.producto}`).join(" + ") : `${librasStr} lb`}` +
+      (ac?.tipo === "AGRICULTOR" ? ` · 🌾 a su cuenta con ${ac.de}${ac.aplicado > 0 ? `: se descontaron ${money(ac.aplicado)} de lo que se le debe` : ""}${ac.anticipo > 0 ? ` · ${money(ac.anticipo)} se descuentan en su próxima liquidación` : ""}` : "") +
+      (ac?.tipo === "FOMENTO" ? ` · 🌱 cargado a su fomento con ${ac.de}` : "") +
       (porAsignar ? " · 🕒 por asignar: al cierre decide de quién es el arroz" : "") +
       (cr ? ` · 📝 ${cr.pagado > 0 ? `pagó ${money(cr.pagado)} y ` : ""}queda debiendo ${money(cr.debe)} a ${cr.de} (Por Cobrar)` : "") +
       (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario${(venta.se_lo_debes ?? 0) > 0 ? ` y le debes ${money(venta.se_lo_debes ?? 0)}` : ""}` : ""), "success");
@@ -8433,7 +8462,9 @@ export function App() {
       unidad: v.modo === "QQ" ? "QQ" : "lb",
       cantidad: v.modo === "QQ" ? qqStr : librasStr,
       precioUnitario: v.precioAplicado,
-      ...(cr ? { pagado: cr.pagado, debe: cr.debe } : {})
+      ...(cr ? { pagado: cr.pagado, debe: cr.debe } : {}),
+      ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: l.libras.toFixed(3), total: l.total })) } : {}),
+      ...(ac ? { nota: ac.tipo === "AGRICULTOR" ? "A su cuenta de agricultor" : "Cargado a su fomento" } : {})
     });
     await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
     Promise.all([
@@ -8498,6 +8529,10 @@ export function App() {
     unidad?: "lb" | "QQ"; cantidad?: string; precioUnitario?: number;
     /** Fiado: lo que pagó y lo que queda debiendo. */
     pagado?: number; debe?: number;
+    /** Varios productos en la misma venta. */
+    lineas?: Array<{ producto: string; libras: string; total: number }>;
+    /** Forma de pago especial (a su cuenta / fomento). */
+    nota?: string;
   }) {
     const enQQ = t.unidad === "QQ";
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
@@ -8541,16 +8576,18 @@ export function App() {
         <table>
           <thead><tr><th>Producto</th><th class="n">${enQQ ? "QQ" : "Libras"}</th><th class="n">${enQQ ? "$/QQ" : "$/lb"}</th><th class="n">Subtotal</th></tr></thead>
           <tbody>
+            ${t.lineas ? t.lineas.map((l) => `<tr><td>${esc(l.producto)}</td><td class="n">${esc(l.libras)}</td><td class="n"></td><td class="n">${money(l.total)}</td></tr>`).join("") : `
             <tr>
               <td>${esc(t.producto)}</td>
               <td class="n">${esc(enQQ ? t.cantidad ?? t.libras : t.libras)}</td>
               <td class="n">${formatoPrecio(enQQ ? t.precioUnitario ?? t.precioLibra : t.precioLibra)}</td>
               <td class="n">${money(t.total)}</td>
-            </tr>
+            </tr>`}
           </tbody>
         </table>
         ${enQQ ? `<div class="row"><span class="k">Equivale a:</span> <span>${esc(t.libras)} lb</span></div>` : ""}
         <div class="tot"><span>TOTAL</span><span>${money(t.total)}</span></div>
+        ${t.nota ? `<div class="row" style="font-weight:700"><span>${esc(t.nota)}</span></div>` : ""}
         ${t.debe != null && t.debe > 0.005 ? `<div class="row"><span class="k">Pagó:</span> <span>${money(t.pagado ?? 0)}</span></div>
         <div class="row" style="font-weight:900;font-size:15px"><span>QUEDA DEBIENDO:</span> <span>${money(t.debe)}</span></div>` : ""}
         <div class="foot">${appSettings?.receipt_footer?.trim() ? esc(appSettings.receipt_footer.trim()) : "¡Gracias por su compra!<br>Vuelva pronto 🌾"}</div>

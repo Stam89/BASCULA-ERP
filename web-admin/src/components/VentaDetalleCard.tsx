@@ -23,6 +23,9 @@ export type PersonaVentaDetalle = {
   roles: string[];
 };
 
+/** 🛒 Una línea de la venta (el cliente puede llevar varios productos). */
+export type LineaVD = VentaDetalleCalculo & { product_id: string; producto: string; modo: ModoVentaDetalle };
+
 export type VentaDetalleRegistro = VentaDetalleCalculo & {
   modo: ModoVentaDetalle;
   product_id: string;
@@ -37,6 +40,10 @@ export type VentaDetalleRegistro = VentaDetalleCalculo & {
   producto: string;
   /** 📝 Cuánto pagó ahora (sin dato = pagó todo). Menos que el total = fiado: el resto queda Por Cobrar. */
   pagado?: number;
+  /** 🛒 Todas las líneas (la primera es la de arriba). `total` del registro = suma de todas. */
+  lineas: LineaVD[];
+  /** 🌾 A cuenta de la persona: AGRICULTOR (se descuenta de lo que se le debe) o FOMENTO (se suma a su fomento). */
+  a_cuenta?: "AGRICULTOR" | "FOMENTO";
 };
 
 const MODOS: Array<{ modo: ModoVentaDetalle; label: string }> = [
@@ -47,7 +54,7 @@ const MODOS: Array<{ modo: ModoVentaDetalle; label: string }> = [
 
 const normalizarNombre = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
 
-type FormaPago = "todo" | "fiado" | "parte";
+type FormaPago = "todo" | "fiado" | "parte" | "cuenta" | "fomento";
 
 export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO, duenos = [], dueno = "", onDueno, duenoPropio = "esta caja", permitirDespues = false }: {
   /** «¿De quién es el arroz?» (caja de la Matriz): socios cuyo arroz se puede vender aquí. Vacío = no se pregunta. */
@@ -80,6 +87,8 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
   // 📝 ¿Cómo paga? (pedido del dueño 2026-10-21): todo ahora, fiado, o una parte y el resto queda debiendo.
   const [formaPago, setFormaPago] = useState<FormaPago>("todo");
   const [pagadoTxt, setPagadoTxt] = useState("");
+  // 🛒 Productos ya agregados a esta venta (el de arriba es el que se está escribiendo).
+  const [lineas, setLineas] = useState<LineaVD[]>([]);
   const enviandoRef = useRef(false); // candado contra el doble Enter
   const productoRef = useRef<HTMLSelectElement>(null);
   const cantidadRef = useRef<HTMLInputElement>(null);
@@ -130,27 +139,49 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
     }
   }
 
+  // Línea que se está escribiendo (null si está vacía); avisa si está a medias.
+  function lineaActual(avisar: boolean): LineaVD | null | false {
+    if (!producto && !hayCantidad) return null;
+    if (!producto) { if (avisar) { onAviso("Elige el producto"); productoRef.current?.focus(); } return false; }
+    if (!(precioLibra > 0)) { if (avisar) onAviso("Este producto no tiene tarifa por libra configurada"); return false; }
+    if (!hayCantidad) { if (avisar) { onAviso(`Digita ${enDolares ? "el monto en dólares" : enQQ ? "la cantidad en QQ" : "la cantidad en libras"}`); cantidadRef.current?.focus(); } return false; }
+    if (!calculo || !(calculo.total > 0)) { if (avisar) { onAviso("El total debe ser mayor a 0"); cantidadRef.current?.focus(); } return false; }
+    return { ...calculo, product_id: producto.id, producto: producto.label, modo };
+  }
+  function agregarLinea() {
+    const l = lineaActual(true);
+    if (!l) { if (l === null) onAviso("Elige el producto y la cantidad antes de agregar otro"); return; }
+    setLineas((ls) => [...ls, l]);
+    setProductId("");
+    setCantidad("");
+    setDescuentoTxt("");
+    productoRef.current?.focus();
+  }
+
   async function registrar() {
     if (enviandoRef.current) return;
-    if (!producto) { onAviso("Elige el producto"); productoRef.current?.focus(); return; }
-    if (!(precioLibra > 0)) { onAviso("Este producto no tiene tarifa por libra configurada"); return; }
-    if (!hayCantidad) { onAviso(`Digita ${enDolares ? "el monto en dólares" : enQQ ? "la cantidad en QQ" : "la cantidad en libras"}`); cantidadRef.current?.focus(); return; }
+    const actual = lineaActual(lineas.length === 0);
+    if (actual === false) { if (lineas.length > 0) lineaActual(true); return; }
+    const todas = [...lineas, ...(actual ? [actual] : [])];
+    if (todas.length === 0) { onAviso("Elige el producto"); productoRef.current?.focus(); return; }
     if (compradorTexto.trim().length < 2) { onAviso("Escriba o seleccione el nombre del cliente"); return; }
-    if (!calculo || !(calculo.total > 0)) { onAviso("El total debe ser mayor a 0"); cantidadRef.current?.focus(); return; }
+    const totalVenta = Math.round(todas.reduce((s, l) => s + l.total, 0) * 100) / 100;
+    if ((formaPago === "cuenta" || formaPago === "fomento") && dueno === "POR_ASIGNAR") { onAviso("Para cargar a su cuenta elige de quién es el arroz (no «Decidir después»)"); return; }
     if (formaPago !== "todo" && dueno === "POR_ASIGNAR") { onAviso("Para fiar elige de quién es el arroz (no «Decidir después»)"); return; }
     if (formaPago !== "todo" && /consumidor\s*final/i.test(compradorTexto)) { onAviso("Para fiar escribe el nombre de la persona que queda debiendo"); return; }
     const pagadoAhora = formaPago === "fiado" ? 0 : formaPago === "parte" ? Math.round(Number(pagadoTxt) * 100) / 100 : undefined;
-    if (formaPago === "parte" && !(Number(pagadoAhora) > 0 && Number(pagadoAhora) < calculo.total)) {
-      onAviso(`Escribe cuánto pagó ahora (más de $0 y menos de ${money(calculo.total)})`); return;
+    if (formaPago === "parte" && !(Number(pagadoAhora) > 0 && Number(pagadoAhora) < totalVenta)) {
+      onAviso(`Escribe cuánto pagó ahora (más de $0 y menos de ${money(totalVenta)})`); return;
     }
+    const primera = todas[0];
     enviandoRef.current = true;
     setEnviando(true);
     try {
       const ok = await onRegistrar({
-        ...calculo,
-        modo,
-        product_id: producto.id,
-        producto: producto.label,
+        ...primera,
+        total: totalVenta,
+        lineas: todas,
+        ...(formaPago === "cuenta" ? { a_cuenta: "AGRICULTOR" as const } : formaPago === "fomento" ? { a_cuenta: "FOMENTO" as const } : {}),
         ...(pagadoAhora !== undefined ? { pagado: pagadoAhora } : {}),
         comprador: {
           full_name: persona?.full_name ?? compradorTexto.trim(),
@@ -168,6 +199,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         setDescuentoTxt("");
         setFormaPago("todo");
         setPagadoTxt("");
+        setLineas([]);
         productoRef.current?.focus();
       }
     } finally {
@@ -236,6 +268,20 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         </p>
       )}
 
+      {lineas.length > 0 && (
+        <div className="vdLineas">
+          <span className="vdLineas__tit">🛒 Productos de esta venta</span>
+          {lineas.map((l, i) => (
+            <div key={i} className="vdLineas__fila">
+              <span><b>{l.producto}</b> · {l.libras.toFixed(2)} lb ({formatoCantidad(l.qq)} QQ)</span>
+              <b>{money(l.total)}</b>
+              <button type="button" className="btnGhost" aria-label={`Quitar ${l.producto}`} onClick={() => setLineas(lineas.filter((_, j) => j !== i))}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button type="button" className="vdAgregar" onClick={agregarLinea}>➕ Agregar otro producto a esta venta</button>
+
       <label>
         <span>Cliente <strong aria-hidden="true">*</strong></span>
         <input name="cliente" list="venta-detalle-personas" value={compradorTexto} autoComplete="off"
@@ -282,6 +328,12 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         </div>
       )}
 
+      {lineas.length > 0 && (() => {
+        const total = Math.round(([...lineas.map((l) => l.total), calculo && hayCantidad && producto ? calculo.total : 0]).reduce((s, x) => s + x, 0) * 100) / 100;
+        const n = lineas.length + (calculo && hayCantidad && producto ? 1 : 0);
+        return <div className="vdTotalGeneral"><span>🛒 Total de la venta ({n} productos)</span><b>{money(total)}</b></div>;
+      })()}
+
       {/* 🤝 ¿De quién es el arroz? Al final, antes de registrar (pedido del dueño 2026-10-21). */}
       {duenos.length > 0 && onDueno && (
         <div className={`cj-dequien ${dueno ? "is-socio" : ""}`}>
@@ -314,9 +366,11 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
       <div className="vdPago">
         <span className="vdPago__tit">¿Cómo paga?</span>
         <div className="vdPago__ops" role="radiogroup" aria-label="Cómo paga">
-          {([["todo", "💵 Pagó todo"], ["fiado", "📝 Fiado (paga después)"], ["parte", "💵📝 Pagó una parte"]] as Array<[FormaPago, string]>).map(([k, t]) => (
+          {([["todo", "💵 Pagó todo"], ["fiado", "📝 Fiado (paga después)"], ["parte", "💵📝 Pagó una parte"],
+            ...(persona?.farmer_id ? [["cuenta", "🌾 A su cuenta de agricultor"]] : []),
+            ...(persona?.roles.some((r) => /fomento/i.test(r)) ? [["fomento", "🌱 Cargar a su fomento"]] : [])] as Array<[FormaPago, string]>).map(([k, t]) => (
             <button key={k} type="button" role="radio" aria-checked={formaPago === k} className={formaPago === k ? "is-on" : ""}
-              disabled={k !== "todo" && dueno === "POR_ASIGNAR"} title={k !== "todo" && dueno === "POR_ASIGNAR" ? "Para fiar elige de quién es el arroz" : undefined}
+              disabled={k !== "todo" && dueno === "POR_ASIGNAR"} title={k !== "todo" && dueno === "POR_ASIGNAR" ? "Para fiar o cargar a su cuenta elige de quién es el arroz" : undefined}
               onClick={() => setFormaPago(k)}>{t}</button>
           ))}
         </div>
@@ -326,13 +380,21 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
             <input type="number" inputMode="decimal" min="0" step="0.01" value={pagadoTxt} placeholder="0.00" onChange={(e) => setPagadoTxt(e.target.value)} />
           </label>
         )}
-        {formaPago !== "todo" && calculo && hayCantidad && (() => {
-          const pagaAhora = formaPago === "fiado" ? 0 : Math.max(0, Math.min(Number(pagadoTxt) || 0, calculo.total));
+        {(formaPago === "cuenta" || formaPago === "fomento") && (
+          <p className="vdPago__info">
+            {formaPago === "cuenta"
+              ? <>No entra plata a la caja: se <b>descuenta de lo que se le debe</b> a {compradorTexto.trim() || "este agricultor"} (o de su próxima liquidación), en las cuentas de {dueno && dueno !== "POR_ASIGNAR" ? duenos.find((a) => a.id === dueno)?.name : duenoPropio}.</>
+              : <>No entra plata a la caja: se <b>suma a su fomento</b> con {dueno && dueno !== "POR_ASIGNAR" ? duenos.find((a) => a.id === dueno)?.name : duenoPropio}.</>}
+          </p>
+        )}
+        {(formaPago === "fiado" || formaPago === "parte") && (calculo || lineas.length > 0) && (() => {
+          const totalVenta = Math.round(([...lineas.map((l) => l.total), calculo && hayCantidad ? calculo.total : 0]).reduce((s, x) => s + x, 0) * 100) / 100;
+          const pagaAhora = formaPago === "fiado" ? 0 : Math.max(0, Math.min(Number(pagadoTxt) || 0, totalVenta));
           const nombreDueno = dueno ? duenos.find((a) => a.id === dueno)?.name : duenoPropio;
           return (
             <p className="vdPago__info">
               {pagaAhora > 0 ? <>Paga ahora <b>{money(pagaAhora)}</b> · </> : null}
-              <b>{compradorTexto.trim() || "El cliente"}</b> queda debiendo <b>{money(Math.round((calculo.total - pagaAhora) * 100) / 100)}</b> a {nombreDueno} (Por Cobrar).
+              <b>{compradorTexto.trim() || "El cliente"}</b> queda debiendo <b>{money(Math.round((totalVenta - pagaAhora) * 100) / 100)}</b> a {nombreDueno} (Por Cobrar).
             </p>
           );
         })()}

@@ -6425,3 +6425,11 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .vpa__lista { display: grid; gap: 4px; max-height: 260px; overflow-y: auto; }
 .vpa__lista label { display: grid; grid-template-columns: auto 1fr auto auto; gap: 8px; align-items: center; font-size: 13px; padding: 5px 8px; border: 1px solid #e2e8f0; border-radius: 8px; cursor: pointer; }
 .vpa__lista label.is-on { border-color: #f59e0b; background: #fffbeb; }
+
+/* 🛒 Venta detalle con varios productos (2026-10-21). */
+.vdLineas { display: grid; gap: 4px; padding: 8px 10px; border: 1px dashed #86efac; border-radius: 10px; background: #f0fdf4; margin: 6px 0; }
+.vdLineas__tit { font-size: 12px; font-weight: 700; color: #14532d; }
+.vdLineas__fila { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; font-size: 13px; }
+.vdAgregar { justify-self: start; margin: 4px 0 8px; border: 1px dashed #16a34a; background: #fff; color: #15803d; border-radius: 10px; padding: 6px 12px; font-weight: 700; cursor: pointer; }
+.vdTotalGeneral { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 10px; background: #dcfce7; color: #14532d; font-size: 15px; margin: 6px 0; }
+.vdTotalGeneral b { font-size: 20px; }

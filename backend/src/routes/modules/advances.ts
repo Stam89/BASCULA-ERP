@@ -4,12 +4,11 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
-import { nextCode } from "../../utils/codes.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const advancesRouter = Router();
 
-import { round2 } from "../../utils/rice-formulas.js";
+import { registrarAnticipo } from "../../services/anticipo.js";
 
 const advanceSchema = z.object({
   farmer_id: z.string().uuid(),
@@ -46,78 +45,23 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
       tipoCaja = caja.tipo;
       await avisarSobregiro(client, data.cash_register_id, data.amount, req);
     }
-    const advance = await client.query(
-      `INSERT INTO farmer_advances (farmer_id, advance_number, amount, balance, concept, created_by, accionista_id)
-       VALUES ($1, $2, $3, $3, $4, $5, $6)
-       RETURNING *`,
-      [data.farmer_id, nextCode("ANT"), data.amount, data.concept, data.created_by, accionistaId]
-    );
+    // Anticipo (y, si se pide, aplicado de una vez contra lo que se le debe): services/anticipo.ts.
+    const { advance } = await registrarAnticipo(client, {
+      farmerId: data.farmer_id, accionistaId, amount: data.amount, concept: data.concept,
+      createdBy: data.created_by ?? null, aplicarAPagar: data.apply_to_payables
+    });
 
     if (data.cash_register_id) {
       await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
          VALUES ($1, 'EXPENSE', 'ANTICIPO_AGRICULTOR', 'farmer_advances', $2, $3, $4, $5, $6)`,
-        [data.cash_register_id, advance.rows[0].id, data.amount, data.concept, data.created_by,
+        [data.cash_register_id, advance.id, data.amount, data.concept, data.created_by,
          medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
       );
     }
 
-    // Si se pide, aplicar el anticipo contra cuentas por pagar pendientes del
-    // agricultor. Solo del mismo accionista que dio el anticipo: la plata de un
-    // socio no paga la deuda de otro.
-    if (data.apply_to_payables) {
-      const payables = await client.query(
-        `SELECT * FROM accounts_payable
-         WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0
-         ORDER BY created_at ASC
-         FOR UPDATE`,
-        [data.farmer_id, accionistaId]
-      );
-
-      let remaining = data.amount;
-      const advanceId = advance.rows[0].id;
-
-      for (const ap of payables.rows) {
-        if (remaining <= 0) break;
-        const applyAmt = Math.min(remaining, Number(ap.balance));
-        const newBal = round2(Number(ap.balance) - applyAmt);
-        const newStatus = newBal < 0.01 ? "PAID" : "PARTIAL";
-
-        await client.query(
-          "UPDATE accounts_payable SET balance = $2, status = $3 WHERE id = $1",
-          [ap.id, newBal, newStatus]
-        );
-
-        // Registrar la aplicación y bajar TAMBIÉN el neto de la liquidación:
-        // antes solo se tocaba el saldo por pagar, así que el comprobante (que
-        // lee net_amount) seguía mostrando el total sin restar el anticipo.
-        if (ap.liquidation_id) {
-          await client.query(
-            `INSERT INTO advance_applications (advance_id, liquidation_id, amount_applied)
-             VALUES ($1, $2, $3)`,
-            [advanceId, ap.liquidation_id, applyAmt]
-          );
-          await client.query(
-            `UPDATE liquidations
-             SET advances_discount = advances_discount + $2,
-                 net_amount = GREATEST(0, net_amount - $2)
-             WHERE id = $1`,
-            [ap.liquidation_id, applyAmt]
-          );
-        }
-
-        // Actualizar balance del anticipo
-        await client.query(
-          "UPDATE farmer_advances SET balance = balance - $2, status = CASE WHEN balance - $2 < 0.01 THEN 'PAID'::document_status ELSE 'PARTIAL'::document_status END WHERE id = $1",
-          [advanceId, applyAmt]
-        );
-
-        remaining = round2(remaining - applyAmt);
-      }
-    }
-
-    return advance.rows[0];
+    return advance;
   });
 
   res.status(201).json(result);
