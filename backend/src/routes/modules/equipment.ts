@@ -425,8 +425,12 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
   await exigirMatriz(req);
   const body = z.object({
     cash_register_id: z.string().uuid(),
-    activo_id: z.string().uuid(),
-    maintenance_type: z.enum(["CORRECTIVO", "PREVENTIVO", "REPUESTO"]),
+    // Sin máquina = gasto general de Transporte (diésel, viáticos…) con su `categoria` (pedido del dueño 2026-10-22).
+    activo_id: z.string().uuid().optional(),
+    categoria: z.string().trim().min(2).max(40).optional(),
+    monto: z.number().positive().max(1_000_000).optional(),
+    pagado_a: z.string().trim().max(160).optional(),
+    maintenance_type: z.enum(["CORRECTIVO", "PREVENTIVO", "REPUESTO"]).default("CORRECTIVO"),
     description: z.string().trim().min(1).max(500),
     provider: z.string().trim().max(160).optional(),
     hecho_por_tipo: z.enum(["PROPIO", "EXTERNO"]).optional(),
@@ -442,7 +446,8 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
   const out = await inTransaction((client) => registrarGastoTransporte(client, {
-    matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id, tipo: body.maintenance_type,
+    matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id ?? null, tipo: body.maintenance_type,
+    categoria: body.categoria ?? null, monto: body.monto ?? null, pagadoA: body.pagado_a ?? null,
     descripcion: body.description, provider: body.provider, hechoPorTipo: body.hecho_por_tipo ?? null, compradoPor: body.comprado_por,
     manoObra: body.mano_obra, items: body.items, factura: body.invoice_number, userId: auth.user?.id ?? null
   }));

@@ -6464,3 +6464,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .vdVistas button.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
 .vdVistas__n { margin-left: 6px; background: #f59e0b; color: #fff; border-radius: 999px; padding: 1px 8px; font-size: 11.5px; }
 .vpa__vacio { text-align: center; color: #64748b; font-size: 13px; padding: 16px 8px; margin: 0; }
+
+/* Trabajo en un equipo: ¿cómo se pagó? y preventivo (2026-10-22). */
+.teq-pago { display: flex; flex-wrap: wrap; gap: 6px; }
+.teq-pago button { padding: 8px 14px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; font-size: 13px; font-weight: 700; cursor: pointer; color: #334155; }
+.teq-pago button.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
+.teq-pago--otros { margin-top: 6px; }
+.teq-pago--otros button { font-weight: 500; font-size: 12px; padding: 5px 10px; border-style: dashed; }
+.teq-check { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #475569; margin-top: 6px; }
+.teq-check input { width: auto; }

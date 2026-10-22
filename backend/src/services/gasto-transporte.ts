@@ -38,8 +38,15 @@ export async function cuentasMatrizTransporte(db: Db, matrizId: string) {
 export type GastoTransporteInput = {
   matrizId: string;
   cashRegisterId: string;
-  activoId: string;
+  /** Máquina de Transporte (con hoja de vida). Sin máquina = gasto general de Transporte (diésel, viáticos…). */
+  activoId?: string | null;
   tipo: "CORRECTIVO" | "PREVENTIVO" | "REPUESTO";
+  /** Categoría de gasto de Transporte (DIESEL, VIATICOS…). Con máquina, por defecto REPARACION_MANT. */
+  categoria?: string | null;
+  /** Gasto general: el valor (sin mano de obra ni lista de cosas). */
+  monto?: number | null;
+  /** A quién se le pagó (informativo). */
+  pagadoA?: string | null;
   descripcion: string;
   provider?: string | null;
   hechoPorTipo?: "PROPIO" | "EXTERNO" | null;
@@ -53,32 +60,40 @@ export type GastoTransporteInput = {
 export async function registrarGastoTransporte(client: PoolClient, i: GastoTransporteInput) {
   const items = i.items.filter((x) => x.cantidad > 0);
   const totalItems = round2(items.reduce((s, x) => s + x.cantidad * x.costo_unitario, 0));
-  const total = round2((Number(i.manoObra) || 0) + totalItems);
+  const total = round2((Number(i.manoObra) || 0) + totalItems + (Number(i.monto) || 0));
   if (!(total > 0)) throw new ApiError(400, "El gasto de Transporte necesita un monto (mano de obra o lo comprado).");
+  if (!i.activoId && !i.categoria) throw new ApiError(400, "Elige la máquina o la categoría del gasto de Transporte.");
 
   const matriz = (await client.query("SELECT id, name, tipo FROM accionistas WHERE id = $1", [i.matrizId])).rows[0];
   if (matriz?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la caja de la Matriz paga gastos de Transporte.");
   const caja = (await client.query("SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [i.cashRegisterId, i.matrizId])).rows[0];
   if (!caja) throw new ApiError(404, "Caja no disponible para la Matriz.");
   if (caja.status !== "OPEN") throw new ApiError(409, "La caja no está abierta.");
-  const activo = (await client.query("SELECT id, nombre, tipo FROM campo_activos WHERE id = $1 AND activo = true", [i.activoId])).rows[0];
-  if (!activo) throw new ApiError(404, "Esa máquina de Transporte no existe o está inactiva.");
+  const activo = i.activoId
+    ? (await client.query("SELECT id, nombre, tipo FROM campo_activos WHERE id = $1 AND activo = true", [i.activoId])).rows[0]
+    : null;
+  if (i.activoId && !activo) throw new ApiError(404, "Esa máquina de Transporte no existe o está inactiva.");
 
   const fecha = hoyEc();
   const clienteId = await clienteCampoDe(client, matriz.name);
-  const categoria = (await client.query("SELECT id FROM campo_categorias_gasto WHERE nombre = 'REPARACION_MANT' LIMIT 1")).rows[0]?.id ?? null;
-  const tipoTxt = i.tipo === "CORRECTIVO" ? "Reparación" : i.tipo === "PREVENTIVO" ? "Mantenimiento" : "Compra de repuesto";
+  const nombreCategoria = (i.categoria ?? "").trim().toUpperCase() || "REPARACION_MANT";
+  const categoria = (await client.query("SELECT id FROM campo_categorias_gasto WHERE nombre = $1 LIMIT 1", [nombreCategoria])).rows[0]?.id ?? null;
+  if (!categoria && !activo) throw new ApiError(400, `No existe la categoría «${nombreCategoria}» en Transporte y Cosechadora.`);
+  const conTrabajo = !!activo && (Number(i.manoObra) > 0 || items.length > 0);
+  const tipoTxt = !conTrabajo ? nombreCategoria.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())
+    : i.tipo === "CORRECTIVO" ? "Reparación" : i.tipo === "PREVENTIVO" ? "Mantenimiento" : "Compra de repuesto";
   const detalleItems = items.map((x) => `${Number.isInteger(x.cantidad) ? x.cantidad : x.cantidad.toFixed(2)} ${x.nombre.toUpperCase()}${x.tipo === "INSUMO" ? " (insumo)" : ""} $${round2(x.cantidad * x.costo_unitario).toFixed(2)}`).join(", ");
-  const concepto = `${tipoTxt} ${activo.nombre}: ${i.descripcion}`.slice(0, 400);
+  const pagadoA = (i.pagadoA ?? "").trim();
+  const concepto = `${tipoTxt}${activo ? ` ${activo.nombre}` : ""}: ${i.descripcion}${pagadoA ? ` (a ${pagadoA})` : ""}`.slice(0, 400);
 
   // 1) Transporte: su gasto y su deuda con la Matriz.
   const cxp = (await client.query(
     `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, origen, cliente_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, 'GASTO_PAGADO_MATRIZ', $8) RETURNING id`,
-    [fecha, matriz.name, `Pagado por la caja de ${matriz.name} · ${concepto}`, total, i.userId ?? null, categoria, activo.id, clienteId]
+    [fecha, matriz.name, `Pagado por la caja de ${matriz.name} · ${concepto}`, total, i.userId ?? null, categoria, activo?.id ?? null, clienteId]
   )).rows[0];
-  // 2) Hoja de vida de la máquina en Transporte.
-  const mant = (await client.query(
+  // 2) Hoja de vida de la máquina en Transporte (solo si es un trabajo en una máquina).
+  const mant = !conTrabajo ? null : (await client.query(
     `INSERT INTO campo_mantenimientos (fecha, activo_id, tipo, detalle, proveedor, factura, costo, observaciones, created_by, cxp_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
     [fecha, activo.id, i.tipo, `${tipoTxt}: ${i.descripcion}`.slice(0, 1000),
@@ -131,11 +146,12 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
        VALUES ($1, $2, 'salida', $3, $4, $5, $6, $7, $8)`,
       [fecha, puente.id, descontado, `Cruce con lo que ${matriz.name} debía a Transporte`, cxp.id, clienteId, compensacionId, i.userId ?? null]
     );
-    await client.query("UPDATE campo_mantenimientos SET compensacion_id = $2 WHERE id = $1", [mant.id, compensacionId]);
+    if (mant) await client.query("UPDATE campo_mantenimientos SET compensacion_id = $2 WHERE id = $1", [mant.id, compensacionId]);
+    await client.query("UPDATE campo_cxp SET compensacion_id = $2 WHERE id = $1", [cxp.id, compensacionId]);
   }
   return {
     total, descontado, por_cobrar: round2(total - descontado), debia_antes: debe,
-    maquina: activo.nombre, cxp_id: cxp.id, receivable_id: ar.id, compensacion_id: compensacionId
+    maquina: activo?.nombre ?? null, categoria: nombreCategoria, cxp_id: cxp.id, receivable_id: ar.id, compensacion_id: compensacionId
   };
 }
 
@@ -143,16 +159,20 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
  *  su Por Cobrar, la deuda y el gasto en Transporte. Si Transporte ya le abonó algo aparte del cruce, no deja. */
 export async function anularGastoTransporte(client: PoolClient, cxpId: string, motivo: string): Promise<void> {
   const mant = (await client.query("SELECT id, compensacion_id FROM campo_mantenimientos WHERE cxp_id = $1 FOR UPDATE", [cxpId])).rows[0];
+  // El cruce del gasto: en su hoja de vida (máquina) o en la misma cuenta (gasto general, migración 20261117).
+  const compensacionId: string | null = mant?.compensacion_id
+    ?? (await client.query("SELECT compensacion_id FROM campo_cxp WHERE id = $1 FOR UPDATE", [cxpId])).rows[0]?.compensacion_id ?? null;
   const otros = Number((await client.query(
     `SELECT count(*)::int n FROM campo_movimientos
       WHERE cxp_id = $1 AND (compensacion_id IS NULL OR compensacion_id IS DISTINCT FROM $2)`,
-    [cxpId, mant?.compensacion_id ?? null]
+    [cxpId, compensacionId]
   )).rows[0].n);
   if (otros > 0) throw new ApiError(409, "Transporte ya pagó parte de este gasto: anula primero ese pago en Transporte y Cosechadora.");
-  if (mant?.compensacion_id) {
-    await client.query("UPDATE campo_mantenimientos SET compensacion_id = NULL WHERE id = $1", [mant.id]);
-    await client.query("DELETE FROM campo_movimientos WHERE compensacion_id = $1", [mant.compensacion_id]);
-    await client.query("DELETE FROM campo_compensaciones WHERE id = $1", [mant.compensacion_id]);
+  if (compensacionId) {
+    if (mant) await client.query("UPDATE campo_mantenimientos SET compensacion_id = NULL WHERE id = $1", [mant.id]);
+    await client.query("UPDATE campo_cxp SET compensacion_id = NULL WHERE id = $1", [cxpId]);
+    await client.query("DELETE FROM campo_movimientos WHERE compensacion_id = $1", [compensacionId]);
+    await client.query("DELETE FROM campo_compensaciones WHERE id = $1", [compensacionId]);
   }
   await client.query(
     "UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED', description = left(description || ' · ANULADO: ' || $2, 500) WHERE reference_type = 'campo_cxp' AND reference_id = $1",

@@ -1,4 +1,6 @@
 // 🔧 TRABAJO EN UN EQUIPO, en un solo flujo (Caja → «Registrar trabajo o repuesto»).
+// 2026-10-22 (pedido del dueño): 1) el componente (o anotarlo a mano) · 2) ¿qué fue? mano de obra y/o repuesto o
+// material · 3) ¿cómo se pagó? efectivo, transferencia, tarjeta o crédito (a quién se le debe).
 // Reemplaza los formularios separados de Mantenimiento, Compra de repuestos y Materiales consumibles:
 //  1) ¿En qué equipo? (o «sin equipo · va a la bodega»)
 //  2) ¿Qué se hizo? reparación · mantenimiento · compra de repuesto
@@ -18,6 +20,7 @@ type Equipo = { area: string; section: string; activoId?: string };
 type Tipo = "REPARACION" | "MANTENIMIENTO" | "COMPRA";
 type Quien = "PROPIO" | "EXTERNO";
 type Pago = "CAJA" | "TECNICO" | "FONDO" | "CREDITO";
+type Medio = "EFECTIVO" | "TRANSFERENCIA" | "TARJETA";
 type Item = { key: string; nombre: string; k: "BODEGA" | "REPUESTO" | "INSUMO"; repuesto_id?: string; cant: string; costo: string; stock?: number };
 
 const INSUMOS_SUGERIDOS = ["Soldadura", "Electrodos", "Pernos", "Tuercas", "Grasa", "Aceite", "Lija", "Thinner", "Pintura", "Cinta aislante", "Silicón", "Abrazaderas"];
@@ -36,21 +39,23 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
   personal: string[];
   proveedores: Array<{ id: string; name: string }>;
   registerId: string | null;
-  inicial?: { area?: string; section?: string; tipo?: Tipo };
+  inicial?: { area?: string; section?: string; tipo?: Tipo; activoId?: string };
   fondosPorLiquidar: number;
   onGuardado: (mensaje: string) => Promise<void> | void;
   onError: (mensaje: string) => void;
 }) {
-  const [eq, setEq] = useState<Equipo | "BODEGA" | null>(inicial?.area && inicial.section ? { area: inicial.area, section: inicial.section } : null);
+  const [eq, setEq] = useState<Equipo | "BODEGA" | null>(inicial?.area && inicial.section ? { area: inicial.area, section: inicial.section, activoId: inicial.activoId } : null);
   const [qEq, setQEq] = useState("");
   // Primero la MÁQUINA (área: Montacarga, Piladora…) y luego su parte: así el cajero solo ve lo de esa máquina
   // (pedido del dueño 2026-10-22). Escribiendo se busca en todo.
   const [areaEq, setAreaEq] = useState<string | null>(null);
-  const [tipo, setTipo] = useState<Tipo | null>(inicial?.tipo ?? null);
-  const [quien, setQuien] = useState<Quien | null>(null);
+  // ¿Qué fue? Mano de obra y/o repuesto o material (pueden ir los dos).
+  const [mano, setMano] = useState(false);
+  const [rep, setRep] = useState(inicial?.tipo === "COMPRA");
+  const [preventivo, setPreventivo] = useState(false);
+  const [medio, setMedio] = useState<Medio>("EFECTIVO");
   const [nom, setNom] = useState("");
   const [mo, setMo] = useState("");
-  const [extra, setExtra] = useState("");
   const [items, setItems] = useState<Item[]>([]);
   const [qItem, setQItem] = useState("");
   const [comprador, setComprador] = useState("");
@@ -71,11 +76,17 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
     if (!esTransporte) { setCuentasT(null); return; }
     apiGet<{ debe: number; le_deben: number }>("/equipment/transporte/cuentas-matriz").then(setCuentasT).catch(() => setCuentasT(null));
   }, [esTransporte]);
-  const esCompra = tipo === "COMPRA";
   const comprados = items.filter((i) => i.k !== "BODEGA");
+  // Lo que se registra: con mano de obra es reparación (o mantenimiento preventivo); solo repuestos comprados = compra;
+  // material o algo de bodega sin mano de obra = trabajo de nuestro personal.
+  const tipo: Tipo | null = esBodega ? "COMPRA"
+    : mano ? (preventivo ? "MANTENIMIENTO" : "REPARACION")
+    : rep ? (items.length > 0 && items.every((i) => i.k === "REPUESTO") ? "COMPRA" : "REPARACION") : null;
+  const quien: Quien | null = mano ? "EXTERNO" : tipo === "REPARACION" ? "PROPIO" : null;
+  const esCompra = tipo === "COMPRA";
   const totComprados = r2(comprados.reduce((s, i) => s + num(i.cant) * num(i.costo), 0));
   const totBodega = r2(items.filter((i) => i.k === "BODEGA").reduce((s, i) => s + num(i.cant) * num(i.costo), 0));
-  const manoObra = esCompra || esBodega ? 0 : quien === "EXTERNO" ? num(mo) : num(extra);
+  const manoObra = mano && !esBodega ? num(mo) : 0;
   const totalPagar = r2(manoObra + totComprados);
   const cajaAhora = pago === "CREDITO" ? 0 : totalPagar;
   const equipoTxt = esBodega ? "la bodega de repuestos" : eq ? `${eq.area} · ${eq.section}` : "";
@@ -107,7 +118,7 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
     const coincide = (n: string) => tk.every((k) => sinTildes(n).includes(k));
     const out: Array<{ key: string; titulo: string; detalle: string; item: Omit<Item, "key" | "cant"> & { cant?: string } }> = [];
     const activos = repuestos.filter((r) => r.activo !== false && coincide(`${r.nombre} ${r.referencia ?? ""} ${r.equipo ?? ""}`));
-    if (!esCompra && !esBodega && !esTransporte) {
+    if (!esBodega && !esTransporte) {
       for (const r of activos.filter((x) => Number(x.stock) > 0).slice(0, 6)) {
         out.push({ key: `b-${r.id}`, titulo: r.nombre, detalle: `de la bodega · hay ${Number(r.stock)}`, item: { nombre: r.nombre, k: "BODEGA", repuesto_id: r.id, costo: String(Number(r.costo_unitario) || 0), stock: Number(r.stock) } });
       }
@@ -115,7 +126,7 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
     for (const r of activos.slice(0, 6)) {
       out.push({ key: `r-${r.id}`, titulo: r.nombre, detalle: `comprado ahora${Number(r.costo_unitario) > 0 ? ` · último ${money(Number(r.costo_unitario))}` : ""}`, item: { nombre: r.nombre, k: "REPUESTO", repuesto_id: r.id, costo: Number(r.costo_unitario) > 0 ? String(Number(r.costo_unitario)) : "" } });
     }
-    if (!esCompra && !esBodega) {
+    if (!esBodega) {
       for (const n of INSUMOS_SUGERIDOS.filter((x) => !tk.length || coincide(x)).slice(0, tk.length ? 6 : 8)) {
         out.push({ key: `i-${n}`, titulo: n, detalle: "insumo comprado", item: { nombre: n, k: "INSUMO", costo: "" } });
       }
@@ -123,10 +134,10 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
     if (qItem.trim().length >= 2) {
       const txt = qItem.trim();
       if (!repuestos.some((r) => sinTildes(r.nombre) === t)) out.push({ key: "nuevo-r", titulo: `➕ «${txt}»`, detalle: "repuesto nuevo comprado", item: { nombre: txt, k: "REPUESTO", costo: "" } });
-      if (!esCompra && !esBodega && !INSUMOS_SUGERIDOS.some((x) => sinTildes(x) === t)) out.push({ key: "nuevo-i", titulo: `➕ «${txt}»`, detalle: "insumo comprado", item: { nombre: txt, k: "INSUMO", costo: "" } });
+      if (!esBodega && !INSUMOS_SUGERIDOS.some((x) => sinTildes(x) === t)) out.push({ key: "nuevo-i", titulo: `➕ «${txt}»`, detalle: "material / insumo comprado", item: { nombre: txt, k: "INSUMO", costo: "" } });
     }
     return out.slice(0, 14);
-  }, [qItem, repuestos, esCompra, esBodega, esTransporte]);
+  }, [qItem, repuestos, esBodega, esTransporte]);
 
   const agregar = (it: Omit<Item, "key" | "cant"> & { cant?: string }) => {
     setErr("");
@@ -142,29 +153,26 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
 
   const elegirEquipo = (e: Equipo | "BODEGA") => {
     setEq(e); setQEq(""); setErr("");
-    if (e === "BODEGA") { setTipo("COMPRA"); setDestino("INVENTARIO"); setItems((cur) => cur.filter((i) => i.k === "REPUESTO")); }
-  };
-  const elegirTipo = (t: Tipo) => {
-    setTipo(t); setErr("");
-    if (t === "COMPRA") { setItems((cur) => cur.filter((i) => i.k === "REPUESTO")); setQuien(null); }
+    if (e === "BODEGA") { setRep(true); setMano(false); setDestino("INVENTARIO"); setItems((cur) => cur.filter((i) => i.k === "REPUESTO")); }
   };
 
   const necesitaPago = totalPagar > 0.004;
-  const pasoQuien = !esCompra && !esBodega;
-  const listoQuien = !pasoQuien || !!quien;
+  const pasoQuien = mano && !esBodega;
+  const listoQuien = esBodega || mano || rep;
 
   async function guardar() {
     setErr("");
     if (!registerId) { setErr("No hay caja abierta."); return; }
-    if (!eq || !tipo) { setErr("Elige el equipo y qué se hizo."); return; }
-    if (pasoQuien && !quien) { setErr("Elige quién hizo el trabajo."); return; }
-    if (pasoQuien && quien === "EXTERNO" && nom.trim().length < 2) { setErr("Escribe el nombre del técnico o taller."); return; }
+    if (!eq || !tipo) { setErr("Elige el componente y qué fue: mano de obra o repuesto / material."); return; }
+    if (mano && nom.trim().length < 2) { setErr("Escribe quién hizo la mano de obra."); return; }
+    if (mano && !(num(mo) > 0)) { setErr("Pon cuánto cobró de mano de obra."); return; }
+    if ((rep || esBodega) && items.length === 0) { setErr("Agrega el repuesto o material."); return; }
     if ((esCompra || esBodega) && comprados.length === 0) { setErr("Agrega el repuesto que se compró."); return; }
     if (items.some((i) => !(num(i.cant) > 0))) { setErr("Cada cosa necesita una cantidad mayor a 0."); return; }
     if (comprados.some((i) => !(num(i.costo) > 0))) { setErr("Pon el precio de lo que se compró."); return; }
     if (items.some((i) => i.k === "BODEGA" && i.stock !== undefined && num(i.cant) > i.stock)) { setErr("Estás usando más de lo que hay en la bodega."); return; }
     if (necesitaPago && !pago) { setErr("Elige cómo se pagó."); return; }
-    if (pago === "CREDITO" && proveedor.trim().length < 2) { setErr("Escribe el proveedor que dio el crédito."); return; }
+    if (pago === "CREDITO" && proveedor.trim().length < 2) { setErr("Escribe a quién se le debe (proveedor o técnico)."); return; }
     if (pago === "FONDO" && (comprador.trim() || nom.trim()).length < 2) { setErr("Escribe a quién se le entrega la plata."); return; }
     const provSel = proveedor.trim() ? proveedores.find((p) => p.name.trim().toLowerCase() === proveedor.trim().toLowerCase()) : undefined;
     const credito = pago === "CREDITO" ? {
@@ -174,12 +182,16 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
       due_date: vence || undefined
     } : {};
     const tipoTxt = tipo === "REPARACION" ? "Reparación" : tipo === "MANTENIMIENTO" ? "Mantenimiento" : "Compra de repuesto";
-    const descripcion = det.trim() || `${tipoTxt}${items.length ? `: ${items.map((i) => i.nombre).join(", ")}` : ""}`;
+    const descripcion = (det.trim() || `${tipoTxt}${items.length ? `: ${items.map((i) => i.nombre).join(", ")}` : ""}`) +
+      (pago === "CAJA" && medio === "TARJETA" ? " · pagado con tarjeta" : "");
+    // Efectivo o banco (transferencia / tarjeta): el servidor lo toma de `medio_pago` para el egreso de caja.
+    const medioPago = pago === "CAJA" || pago === "TECNICO" || pago === "FONDO" ? (medio === "EFECTIVO" ? "EFECTIVO" : "BANCO") : undefined;
     setBusy(true);
     try {
       if (esTransporte) {
         const r = await apiPost<{ total: number; descontado: number; por_cobrar: number; maquina: string }>("/equipment/transporte/gasto", {
           cash_register_id: registerId,
+          medio_pago: medioPago,
           activo_id: (eq as Equipo).activoId,
           maintenance_type: tipo === "REPARACION" ? "CORRECTIVO" : tipo === "MANTENIMIENTO" ? "PREVENTIVO" : "REPUESTO",
           description: descripcion,
@@ -198,6 +210,7 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
       if (esBodega) {
         const r = await apiPost<{ total: number; credito: boolean }>("/repuestos/compra", {
           cash_register_id: registerId,
+          medio_pago: medioPago,
           modalidad_pago: pago === "CREDITO" ? "CREDITO" : "CONTADO",
           supplier_id: pago === "CREDITO" ? provSel?.id : undefined,
           proveedor_nombre: pago === "CREDITO" && !provSel ? proveedor.trim() : undefined,
@@ -222,6 +235,7 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
         invoice_number: factura.trim() || undefined,
         amount: totalPagar,
         cash_register_id: registerId,
+        medio_pago: medioPago,
         repuestos_usados: items.filter((i) => i.k === "BODEGA").map((i) => ({ repuesto_id: i.repuesto_id, cantidad: r2(num(i.cant)) })),
         repuestos_comprados: comprados.map((i) => ({
           repuesto_id: i.repuesto_id, nombre: i.nombre, cantidad: r2(num(i.cant)), costo_unitario: r2(num(i.costo)),
@@ -289,60 +303,53 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
               ))}
               {!areaEq && <button type="button" className="teq-chip--alt" onClick={() => elegirEquipo("BODEGA")}>📦 Sin equipo · va a la bodega</button>}
             </div>
-            {equiposVisibles.length === 0 && <small className="muted">No hay equipos con esas palabras. Se crean en Configuración → Categorías de mantenimiento.</small>}
+            {qEq.trim().length >= 2 && !equiposVisibles.some((e) => sinTildes(e.section) === sinTildes(qEq.trim())) && (
+              <div className="teq-chips">
+                <button type="button" className="teq-chip--alt" onClick={() => elegirEquipo({ area: areaEq && areaEq !== "TRANSPORTE" ? areaEq : "OTROS", section: qEq.trim().toUpperCase() })}>
+                  ✏️ Anotar «{qEq.trim().toUpperCase()}» a mano{areaEq && areaEq !== "TRANSPORTE" ? ` en ${areaEq}` : ""}
+                </button>
+              </div>
+            )}
+            {equiposVisibles.length === 0 && qEq.trim().length < 2 && <small className="muted">No hay equipos con esas palabras. Se crean en Configuración → Categorías de mantenimiento.</small>}
           </>
         )}
       </section>
 
-      {/* 2 · Qué se hizo */}
+      {/* 2 · ¿Qué fue? Mano de obra y/o repuesto o material (pueden ir los dos). */}
       {eq && (
         <section className="teq-paso">
-          <div className="teq-paso__t"><i>{n++}</i>¿Qué se hizo?</div>
+          <div className="teq-paso__t"><i>{n++}</i>¿Qué fue? <small className="muted">(puedes marcar los dos)</small></div>
           {esBodega ? <small className="muted">Compra de repuestos para guardar en la bodega.</small> : (
-            <div className="teq-opts">
-              {opt(tipo === "REPARACION", () => elegirTipo("REPARACION"), "🔨 Reparación", "Algo se dañó y se arregló")}
-              {opt(tipo === "MANTENIMIENTO", () => elegirTipo("MANTENIMIENTO"), "⚙️ Mantenimiento", "Preventivo: aceite, limpieza, ajuste")}
-              {opt(tipo === "COMPRA", () => elegirTipo("COMPRA"), "🛒 Compra de repuesto", "Solo se compró la pieza")}
-            </div>
-          )}
-        </section>
-      )}
-
-      {/* 3 · Quién lo hizo */}
-      {eq && tipo && pasoQuien && (
-        <section className="teq-paso">
-          <div className="teq-paso__t"><i>{n++}</i>¿Quién lo hizo?</div>
-          <div className="teq-opts">
-            {opt(quien === "PROPIO", () => { if (quien !== "PROPIO") { setQuien("PROPIO"); setNom(""); if (pago === "TECNICO") setPago(null); } }, "👷 Nuestro personal", "Pilador o cuadrilla: no cobra aparte")}
-            {opt(quien === "EXTERNO", () => { if (quien !== "EXTERNO") { setQuien("EXTERNO"); setNom(""); } }, "🧑‍🔧 Técnico o taller de afuera", "Se le paga la mano de obra")}
-          </div>
-          {quien && (
             <>
-              <div className="teq-fila">
-                <label><span>{quien === "PROPIO" ? "¿Quién?" : "Nombre del técnico o taller"}</span>
-                  <input value={nom} onChange={(e) => { setNom(e.target.value); setErr(""); }} placeholder={quien === "PROPIO" ? "Pilador" : "Jacobo"} /></label>
-                {quien === "EXTERNO" ? (
-                  <label><span>¿Cuánto cobró de mano de obra? $</span>
-                    <input type="number" min="0" step="0.01" inputMode="decimal" value={mo} onChange={(e) => { setMo(e.target.value); setErr(""); }} placeholder="0.00" /></label>
-                ) : (
-                  <label><span>¿Se le pagó algo aparte? $ <small>(opcional)</small></span>
-                    <input type="number" min="0" step="0.01" inputMode="decimal" value={extra} onChange={(e) => { setExtra(e.target.value); setErr(""); }} placeholder="0.00" /></label>
-                )}
+              <div className="teq-opts">
+                {opt(mano, () => { setMano(!mano); setErr(""); if (mano && pago === "TECNICO") setPago(null); }, "🧑‍🔧 Mano de obra", "Alguien hizo el trabajo y cobró")}
+                {opt(rep, () => { setRep(!rep); setErr(""); }, "🛒 Repuesto o material", "Se compró una pieza o material (soldadura, pernos…)")}
               </div>
-              {(quien === "PROPIO" ? personal : tecnicos).length > 0 && (
-                <div className="teq-chips">
-                  {(quien === "PROPIO" ? personal : tecnicos).slice(0, 6).map((x) => <button key={x} type="button" onClick={() => setNom(x)}>{x}</button>)}
-                </div>
+              {mano && (
+                <>
+                  <div className="teq-fila">
+                    <label><span>¿Quién hizo la mano de obra?</span>
+                      <input value={nom} onChange={(e) => { setNom(e.target.value); setErr(""); }} placeholder="Jacobo (técnico)" /></label>
+                    <label><span>¿Cuánto cobró? $</span>
+                      <input type="number" min="0" step="0.01" inputMode="decimal" value={mo} onChange={(e) => { setMo(e.target.value); setErr(""); }} placeholder="0.00" /></label>
+                  </div>
+                  {tecnicos.length > 0 && (
+                    <div className="teq-chips">
+                      {tecnicos.slice(0, 6).map((x) => <button key={x} type="button" onClick={() => setNom(x)}>{x}</button>)}
+                    </div>
+                  )}
+                  <label className="teq-check"><input type="checkbox" checked={preventivo} onChange={(e) => setPreventivo(e.target.checked)} /> Fue mantenimiento preventivo (aceite, limpieza, ajuste)</label>
+                </>
               )}
             </>
           )}
         </section>
       )}
 
-      {/* 4 · Lo que se usó / compró */}
-      {eq && tipo && listoQuien && (
+      {/* 3 · Repuesto o material */}
+      {eq && (rep || esBodega) && (
         <section className="teq-paso">
-          <div className="teq-paso__t"><i>{n++}</i>{esCompra || esBodega ? "¿Qué repuesto se compró?" : "Lo que se usó en el trabajo"} <small className="muted">{esCompra || esBodega ? "" : "(opcional)"}</small></div>
+          <div className="teq-paso__t"><i>{n++}</i>{esBodega ? "¿Qué repuesto se compró?" : "¿Qué repuesto o material?"} <small className="muted">(escríbelo y pon el valor)</small></div>
           {items.map((i) => (
             <div key={i.key} className="teq-item">
               <span className="teq-item__n">{i.nombre}
@@ -376,11 +383,22 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
         </section>
       )}
 
-      {/* 5 · Quién compró y cómo se pagó */}
+      {/* 4 · ¿Cómo se pagó? */}
       {eq && tipo && listoQuien && necesitaPago && (
         <section className="teq-paso">
-          <div className="teq-paso__t"><i>{n++}</i>{comprados.length ? "¿Quién compró y cómo se pagó?" : "¿Cómo se pagó?"}</div>
-          {comprados.length > 0 && (
+          <div className="teq-paso__t"><i>{n++}</i>¿Cómo se pagó?</div>
+          <div className="teq-pago">
+            {([["EFECTIVO", "💵 Efectivo"], ["TRANSFERENCIA", "🏦 Transferencia"], ["TARJETA", "💳 Tarjeta"]] as Array<[Medio, string]>).map(([m, t]) => (
+              <button key={m} type="button" className={pago === "CAJA" && medio === m ? "is-on" : ""} onClick={() => { setPago("CAJA"); setMedio(m); setErr(""); }}>{t}</button>
+            ))}
+            {!esTransporte && <button type="button" className={pago === "CREDITO" ? "is-on" : ""} onClick={() => { setPago("CREDITO"); setErr(""); }}>🧾 Crédito</button>}
+          </div>
+          <div className="teq-pago teq-pago--otros">
+            {mano && comprados.length > 0 && !esCompra && <button type="button" className={pago === "TECNICO" ? "is-on" : ""} onClick={() => setPago("TECNICO")}>🧑‍🔧 Lo compró el técnico (se le paga todo junto)</button>}
+            {!esBodega && !esTransporte && !(esCompra && destino === "INVENTARIO") && <button type="button" className={pago === "FONDO" ? "is-on" : ""} onClick={() => setPago("FONDO")}>👛 Se le da plata y rinde cuentas</button>}
+          </div>
+          {esTransporte && <small className="muted">A crédito: regístralo en Transporte y Cosechadora (la deuda es de Transporte).</small>}
+          {comprados.length > 0 && pago && (
             <div className="teq-fila">
               <label><span>¿Quién fue a comprar? <small>(opcional)</small></span>
                 <input value={pago === "TECNICO" ? nom : comprador} disabled={pago === "TECNICO"} onChange={(e) => setComprador(e.target.value)} placeholder="Nombre" /></label>
@@ -388,15 +406,9 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
                 <input value={factura} onChange={(e) => setFactura(e.target.value)} placeholder="001-001-123" /></label>
             </div>
           )}
-          <div className="teq-opts">
-            {opt(pago === "CAJA", () => setPago("CAJA"), "💵 De la caja ahora", "Sale hoy de la gaveta")}
-            {quien === "EXTERNO" && comprados.length > 0 && !esCompra && opt(pago === "TECNICO", () => setPago("TECNICO"), "🧑‍🔧 Lo compró el técnico", "Se le paga todo junto con su mano de obra")}
-            {!esBodega && !esTransporte && !(esCompra && destino === "INVENTARIO") && opt(pago === "FONDO", () => setPago("FONDO"), "👛 Se le da plata y luego rinde cuentas", "Fondo a rendir: después registra el vuelto")}
-            {!esTransporte && opt(pago === "CREDITO", () => setPago("CREDITO"), "🧾 A crédito", "Queda en Por Pagar al proveedor")}
-          </div>
           {pago === "CREDITO" && (
             <div className="teq-fila">
-              <label><span>Proveedor</span>
+              <label><span>¿A quién se le debe?</span>
                 <input list="teqProveedores" value={proveedor} onChange={(e) => { setProveedor(e.target.value); setErr(""); }} placeholder="Ferretería Ortiz" />
                 <datalist id="teqProveedores">{proveedores.map((p) => <option key={p.id} value={p.name} />)}</datalist></label>
               <label><span>Vence <small>(opcional)</small></span><input type="date" value={vence} onChange={(e) => setVence(e.target.value)} /></label>

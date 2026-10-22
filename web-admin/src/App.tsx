@@ -2858,6 +2858,22 @@ export function App() {
   // Proveedor y modalidad de pago del egreso (Contado por defecto / A crédito → CxP).
   const [movProveedor, setMovProveedor] = useState("");
   const [movModalidad, setMovModalidad] = useState<"CONTADO" | "CREDITO">("CONTADO");
+  // ¿Cómo se pagó? en un toque (pedido del dueño 2026-10-22): efectivo, transferencia, tarjeta o crédito.
+  type FormaPagoEgreso = "EFECTIVO" | "TRANSFERENCIA" | "TARJETA" | "CREDITO";
+  const [movFormaPago, setMovFormaPagoState] = useState<FormaPagoEgreso>("EFECTIVO");
+  const setMovFormaPago = (f: FormaPagoEgreso) => {
+    setMovFormaPagoState(f);
+    setMovModalidad(f === "CREDITO" ? "CREDITO" : "CONTADO");
+    setMovMedio(f === "EFECTIVO" ? "EFECTIVO" : "BANCO");
+  };
+  // 🚜 ¿De quién es el gasto? La caja de la Matriz paga algo de Transporte y Cosechadora: se descuenta de lo que la
+  // Matriz le debe a Transporte y el resto Transporte se lo debe (pedido del dueño 2026-10-22).
+  const [movDeTransporte, setMovDeTransporte] = useState(false);
+  const [movTrCategoria, setMovTrCategoria] = useState("");
+  const [movTrActivo, setMovTrActivo] = useState("");
+  const [campoCategoriasGasto, setCampoCategoriasGasto] = useState<string[]>([]);
+  // Componente elegido en el buscador que es una máquina de Transporte (abre «Trabajo en un equipo» con ella).
+  const [teqActivoInicial, setTeqActivoInicial] = useState<string | undefined>(undefined);
   // «¿De quién es este gasto?» (solo la caja de la Matriz): "" = de esta caja; si no, el id del socio dueño del gasto.
   const [movPorCuentaDe, setMovPorCuentaDe] = useState("");
   // 🤝 Cuentas entre socios (pantalla + los tres movimientos); `op` abre directo uno desde el buscador de Caja.
@@ -10350,12 +10366,38 @@ export function App() {
     const maquinaId = movement === "EXPENSE" && (category === CATEGORIA_MATERIALES || repUsoSinLista) ? movMaquinaId || undefined : undefined;
     const maquinaTxt = maquinaId ? etiquetaMaquina(maquinasPlanta.find((m) => m.id === maquinaId)) : "";
     const porCuentaDe = movement === "EXPENSE" && esMatrizActiva && gastoDeSocioPosible(category) && !esFondo && !aCredito && !maquinaId ? movPorCuentaDe || undefined : undefined;
+    const descripcionTxt = String(form.get("description") ?? "").trim();
+    const conTarjeta = movement === "EXPENSE" && movFormaPago === "TARJETA" && !aCredito;
+    const limpiarEgreso = () => {
+      safeResetForm(formElement);
+      setMovCategory(""); setMovSubcategoria(""); setMovProveedor(""); setMovVence(""); setMovOpcionesOpen(false);
+      setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo("");
+    };
+    // 🚜 Gasto de Transporte y Cosechadora pagado con esta caja (la Matriz).
+    if (movement === "EXPENSE" && esMatrizActiva && movDeTransporte && !esFondo && !aCredito && category !== "COMPRA_ACTIVO_FIJO") {
+      const catNombre = cashCategories.find((c) => c.codigo === category)?.nombre ?? category;
+      const r = await apiPost<{ total: number; descontado: number; por_cobrar: number }>("/equipment/transporte/gasto", {
+        cash_register_id: registerId,
+        categoria: movTrCategoria || "OTROS",
+        activo_id: movTrActivo || undefined,
+        monto: amount,
+        description: [catNombre, movSubcategoria.trim(), descripcionTxt, conTarjeta ? "pagado con tarjeta" : ""].filter(Boolean).join(" · "),
+        pagado_a: provTxt || undefined,
+        medio_pago: movFormaPago === "EFECTIVO" ? "EFECTIVO" : "BANCO"
+      });
+      limpiarEgreso();
+      addToast(`🚜 Gasto de Transporte: salió ${money(r.total)} de esta caja` +
+        (r.descontado > 0 ? ` · se descontaron ${money(r.descontado)} de lo que se le debía a Transporte` : "") +
+        (r.por_cobrar > 0 ? ` · Transporte te debe ${money(r.por_cobrar)} (Por Cobrar)` : ""), "success");
+      await refreshCaja(registerId);
+      return;
+    }
     const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string };
       gasto_por_socio?: { socio: string; descontado: number; por_cobrar: number } }>(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
-      description: form.get("description") || undefined,
+      description: (conTarjeta ? [descripcionTxt, "pagado con tarjeta"].filter(Boolean).join(" · ") : descripcionTxt) || undefined,
       subcategoria: movSubcategoria.trim() || undefined,
       es_fondo: esFondo || undefined,
       responsable: esFondo ? movResponsable.trim() : undefined,
@@ -10379,6 +10421,7 @@ export function App() {
     setMovSubcategoria(""); setMovEsFondo(false); setMovResponsable("");
     setMovActivo({ nombre: "", tipo: "MAQUINARIA" });
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence("");
+    setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo("");
     setMovOpcionesOpen(false);
     await loadSubcategorias(); // refresca la memoria del datalist
     const gs = creado.gasto_por_socio;
@@ -19909,6 +19952,8 @@ Motivo (obligatorio):`, ""));
                             { key: `MANT:${a}|`, titulo: `${a} · mantenimiento`, detalle: "toda el área", etiqueta: /montacarga/i.test(a) ? "rubro Montacarga" : "mantenimiento" },
                             ...maintSectionsFor(a).map((sec) => ({ key: `MANT:${a}|${sec}`, titulo: `${a} · ${sec}`, detalle: "mantenimiento", etiqueta: /montacarga/i.test(a) ? "rubro Montacarga" : undefined }))
                           ]) : []),
+                          // 🚜 Máquinas de Transporte y Cosechadora (su gasto es de Transporte: se descuenta / queda por cobrar).
+                          ...(mantVisible ? fletaActivos.map((m) => ({ key: `TRM:${m.id}`, titulo: `🚜 ${m.nombre}`, detalle: "Transporte y Cosechadora", etiqueta: "de Transporte", buscar: `transporte cosechadora ${m.tipo ?? ""}` })) : []),
                           ...subcatsConCategoria.filter((s) => s.categoria && codigosVisibles.has(s.categoria))
                             .map((s) => ({ key: `SUB:${s.categoria}|${s.nombre}`, titulo: s.nombre, detalle: visibles.find((c) => c.codigo === s.categoria)?.nombre })),
                           // 🤝 Entre socios: se registran una vez y bajan primero lo que se debían (pantalla «Cuentas entre socios»).
@@ -19936,8 +19981,20 @@ Motivo (obligatorio):`, ""));
                             ) : (
                               <>
                                 <BuscadorCombo id="cajaCat" autoFocus max={16}
-                                  placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: diésel, almuerzo, llanta, repuesto…" : "🔍 Escribe qué entró o el cliente que pagó…"}
+                                  placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: cilindro, motor de secadora, diésel, almuerzo…" : "🔍 Escribe qué entró o el cliente que pagó…"}
                                   opciones={opciones} vacio="Nada coincide: prueba con otra palabra o crea la categoría en Configuración"
+                                  crear={mantVisible ? (t) => {
+                                    // Solo si lo escrito no coincide con nada (p. ej. un componente que no está en el catálogo).
+                                    const sinT = (x: string) => x.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+                                    const tk = sinT(t).split(/\s+/).filter(Boolean);
+                                    const hay = opciones.some((o) => { const txt = sinT(`${o.titulo} ${o.detalle ?? ""} ${o.etiqueta ?? ""} ${o.buscar ?? ""}`); return tk.every((k) => txt.includes(k)); });
+                                    return hay ? null : `Anotar «${t.toUpperCase()}» como componente (reparación / repuesto)`;
+                                  } : undefined}
+                                  onCrear={(t) => {
+                                    elegirCategoria("MANTENIMIENTO_EQUIPO");
+                                    setTeqActivoInicial(undefined);
+                                    setMaintenanceForm((f) => ({ ...f, area: "OTROS", section: t.trim().toUpperCase(), maintenance_type: "CORRECTIVO" }));
+                                  }}
                                   onElegir={(key) => {
                                     if (key === "CAT:REPUESTOS" || key === `CAT:${CATEGORIA_MATERIALES}`) {
                                       // Repuestos e insumos van en el flujo único por equipo.
@@ -19945,8 +20002,15 @@ Motivo (obligatorio):`, ""));
                                       setTeqTipoInicial(key === "CAT:REPUESTOS" ? "COMPRA" : undefined); setTeqKey((k) => k + 1);
                                     }
                                     else if (key.startsWith("CAT:")) elegirCategoria(key.slice(4));
+                                    else if (key.startsWith("TRM:")) {
+                                      const m = fletaActivos.find((x) => x.id === key.slice(4));
+                                      elegirCategoria("MANTENIMIENTO_EQUIPO");
+                                      setTeqActivoInicial(m?.id);
+                                      setMaintenanceForm((f) => ({ ...f, area: "TRANSPORTE", section: m?.nombre ?? "" }));
+                                    }
                                     else if (key.startsWith("MANT:")) {
                                       const [area, section] = key.slice(5).split("|");
+                                      setTeqActivoInicial(undefined);
                                       elegirCategoria("MANTENIMIENTO_EQUIPO");
                                       setMaintenanceForm((f) => ({ ...f, area, section: section ?? "", maintenance_type: section ? "CORRECTIVO" : f.maintenance_type }));
                                     }
@@ -19981,7 +20045,7 @@ Motivo (obligatorio):`, ""));
                     {movType === "EXPENSE" && movCategory && movCategory !== "MANTENIMIENTO_EQUIPO" && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory] && (
                       <button type="button" className={`cj-mov-more${movOpcionesActivas ? " is-open" : ""}`}
                         aria-expanded={movOpcionesActivas} onClick={() => setMovOpcionesOpen((open) => !open)}>
-                        <span><strong>Más opciones</strong><small>Proveedor, crédito, subcategoría o fondo</small></span>
+                        <span><strong>Más opciones</strong><small>Subcategoría o fondo a rendir</small></span>
                         <span aria-hidden="true">{movOpcionesActivas ? "−" : "+"}</span>
                       </button>
                     )}
@@ -20033,12 +20097,12 @@ Motivo (obligatorio):`, ""));
                         personal={[...new Set([...maintenanceHistory.filter((m) => m.hecho_por_tipo === "PROPIO").map((m) => String(m.provider ?? "").trim()).filter(Boolean), "Pilador", "Cuadrilla"])].slice(0, 8)}
                         proveedores={proveedoresCaja}
                         registerId={dashboard.current_cash_register?.id ?? null}
-                        inicial={{ area: maintenanceForm.area || undefined, section: maintenanceForm.section || undefined, tipo: teqTipoInicial }}
+                        inicial={{ area: maintenanceForm.area || undefined, section: maintenanceForm.section || undefined, tipo: teqTipoInicial, activoId: teqActivoInicial }}
                         fondosPorLiquidar={Number(cashSummary?.fondos_por_liquidar?.n ?? 0)}
                         onGuardado={async (msg) => {
                           addToast(msg, "success");
                           const rid = dashboard.current_cash_register?.id;
-                          setMovCategory(""); setMaintenanceForm((f) => ({ ...f, area: "", section: "" })); setTeqTipoInicial(undefined); setTeqKey((k) => k + 1);
+                          setMovCategory(""); setMaintenanceForm((f) => ({ ...f, area: "", section: "" })); setTeqTipoInicial(undefined); setTeqActivoInicial(undefined); setTeqKey((k) => k + 1);
                           setCajaSubTab("resumen");
                           cargarRepCatalogo();
                           refreshMaintenanceHistory();
@@ -20270,10 +20334,52 @@ Motivo (obligatorio):`, ""));
                           <span><strong style={{ fontSize: 13 }}>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>
                         </label>
                       );
+                      const mixta = dashboard.current_cash_register?.tipo === "MIXTO";
+                      const deTransportePosible = esMatrizActiva && !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO";
+                      const formas: Array<[FormaPagoEgreso, string]> = [
+                        ...(mixta ? [["EFECTIVO", "💵 Efectivo"], ["TRANSFERENCIA", "🏦 Transferencia"], ["TARJETA", "💳 Tarjeta"]] as Array<[FormaPagoEgreso, string]>
+                          : [["EFECTIVO", dashboard.current_cash_register?.tipo === "BANCO" ? "🏦 Del banco" : "💵 De la caja"]] as Array<[FormaPagoEgreso, string]>),
+                        ...(creditoPosible && !(deTransportePosible && movDeTransporte) ? [["CREDITO", "🧾 Crédito"]] as Array<[FormaPagoEgreso, string]> : [])
+                      ];
+                      const elegirTransporte = (si: boolean) => {
+                        setMovDeTransporte(si);
+                        if (!si) return;
+                        if (movFormaPago === "CREDITO") setMovFormaPago("EFECTIVO");
+                        if (!movTrCategoria) setMovTrCategoria(/DIESEL/i.test(movCategory) ? "DIESEL" : /GASOLINA/i.test(movCategory) ? "GASOLINA" : /ALIMENT|VIATIC/i.test(movCategory) ? "VIATICOS" : /MATRICUL/i.test(movCategory) ? "MATRICULACION" : "OTROS");
+                        if (campoCategoriasGasto.length === 0) {
+                          apiGet<Array<{ nombre: string }>>("/campo/categorias-gasto").then((r) => setCampoCategoriasGasto(r.map((x) => x.nombre))).catch(() => undefined);
+                        }
+                      };
                       return (
-                        <div className={`cj-mov-advanced ${movOpcionesActivas ? "is-open" : ""}`} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16, gap: 10, background: credito ? "#faf5ff" : "transparent" }}>
+                        <div className="cj-mov-pago" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px", marginBottom: 16, display: "grid", gap: 10, background: credito ? "#faf5ff" : movDeTransporte ? "#fffbeb" : "transparent" }}>
+                          {deTransportePosible && (
+                            <div>
+                              <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>¿De quién es el gasto?</span>
+                              <div className="teq-pago">
+                                <button type="button" className={!movDeTransporte ? "is-on" : ""} onClick={() => elegirTransporte(false)}>🏭 {matrizName || "La Matriz"}</button>
+                                <button type="button" className={movDeTransporte ? "is-on" : ""} onClick={() => elegirTransporte(true)}>🚜 Transporte y Cosechadora</button>
+                              </div>
+                              {movDeTransporte && (
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginTop: 8 }}>
+                                  <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Categoría en Transporte</span>
+                                    <select value={movTrCategoria} onChange={(e) => setMovTrCategoria(e.target.value)} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                      {[...new Set([...(campoCategoriasGasto.length ? campoCategoriasGasto : ["DIESEL", "GASOLINA", "VIATICOS", "REPARACION_MANT", "TRASLADO", "MATRICULACION", "OPERA", "OTROS"]), movTrCategoria].filter(Boolean))]
+                                        .map((c) => <option key={c} value={c}>{c.replace(/_/g, " ")}</option>)}
+                                    </select>
+                                  </label>
+                                  <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Máquina <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                                    <select value={movTrActivo} onChange={(e) => setMovTrActivo(e.target.value)} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                      <option value="">— General —</option>
+                                      {fletaActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                                    </select>
+                                  </label>
+                                  <small className="muted" style={{ gridColumn: "1 / -1" }}>Sale de esta caja pero es gasto de Transporte: primero se descuenta de lo que {matrizName || "la Matriz"} le debe a Transporte y el resto Transporte se lo queda debiendo (Por Cobrar).</small>
+                                </div>
+                              )}
+                            </div>
+                          )}
                           <label style={{ fontSize: 13, fontWeight: 600 }}>
-                            <span style={{ display: "block", marginBottom: 4 }}>🏪 Proveedor {credito ? "*" : <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>}</span>
+                            <span style={{ display: "block", marginBottom: 4 }}>{credito ? "🏪 ¿A quién se le debe? *" : <>🏪 ¿A quién se le paga? <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></>}</span>
                             <input list="proveedoresCajaList" value={movProveedor} onChange={(e) => setMovProveedor(e.target.value)}
                               placeholder="Busca o escribe el proveedor (si es nuevo se crea)" required={credito}
                               style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }} />
@@ -20283,10 +20389,11 @@ Motivo (obligatorio):`, ""));
                             )}
                           </label>
                           <div>
-                            <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Modalidad de pago</span>
-                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                              {opt("CONTADO", "💵 Contado", "Sale de la caja ahora")}
-                              {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Por Pagar al proveedor" : movEsFondo ? "No aplica a un fondo" : "No aplica a esta categoría")}
+                            <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>¿Cómo se pagó?</span>
+                            <div className="teq-pago" role="radiogroup" aria-label="Cómo se pagó">
+                              {formas.map(([f, t]) => (
+                                <button key={f} type="button" role="radio" aria-checked={movFormaPago === f} className={movFormaPago === f ? "is-on" : ""} onClick={() => setMovFormaPago(f)}>{t}</button>
+                              ))}
                             </div>
                           </div>
                           {credito && (
@@ -20436,7 +20543,8 @@ Motivo (obligatorio):`, ""));
                       </div>
                     )}
                     {(movCategory || (movType === "INCOME" && movReceivableId)) && movCategory !== "MANTENIMIENTO_EQUIPO" && dashboard.current_cash_register?.tipo === "MIXTO"
-                      && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME") && (
+                      && (!CASH_REUSE[movCategory] || CASH_REUSE[movCategory] === "agricultor") && (movModalidad !== "CREDITO" || CASH_REUSE[movCategory] === "agricultor" || movType === "INCOME")
+                      && !(movType === "EXPENSE" && movCategory && !esCategoriaSacos(movCategory) && !CASH_REUSE[movCategory]) && (
                       <div className="cjMedio" role="radiogroup" aria-label="Efectivo o banco">
                         <span><i>3</i> ¿{movType === "INCOME" ? "Entró" : "Salió"} en efectivo o por el banco?</span>
                         <label className={movMedio === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={movMedio === "EFECTIVO"} onChange={() => setMovMedio("EFECTIVO")} /> 💵 Efectivo</label>
@@ -25686,27 +25794,42 @@ Motivo (obligatorio):`, ""));
                       };
                       const marcarTodos = (id: string) => setPerms(id, [...new Set([...APP_MODULES, ...APP_MODULES.map((m) => `EDIT:${m}`)])]);
                       const limpiar = (id: string) => setPerms(id, []);
-                      const nMods = (id: string) => modsOf(id).filter((x) => !x.startsWith("EDIT:") && !x.startsWith("SUB:") && !x.startsWith("PERM:") && !x.startsWith("RO:")).length;
-                      const expanded = newUserAccExpanded && isSel(newUserAccExpanded) ? newUserAccExpanded : null;
+                      // 🚜 Transporte y Cosechadora se elige aparte, como un accionista más (pedido del dueño 2026-10-22). Por dentro
+                      // sigue siendo el permiso «Transporte / Cosechadora» de la Matriz (así lo entiende el servidor).
+                      const TR = "Transporte / Cosechadora";
+                      const TR_KEY = "__TRANSPORTE__";
+                      const matId = matrizAccionista?.id ?? null;
+                      const esDeTr = (x: string) => x === TR || x === `EDIT:${TR}` || x.startsWith(`SUB:${TR}:`) || x.startsWith(`RO:SUB:${TR}:`);
+                      const trSel = !!matId && modsOf(matId).includes(TR);
+                      const nMods = (id: string) => modsOf(id).filter((x) => !x.startsWith("EDIT:") && !x.startsWith("SUB:") && !x.startsWith("PERM:") && !x.startsWith("RO:") && !(id === matId && x === TR)).length;
+                      const matSoloTr = (id: string) => id === matId && nMods(id) === 0 && trSel;
+                      const quitarTransporte = () => {
+                        if (!matId) return;
+                        const resto = modsOf(matId).filter((x) => !esDeTr(x));
+                        if (resto.length === 0 && !trSel) return;
+                        if (resto.filter((x) => !x.startsWith("PERM:")).length === 0) toggleAcc(matId); else setPerms(matId, resto);
+                      };
+                      const expanded = newUserAccExpanded === TR_KEY ? (trSel ? TR_KEY : null)
+                        : newUserAccExpanded && isSel(newUserAccExpanded) ? newUserAccExpanded : null;
                       return (<>
                         <div className="userPermissionBlock">
-                          <span className="permLabel">Accionistas y permisos <b>{Object.keys(perms).length} con acceso</b></span>
+                          <span className="permLabel">Accionistas y permisos <b>{Object.keys(perms).filter((id) => !matSoloTr(id)).length + (trSel ? 1 : 0)} con acceso</b></span>
                           <p className="muted" style={{ marginTop: 4 }}>Elige a qué accionistas accede y, dentro de cada uno, qué módulos y sub-pestañas. Los permisos son independientes por accionista.</p>
                           {activeAccs.length === 0 ? (
                             <p className="muted" style={{ marginTop: 8 }}>No hay accionistas activos. Créalos en la pestaña «Accionistas».</p>
                           ) : (
                             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-                              {activeAccs.map((a) => {
-                                const sel = isSel(a.id);
+                              {activeAccs.flatMap((a) => {
+                                const sel = isSel(a.id) && (!matSoloTr(a.id) || expanded === a.id);
                                 const open = expanded === a.id;
-                                const esMat = a.id === matrizAccionista?.id;
-                                return (
+                                const esMat = a.id === matId;
+                                const chip = (
                                   <button
                                     type="button"
                                     key={a.id}
                                     className={sel ? "permChip on" : "permChip"}
                                     onClick={() => {
-                                      if (!sel) { toggleAcc(a.id); setNewUserAccExpanded(a.id); }
+                                      if (!sel) { if (!isSel(a.id)) toggleAcc(a.id); setNewUserAccExpanded(a.id); }
                                       else setNewUserAccExpanded(open ? null : a.id);
                                     }}
                                     style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
@@ -25716,18 +25839,58 @@ Motivo (obligatorio):`, ""));
                                     {sel && <span style={{ opacity: 0.6 }}>{open ? "▾" : "▸"}</span>}
                                   </button>
                                 );
+                                if (!esMat) return [chip];
+                                const trOpen = expanded === TR_KEY;
+                                const nSubs = modsOf(a.id).filter((x) => x.startsWith(`SUB:${TR}:`)).length;
+                                return [chip, (
+                                  <button type="button" key={TR_KEY} className={trSel ? "permChip on" : "permChip"}
+                                    onClick={() => {
+                                      if (!trSel) { setPerms(a.id, [...new Set([...modsOf(a.id), TR, `EDIT:${TR}`])]); setNewUserAccExpanded(TR_KEY); }
+                                      else setNewUserAccExpanded(trOpen ? null : TR_KEY);
+                                    }}
+                                    style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                                    <span>{trSel ? "✓" : ""} 🚜 TRANSPORTE Y COSECHADORA</span>
+                                    {trSel && <span className="muted" style={{ fontSize: 11 }}>{nSubs ? `${nSubs} secc.` : "todo"}</span>}
+                                    {trSel && <span style={{ opacity: 0.6 }}>{trOpen ? "▾" : "▸"}</span>}
+                                  </button>
+                                )];
                               })}
                             </div>
                           )}
                         </div>
-                        {expanded && (
+                        {expanded === TR_KEY && matId && (
+                          <div className="userPermissionBlock">
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+                              <span className="permLabel">Secciones de <b>🚜 Transporte y Cosechadora</b></span>
+                              <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => { quitarTransporte(); setNewUserAccExpanded(null); }}>Quitar acceso</button>
+                            </div>
+                            <div className="permCard on" style={{ marginTop: 4 }}>
+                              <div className="permCardBody">
+                                {(SUB_TABS[TR] ?? []).map((st) => {
+                                  const sk = subTabKey(TR, st.key);
+                                  const son = modsOf(matId).includes(sk);
+                                  return (
+                                    <button key={sk} type="button" className={son ? "permSubPill on" : "permSubPill"} aria-pressed={son} onClick={() => toggleSubNuevo(matId, TR, st.key)}>
+                                      {st.label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            <p className="permHint">ℹ️ Sin marcar secciones, verá todas las de Transporte y Cosechadora. Su caja, gastos e ingresos son aparte de {nombreAcc(matId)}.</p>
+                          </div>
+                        )}
+                        {expanded && expanded !== TR_KEY && (
                           <div className="userPermissionBlock">
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                               <span className="permLabel">Módulos de <b>{nombreAcc(expanded)}</b></span>
                               <div style={{ display: "flex", gap: 8 }}>
-                                <button type="button" className="btnGhost userSelectionAction" onClick={() => marcarTodos(expanded)}>Seleccionar todos</button>
-                                <button type="button" className="btnGhost userSelectionAction" onClick={() => limpiar(expanded)}>Limpiar</button>
-                                <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => { toggleAcc(expanded); setNewUserAccExpanded(null); }}>Quitar acceso</button>
+                                <button type="button" className="btnGhost userSelectionAction" onClick={() => setPerms(expanded, [...new Set([...APP_MODULES.filter((m) => expanded !== matId || m !== TR).flatMap((m) => [m, `EDIT:${m}`]), ...(expanded === matId ? modsOf(expanded).filter(esDeTr) : [])])])}>Seleccionar todos</button>
+                                <button type="button" className="btnGhost userSelectionAction" onClick={() => setPerms(expanded, expanded === matId ? modsOf(expanded).filter(esDeTr) : [])}>Limpiar</button>
+                                <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => {
+                                  if (expanded === matId && trSel) setPerms(expanded, modsOf(expanded).filter(esDeTr)); else toggleAcc(expanded);
+                                  setNewUserAccExpanded(null);
+                                }}>Quitar acceso</button>
                               </div>
                             </div>
                             {/* Grid de permisos como "botones de app": pills para
@@ -25735,7 +25898,7 @@ Motivo (obligatorio):`, ""));
                                 Todo el área es clickeable (sin checkbox nativo visible).
                                 Solo cambia el RENDER; el estado/guardado no se toca. */}
                             <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-start", marginTop: 4 }}>
-                              {APP_MODULES.map((m) => {
+                              {APP_MODULES.filter((m) => !(expanded === matId && m === TR)).map((m) => {
                                 const on = modsOf(expanded).includes(m);
                                 const subs = SUB_TABS[m] ?? [];
                                 if (subs.length === 0) {
@@ -25783,7 +25946,14 @@ Motivo (obligatorio):`, ""));
                   <div className="userCreateFooter">
                     <div className="userAccessSummary">
                       <strong>Resumen del acceso</strong>
-                      <span>{newUserForm.role === "ADMINISTRADOR" ? "Administrador con acceso total" : `${Object.keys(newUserForm.accPerms).length} accionista(s) con acceso`}</span>
+                      <span>{newUserForm.role === "ADMINISTRADOR" ? "Administrador con acceso total" : (() => {
+                        const matId = matrizAccionista?.id ?? null;
+                        const p = newUserForm.accPerms;
+                        const tr = !!matId && (p[matId] ?? []).includes("Transporte / Cosechadora");
+                        const soloTr = !!matId && tr && (p[matId] ?? []).every((x) => x === "Transporte / Cosechadora" || x === "EDIT:Transporte / Cosechadora" || x.startsWith("SUB:Transporte / Cosechadora:") || x.startsWith("RO:SUB:Transporte / Cosechadora:") || x.startsWith("PERM:"));
+                        const n = Object.keys(p).length - (soloTr ? 1 : 0);
+                        return `${n} accionista(s) con acceso${tr ? " + 🚜 Transporte y Cosechadora" : ""}`;
+                      })()}</span>
                     </div>
                     <button className="primary" disabled={!isAdmin}>Crear usuario</button>
                   </div>
