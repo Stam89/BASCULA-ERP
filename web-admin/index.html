@@ -20,6 +20,41 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- 📴 Si la app no logra abrir (sin conexión y sin la app guardada, o un error), en vez de quedar en blanco se
+         muestra un aviso con lo que pasó (para poder corregirlo) y un botón para reintentar. -->
+    <script>
+      (function () {
+        var errores = [];
+        window.addEventListener("error", function (e) {
+          var t = e.target && e.target !== window ? (e.target.src || e.target.href || "") : "";
+          errores.push(t ? "no cargó " + t.replace(location.origin, "") : String(e.message || "error"));
+        }, true);
+        window.addEventListener("unhandledrejection", function (e) {
+          errores.push(String((e.reason && e.reason.message) || e.reason || "promesa"));
+        });
+        var mostrado = false;
+        function revisar() {
+          var root = document.getElementById("root");
+          if (mostrado || !root || root.childElementCount > 0) return;
+          mostrado = true;
+          var sw = navigator.serviceWorker && navigator.serviceWorker.controller ? "sí" : "no";
+          var guardado = window.caches ? caches.keys().then(function (ks) {
+            return Promise.all(ks.map(function (k) { return caches.open(k).then(function (c) { return c.keys(); }).then(function (r) { return k.replace("bascula-erp-app-", "v") + ": " + r.length; }); }));
+          }).catch(function () { return []; }) : Promise.resolve([]);
+          guardado.then(function (g) {
+            root.innerHTML = '<div style="font-family:system-ui,sans-serif;padding:24px;color:#0f2620;max-width:520px;margin:0 auto">' +
+              '<h2 style="margin:0 0 8px">📴 No se pudo abrir la app</h2>' +
+              '<p style="margin:0 0 12px">' + (navigator.onLine ? "Revisa la conexión con el servidor." : "Estás sin internet.") +
+              ' Si el celular no tiene la app guardada, ábrela una vez con internet y vuelve a intentar.</p>' +
+              '<button id="sinConexReintentar" style="padding:10px 18px;border-radius:10px;border:0;background:#0f766e;color:#fff;font-weight:700;font-size:15px">Reintentar</button>' +
+              '<p style="margin:16px 0 0;font-size:12px;color:#64748b;word-break:break-word">Para soporte (mándale foto): internet ' + (navigator.onLine ? "sí" : "no") +
+              ' · guardián ' + sw + ' · guardado ' + (g.join(", ") || "nada") + ' · ' + (errores.slice(0, 3).join(" | ") || "sin errores") + '</p></div>';
+            document.getElementById("sinConexReintentar").onclick = function () { location.reload(); };
+          });
+        }
+        setTimeout(function () { revisar(); setInterval(revisar, 3000); }, 8000);
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

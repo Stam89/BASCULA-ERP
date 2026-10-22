@@ -5,8 +5,12 @@
 //     · La página: primero la red (siempre la versión nueva); si no hay servidor, la última guardada.
 //     · Los archivos con huella en el nombre (/assets/…): no cambian nunca → se guardan una vez.
 //     · /api, /uploads y /health: nunca se tocan.
-const CACHE = "bascula-erp-app-v1";
-const MAX_ARCHIVOS = 120;
+// VERSION y ARCHIVOS los escribe el build (vite.config.ts): cada despliegue cambia este archivo, el celular instala el
+// service worker nuevo y guarda la app completa de esa versión (también las pantallas que se cargan después).
+const VERSION = "dev";
+const ARCHIVOS = [];
+const CACHE = "bascula-erp-app-" + VERSION;
+const MAX_ARCHIVOS = 200;
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -17,8 +21,9 @@ self.addEventListener("install", (event) => {
       if (r.ok) {
         const html = await r.clone().text();
         await c.put("/", r);
-        const urls = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]);
-        await Promise.all(urls.map((u) => fetch(u).then((x) => (x.ok ? c.put(u, x) : undefined)).catch(() => undefined)));
+        const urls = new Set([...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1]).concat(ARCHIVOS));
+        urls.add("/manifest.webmanifest"); urls.add("/favicon.png"); urls.add("/icon-192.png");
+        await Promise.all([...urls].map((u) => fetch(u).then((x) => (x.ok ? c.put(u, x) : undefined)).catch(() => undefined)));
       }
     } catch (e) { /* sin servidor al instalar: se guardará en el próximo uso */ }
     await self.skipWaiting();
@@ -26,7 +31,11 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => event.waitUntil((async () => {
-  for (const k of await caches.keys()) if (k.startsWith("bascula-erp-app-") && k !== CACHE) await caches.delete(k);
+  // Las versiones viejas se borran solo si la nueva quedó guardada (si no, el celular se quedaría sin nada para abrir).
+  const nueva = await caches.open(CACHE);
+  if (await nueva.match("/")) {
+    for (const k of await caches.keys()) if (k.startsWith("bascula-erp-app-") && k !== CACHE) await caches.delete(k);
+  }
   await self.clients.claim();
 })()));
 
@@ -41,17 +50,17 @@ async function paginaConRespaldo(req) {
     const r = await fetch(req);
     // 5xx de Cloudflare (530 = la PC del servidor apagada): se muestra la app guardada.
     if (r.ok) { c.put("/", r.clone()); return r; }
-    const guardada = await c.match("/");
+    const guardada = (await c.match("/")) || (await caches.match("/"));
     return guardada || r;
   } catch (e) {
-    const guardada = await c.match("/");
+    const guardada = (await c.match("/")) || (await caches.match("/"));
     return guardada || Response.error();
   }
 }
 
 async function archivoInmutable(req) {
   const c = await caches.open(CACHE);
-  const guardado = await c.match(req);
+  const guardado = (await c.match(req, { ignoreVary: true })) || (await caches.match(req, { ignoreVary: true }));
   if (guardado) return guardado;
   const r = await fetch(req);
   if (r.ok) { await c.put(req, r.clone()); recortar(c); }
@@ -65,7 +74,7 @@ async function redConRespaldo(req) {
     if (r.ok) c.put(req, r.clone());
     return r;
   } catch (e) {
-    return (await c.match(req)) || Response.error();
+    return (await c.match(req, { ignoreVary: true })) || (await caches.match(req, { ignoreVary: true })) || Response.error();
   }
 }
 
