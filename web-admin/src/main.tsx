@@ -20,6 +20,12 @@ document.addEventListener("wheel", (event) => {
   if (el instanceof HTMLInputElement && el.type === "number" && el === document.activeElement) el.blur();
 }, { passive: true });
 
+// 📴 Sin conexión (2026-10-22): el service worker guarda la app en el celular para que abra aunque el servidor esté
+// apagado (apagón o la PC hibernando). Solo en la versión publicada (en desarrollo estorbaría los cambios).
+if ("serviceWorker" in navigator && !import.meta.env.DEV) {
+  window.addEventListener("load", () => { navigator.serviceWorker.register("/sw-avisos.js").catch(() => undefined); });
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />

@@ -1,5 +1,7 @@
 // En desarrollo (Vite en :5173) apuntamos al backend en :4000.
 import { confirmar } from "./components/Dialogo";
+import { guardar, leer } from "./offline/almacen";
+import { marcarConConexion, marcarSinConexion } from "./offline/conexion";
 // En producción la web se sirve desde el propio backend, así que usamos rutas
 // relativas al mismo origen — esto permite entrar desde cualquier PC de la red
 // por http://IP-del-servidor:4000 sin configurar nada.
@@ -10,6 +12,8 @@ import { confirmar } from "./components/Dialogo";
 //   VITE_API_URL=http://192.168.1.50:4000 npm run build
 // y el resto funciona igual (token, accionista y sync usan esta misma base).
 const API_URL = import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? "http://localhost:4000" : "");
+/** Base del servidor (para comprobar si responde: /health). */
+export const API_BASE = API_URL;
 
 const authStorageKey = "bascula-erp:auth";
 const activeAccionistaKey = "bascula-erp:active-accionista";
@@ -37,7 +41,11 @@ export function setActiveAccionistaId(accionistaId: string): void {
  * accionista (al que el usuario tenga acceso) sin cambiar el activo: la sesión
  * de venta de un socio y las acciones sobre un pedido de la cola global.
  */
-export type OpcionesApi = { accionistaId?: string | null };
+export type OpcionesApi = {
+  accionistaId?: string | null;
+  /** 📴 No mostrar el aviso rojo de «sin conexión» (el envío se guarda en el celular y se manda después). */
+  silencioSinConexion?: boolean;
+};
 
 function authHeaders(opts?: OpcionesApi): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -70,7 +78,8 @@ async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     handleUnauthorized(response);
     const text = await response.text();
-    if ([502, 503, 504].includes(response.status) || /^\s*</.test(text)) throw new Error(SIN_CONEXION);
+    // 502/503/504 y 520–530 (Cloudflare: la PC del servidor apagada o hibernando) o una página HTML = sin conexión.
+    if ([502, 503, 504].includes(response.status) || (response.status >= 520 && response.status <= 530) || /^\s*</.test(text)) throw new Error(SIN_CONEXION);
     let message = text || `API error ${response.status}`;
     try {
       const parsed = JSON.parse(text) as { error?: string; message?: string };
@@ -114,20 +123,38 @@ export async function apiOk(path: string, init: RequestInit = {}, opts?: Opcione
 // copia de la respuesta, así que nadie comparte objetos. Al terminar, la siguiente lectura vuelve a ir al servidor.
 const lecturasEnCamino = new Map<string, Promise<Response>>();
 
+// 📴 Lecturas que se guardan en el celular (pedido del dueño 2026-10-22): lo que se necesita para TOMAR PEDIDOS y ver
+// la cola cuando el servidor no responde (apagón o PC hibernando). Si no hay conexión se devuelve la última copia.
+const SE_GUARDA_SIN_CONEXION = /^\/(customers|inventory\/|products|productos|orders|sacks|settings|catalogs|receivable|farmers|fomentos|dashboard|notificaciones|cash\/registers\/current)/;
+
 export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
   const url = `${API_URL}/api/v1${path}`;
   const headers = authHeaders(opts);
   const clave = `${url} ${JSON.stringify(headers)}`;
-  let compartida = lecturasEnCamino.get(clave);
-  if (!compartida) {
-    const nueva = conConexion(fetch(url, { headers }));
-    compartida = nueva;
-    lecturasEnCamino.set(clave, nueva);
-    const quitar = () => { if (lecturasEnCamino.get(clave) === nueva) lecturasEnCamino.delete(clave); };
-    nueva.then(quitar, quitar);
+  const claveCopia = `${headers["X-Accionista-Id"] ?? ""}|${path}`;
+  const seGuarda = SE_GUARDA_SIN_CONEXION.test(path);
+  try {
+    let compartida = lecturasEnCamino.get(clave);
+    if (!compartida) {
+      const nueva = conConexion(fetch(url, { headers }));
+      compartida = nueva;
+      lecturasEnCamino.set(clave, nueva);
+      const quitar = () => { if (lecturasEnCamino.get(clave) === nueva) lecturasEnCamino.delete(clave); };
+      nueva.then(quitar, quitar);
+    }
+    const response = (await compartida).clone();
+    const datos = await parseResponse<T>(response);
+    marcarConConexion();
+    if (seGuarda) void guardar("lecturas", claveCopia, { t: Date.now(), datos });
+    return datos;
+  } catch (e) {
+    if (e instanceof Error && e.message === SIN_CONEXION) {
+      const copia = seGuarda ? await leer<{ t: number; datos: T }>("lecturas", claveCopia) : undefined;
+      marcarSinConexion(copia?.t ?? null);
+      if (copia) return copia.datos;
+    }
+    throw e;
   }
-  const response = (await compartida).clone();
-  return parseResponse<T>(response);
 }
 
 // Envío JSON con AVISOS CONFIRMABLES: cuando el servidor responde 409 con `confirmable: true` (o el código
@@ -149,10 +176,13 @@ async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, bod
   if (enCamino.has(clave)) throw new Error(YA_SE_ESTA_GUARDANDO);
   enCamino.add(clave);
   try {
-    return await enviarJsonUnaVez<T>(method, path, body, opts);
+    const r = await enviarJsonUnaVez<T>(method, path, body, opts);
+    marcarConConexion();
+    return r;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg !== "No se registró: cancelaste el aviso.") avisarFallo(msg);
+    if (msg === SIN_CONEXION) marcarSinConexion();
+    if (msg !== "No se registró: cancelaste el aviso." && !(msg === SIN_CONEXION && opts?.silencioSinConexion)) avisarFallo(msg);
     throw e;
   } finally {
     enCamino.delete(clave);

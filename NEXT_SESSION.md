@@ -1,8 +1,24 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-21
+Actualizado: 2026-10-22
 
-## Último cambio: Cuentas entre socios (Matriz ↔ socios)
+## Último cambio: Pedidos sin conexión (apagón o PC hibernando)
+
+- El personal toma pedidos en el celular aunque erp.ceyroerp.com no responda (Cloudflare 520–530 o sin red =
+  `SIN_CONEXION`). El pedido queda en IndexedDB (`web-admin/src/offline/`, base `bascula-erp-offline`, stores
+  `lecturas` y `pendientes`) y se envía solo cada 20 s / al volver la red (`useSincronizarPedidos`).
+- Cada pedido lleva `client_key` (id del celular): `POST /orders` es idempotente (mismo pedido si se repite, candado
+  `pg_advisory_xact_lock`); `tomado_sin_conexion_at` se anota y el aviso a bodega dice «📴 Se tomó sin conexión…».
+  Migración 20261115 (índice único parcial).
+- Cliente nuevo sin conexión: `offline:<uuid>` en el celular; al enviar se busca por nombre exacto o se crea.
+- `apiGet` guarda las lecturas de la lista `SE_GUARDA_SIN_CONEXION` (clientes, productos, presentaciones, stock,
+  pedidos, CxC, sacos…) por accionista y las usa sin conexión; en Ventas se precargan las de los otros socios.
+- `sw-avisos.js` guarda la app (página + /assets) para que abra sin servidor; registrado en `main.tsx` solo en build.
+  No se pudo probar en el panel del navegador: probar en el celular real (p. ej. después de las 00:00).
+- Sin conexión NO se despacha, ni se cobra, ni se mueve caja; el stock mostrado es el último descargado.
+- Simulacro `pedido_sin_conexion`.
+
+## Cambio anterior: Cuentas entre socios (Matriz ↔ socios)
 
 - Pantalla «🤝 Cuentas entre socios» (Caja › Otros registros, y Por Cobrar / Por Pagar): por pareja, lo que cada uno
   le debe al otro por concepto y un saldo único (`GET /entre-socios/cuentas`, `services/entre-socios.ts`).

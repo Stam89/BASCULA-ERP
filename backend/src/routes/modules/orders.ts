@@ -202,18 +202,34 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     created_by: z.string().uuid().optional(),
     // Forma de pago acordada al tomar el pedido (la Cola la trae puesta al despachar).
     payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).optional(),
-    items: z.array(orderItemSchema).min(1)
+    items: z.array(orderItemSchema).min(1),
+    // 📴 Pedido tomado SIN CONEXIÓN en el celular: llave única del celular (si el envío se repite, se devuelve el
+    // mismo pedido) y cuándo se tomó.
+    client_key: z.string().trim().min(8).max(80).optional(),
+    tomado_sin_conexion_at: z.string().datetime({ offset: true }).optional()
   }).parse(req.body);
 
+  if (body.client_key) {
+    const ya = (await pool.query("SELECT * FROM sales_orders WHERE client_key = $1", [body.client_key])).rows[0];
+    if (ya) { res.status(200).json({ ...ya, repetido: true }); return; }
+  }
+
   const result = await inTransaction(async (client) => {
+    // Dos envíos del mismo pedido a la vez: el segundo espera al primero y devuelve el suyo.
+    if (body.client_key) await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`pedido:${body.client_key}`]);
+    if (body.client_key) {
+      const ya = (await client.query("SELECT * FROM sales_orders WHERE client_key = $1", [body.client_key])).rows[0];
+      if (ya) return { ...ya, repetido: true };
+    }
     await validarSacosPropiosDelPedido(client, accionistaId, body.items);
     await validarRespaldoDelPedido(client, accionistaId, body.items);
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     const order = await client.query(
-      `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by, payment_method)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by, payment_method, client_key, tomado_sin_conexion_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
-      [nextCode("PED"), body.customer_id, accionistaId, body.delivery_date ?? null, body.notes ?? null, total, body.created_by ?? null, body.payment_method ?? null]
+      [nextCode("PED"), body.customer_id, accionistaId, body.delivery_date ?? null, body.notes ?? null, total, body.created_by ?? null, body.payment_method ?? null,
+       body.client_key ?? null, body.tomado_sin_conexion_at ?? null]
     );
     for (const item of body.items) {
       await client.query(
@@ -232,14 +248,14 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     return order.rows[0];
   });
 
-  res.status(201).json(result);
+  res.status((result as { repetido?: boolean }).repetido ? 200 : 201).json(result);
 }));
 
 // 🔔 Pedido nuevo → aviso en la campanita de la MATRIZ (ahí está la Cola de Despachos y el encargado de
 // bodega que lo prepara y despacha), venga de la Matriz o de un socio. Al tocarlo abre la Cola.
 async function avisarPedidoNuevo(
   client: PoolClient,
-  order: { id: string; order_number: string; customer_id: string; delivery_date: string | Date | null; total_amount: string | number },
+  order: { id: string; order_number: string; customer_id: string; delivery_date: string | Date | null; total_amount: string | number; tomado_sin_conexion_at?: string | Date | null },
   accionistaId: string | null | undefined
 ): Promise<void> {
   const matrizId = await getMatrizId(client);
@@ -258,7 +274,8 @@ async function avisarPedidoNuevo(
     accionistaId: matrizId,
     tipo: "PEDIDO",
     titulo: `🧾 Pedido nuevo ${order.order_number} · ${totalQq.toFixed(2)} QQ`,
-    mensaje: `${vendedor && vendedor.tipo !== "MATRIZ" ? `${vendedor.name} vendió a` : "Para"} ${cliente}: ${detalle}${entrega}. Está en la Cola de Despachos.`,
+    mensaje: `${vendedor && vendedor.tipo !== "MATRIZ" ? `${vendedor.name} vendió a` : "Para"} ${cliente}: ${detalle}${entrega}. Está en la Cola de Despachos.` +
+      (order.tomado_sin_conexion_at ? ` 📴 Se tomó sin conexión el ${new Date(order.tomado_sin_conexion_at).toLocaleString("es-EC", { timeZone: "America/Guayaquil", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })}.` : ""),
     monto: Number(order.total_amount),
     referenciaTipo: "sales_orders",
     referenciaId: order.id

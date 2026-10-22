@@ -5,6 +5,8 @@
 // recarga la página UNA vez para traer la versión nueva. La marca en
 // sessionStorage evita un bucle si el error fuera de otra causa.
 
+import { estadoConexion } from "./offline/conexion";
+
 const CLAVE = "bascula-erp:recarga-version";
 const VENTANA_MS = 30_000;
 
@@ -35,6 +37,10 @@ export function recargarPorVersionNueva(): boolean {
 export function importarConRecarga<T>(cargar: () => Promise<T>): () => Promise<T> {
   return () =>
     cargar().catch((error: unknown) => {
+      // 📴 Sin conexión no es «versión nueva»: esa pantalla no se guardó en el celular. Recargar no ayuda.
+      if (esErrorDeVersion(error) && (estadoConexion().sinConexion || (typeof navigator !== "undefined" && navigator.onLine === false))) {
+        throw new Error("Esta pantalla no está guardada en el celular: ábrela cuando vuelva la conexión con el servidor.");
+      }
       if (esErrorDeVersion(error) && recargarPorVersionNueva()) return new Promise<T>(() => undefined);
       throw error;
     });

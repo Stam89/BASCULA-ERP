@@ -2244,7 +2244,8 @@ input[type="datetime-local"] { height: 36px; }
   font-weight: 500;
   box-shadow: var(--shadow-md);
   max-width: 360px;
-  pointer-events: all;
+  /* Los avisos no tienen botones: el toque pasa al botón de abajo (p. ej. «Tomar pedido» tras «Línea agregada»). */
+  pointer-events: none;
   animation: toastIn 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -6433,3 +6434,18 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .vdAgregar { justify-self: start; margin: 4px 0 8px; border: 1px dashed #16a34a; background: #fff; color: #15803d; border-radius: 10px; padding: 6px 12px; font-weight: 700; cursor: pointer; }
 .vdTotalGeneral { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: 10px; background: #dcfce7; color: #14532d; font-size: 15px; margin: 6px 0; }
 .vdTotalGeneral b { font-size: 20px; }
+
+/* 📴 Sin conexión (2026-10-22): franja de aviso y pedidos guardados en el celular. */
+.sinConex { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; margin: 0 0 10px; font-size: 13px; }
+.sinConex.is-off { background: #fef2f2; border: 1px solid #fecaca; color: #7f1d1d; }
+.sinConex.is-pend { background: #fffbeb; border: 1px solid #fde68a; color: #78350f; }
+.sinConex__chip { background: #fff; border-radius: 999px; padding: 2px 10px; border: 1px solid currentColor; font-size: 12px; }
+.sinConex__chip.is-error { color: #b91c1c; }
+.sinConex button { margin-left: auto; border-radius: 8px; padding: 4px 12px; font-weight: 700; cursor: pointer; }
+.pedPend { border: 2px dashed #f59e0b; background: #fffbeb; border-radius: 12px; padding: 10px 12px; margin-bottom: 12px; display: grid; gap: 6px; }
+.pedPend__cab { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.pedPend__fila { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; background: #fff; border: 1px solid #fde68a; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
+.pedPend__fila small { color: #64748b; }
+.pedPend__fila.is-error { border-color: #fca5a5; background: #fef2f2; }
+.pedPend__error { color: #b91c1c !important; font-weight: 600; }
+.pedPend__acc { display: flex; gap: 4px; }

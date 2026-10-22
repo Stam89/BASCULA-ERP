@@ -1,6 +1,6 @@
 import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId } from "./api";
+import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import type { BasculaSyncStatus } from "./api";
 import BasculaDevicesPanel from "./components/BasculaDevicesPanel";
 import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal, nombreNormal, agricultoresParecidos, fechaLocal, hoyLocal } from "./format";
@@ -21,6 +21,10 @@ import { TrabajoEquipo } from "./components/TrabajoEquipo";
 import { CruceSocios } from "./components/CruceSocios";
 import { CuentasEntreSocios, type OpEntreSocios } from "./components/CuentasEntreSocios";
 import { VentasPorAsignar } from "./components/VentasPorAsignar";
+import { BannerConexion, PanelPedidosPendientes, useSincronizarPedidos } from "./components/PedidosSinConexion";
+import {
+  clientesTemporales, enviarPendientes, ES_CLIENTE_TEMPORAL, guardarClienteTemporal, guardarPedidoPendiente, nuevaLlave, type ResultadoEnvio
+} from "./offline/pedidosPendientes";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
@@ -4052,6 +4056,26 @@ export function App() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), type === "error" ? 8000 : 4500);
   }, []);
 
+  // 📴 Sin conexión (pedido del dueño 2026-10-22): pedidos guardados en el celular que se envían solos al volver.
+  function avisarEnvioPendientes(r: ResultadoEnvio) {
+    if (r.enviados.length) {
+      addToast(`📤 ${r.enviados.length === 1 ? "Se envió a bodega el pedido" : `Se enviaron a bodega ${r.enviados.length} pedidos`} guardado${r.enviados.length === 1 ? "" : "s"} en el celular: ` +
+        r.enviados.map((e) => `${e.numero} (${e.cliente}, ${money(e.total)})`).join(" · "), "success");
+    }
+    if (r.errores) addToast(`⚠️ ${r.errores} pedido(s) guardados no se pudieron enviar: revísalos en Ventas › Nuevo Pedido.`, "error");
+    if (r.enviados.length) refreshCustomersAndSales().catch(() => undefined);
+  }
+  const { conexion: conexionServidor, pendientes: pedidosEnCelular } = useSincronizarPedidos({
+    onEnviados: avisarEnvioPendientes,
+    onReconectado: () => { addToast("✅ Volvió la conexión con el servidor", "success"); refresh().catch(() => undefined); }
+  });
+  const enviarPedidosAhora = () => {
+    void enviarPendientes().then((r) => {
+      if (r.sinConexion) addToast("📴 El servidor sigue sin responder: los pedidos se enviarán solos cuando vuelva.", "warn");
+      avisarEnvioPendientes(r);
+    });
+  };
+
   useEffect(() => {
     if (!message || message === "Listo") return;
     const isError = /error|falla|falt[ao]|no se pudo|no hubo|inv[aá]lido|seleccione|ingrese|elige|escribe|marca los|no puede|no hay /i.test(message);
@@ -4842,7 +4866,7 @@ export function App() {
     let cancelled = false;
     async function renewSession() {
       try {
-        const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {});
+        const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {}, { silencioSinConexion: true });
         if (cancelled) return;
         localStorage.setItem(authStorageKey, JSON.stringify(result));
         setAccionistas(result.accionistas ?? []);
@@ -7294,7 +7318,7 @@ export function App() {
     setAppSettings(saved);
     setSettingsForm(saved);
     if (syncMatrizWithBusiness) {
-      const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {});
+      const result = await apiPost<{ token: string; user: AuthUser; accionistas: Accionista[] }>("/auth/refresh", {}, { silencioSinConexion: true });
       localStorage.setItem(authStorageKey, JSON.stringify(result));
       setAccionistas(result.accionistas ?? []);
       ensureActiveAccionista(result.accionistas);
@@ -8605,13 +8629,18 @@ export function App() {
   async function handleCustomerSearch(q: string) {
     setCustomerSearch(q);
     if (q.length < 2) { setFilteredCustomers([]); return; }
+    let data: Customer[];
     try {
-      const res = await apiFetch(`/customers/search?q=${encodeURIComponent(q)}`);
-      if (res.ok) {
-        const data = await res.json();
-        setFilteredCustomers(data);
-      }
-    } catch (e) { console.error(e); }
+      data = await apiGet<Customer[]>(`/customers/search?q=${encodeURIComponent(q)}`);
+    } catch {
+      // 📴 Sin conexión: se busca en la lista de clientes guardada en el celular.
+      const n = q.toLowerCase();
+      data = customers.filter((c) => c.full_name.toLowerCase().includes(n) || (c.phone ?? "").includes(q) || (c.identification ?? "").includes(q)).slice(0, 10);
+    }
+    const n = q.toLowerCase();
+    const temporales = (await clientesTemporales()).filter((t) => t.full_name.toLowerCase().includes(n) && !data.some((c) => c.id === t.tempId))
+      .map((t) => ({ id: t.tempId, full_name: t.full_name, phone: t.phone ?? null, identification: t.identification ?? null, address: t.address ?? null, customer_type: "NATURAL" as const, created_at: "" }));
+    setFilteredCustomers([...temporales, ...data]);
   }
 
   // ── Crear cliente desde el modal "+ Nuevo" de Ventas ──
@@ -8626,6 +8655,16 @@ export function App() {
         phone: quickNewCustomerForm.phone || undefined,
         identification: quickNewCustomerForm.identification || undefined,
         address: quickNewCustomerForm.address || undefined
+      }, { silencioSinConexion: true }).catch(async (e: unknown) => {
+        if (!(e instanceof Error && e.message === SIN_CONEXION)) throw e;
+        // 📴 Sin conexión: el cliente queda en este celular y se crea al enviar su pedido.
+        const temp = {
+          tempId: `offline:${nuevaLlave()}`, full_name: quickNewCustomerForm.full_name.trim(),
+          phone: quickNewCustomerForm.phone || undefined, identification: quickNewCustomerForm.identification || undefined, address: quickNewCustomerForm.address || undefined
+        };
+        await guardarClienteTemporal(temp);
+        addToast(`📴 Sin conexión: ${temp.full_name} quedó guardado en este celular y se creará al enviar su pedido.`, "warn");
+        return { id: temp.tempId, full_name: temp.full_name, phone: temp.phone ?? null, identification: temp.identification ?? null, address: temp.address ?? null, customer_type: "NATURAL", created_at: "" } as Customer;
       });
       setCustomers(prev => [...prev, newCust]);
       setSelectedCustomerId(newCust.id);
@@ -8633,7 +8672,7 @@ export function App() {
       setShowQuickNewCustomer(false);
       setCustomerSearch("");
       setFilteredCustomers([]);
-      addToast(`Cliente ${newCust.full_name} creado ✓`, "success");
+      if (!ES_CLIENTE_TEMPORAL(newCust.id)) addToast(`Cliente ${newCust.full_name} creado ✓`, "success");
     } catch (e) {
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
@@ -8643,12 +8682,10 @@ export function App() {
   async function loadProductPresentations(productId: string) {
     if (!productId) { setSaleProductPresentations([]); setSelectedPresentationId(""); return; }
     try {
-      const res = await apiFetch(`/products/${productId}/presentations`);
-      if (res.ok) {
-        const pres = await res.json();
-        setSaleProductPresentations(pres);
-        setSelectedPresentationId(pres[0]?.id || "");
-      }
+      // apiGet: sin conexión devuelve las presentaciones guardadas en el celular.
+      const pres = await apiGet<Array<{ id: string }>>(`/products/${productId}/presentations`);
+      setSaleProductPresentations(pres);
+      setSelectedPresentationId(pres[0]?.id || "");
     } catch (e) { console.error(e); }
   }
 
@@ -8925,13 +8962,29 @@ export function App() {
     return saleLineItems.reduce((sum, item) => sum + (item.quantity * item.unit_price), 0);
   }
 
+  // 📴 Con conexión, en Ventas se dejan guardadas en el celular las presentaciones de todos los productos de venta
+  // (una vez por sesión): así se puede tomar un pedido aunque después se vaya la conexión.
+  const presentacionesPrecargadas = useRef(false);
+  useEffect(() => {
+    if (activeTab !== "Ventas" || presentacionesPrecargadas.current || saleProducts.length === 0 || conexionServidor.sinConexion) return;
+    presentacionesPrecargadas.current = true;
+    void (async () => {
+      for (const p of saleProducts) await apiGet(`/products/${p.id}/presentations`).catch(() => undefined);
+      // Y lo que necesita «Vendiendo como» de cada socio (inventario, pedidos, cuentas y sus sacos propios).
+      for (const a of accionistas.filter((x) => x.id !== activeAccionistaId)) {
+        const o = { accionistaId: a.id };
+        for (const ruta of ["/inventory/stock", "/orders", "/receivable", "/sacks?propio=1"]) await apiGet(ruta, o).catch(() => undefined);
+      }
+    })();
+  }, [activeTab, saleProducts, conexionServidor.sinConexion]);
+
   // ── Cambiar producto en formulario de línea (actualizar presentaciones) ──
   async function handleSaleLineProductChange(productId: string) {
     setSaleLineForm(prev => ({ ...prev, product_id: productId, presentation_id: "" }));
     try {
-      const res = await apiFetch(`/products/${productId}/presentations`);
-      if (res.ok) {
-        let pres = await res.json();
+      // apiGet: sin conexión devuelve las presentaciones guardadas en el celular.
+      {
+        let pres = await apiGet<Array<{ id: string; name?: string; weight_lb?: number }>>(`/products/${productId}/presentations`);
         // ARROZ ENVEJECIDO: la presentación ES el saco. Los sacos PROPIOS del socio que vende (Cecibel…) se
         // descuentan de SUS sacos al preparar; «saco del proveedor» no descuenta nada.
         if (products.find((p) => p.id === productId)?.code === "ARROZ-ENVEJECIDO") {
@@ -12686,16 +12739,42 @@ Motivo (obligatorio):`, ""));
     pedidoGuardandoRef.current = true;
     setPedidoGuardando(true);
     let pedido: { order_number: string; total_amount: string | number; created_at?: string };
+    const datosPedido = {
+      customer_id: selectedCustomerId,
+      delivery_date: (form.get("delivery_date") as string) || undefined,
+      notes: (form.get("order_notes") as string) || undefined,
+      created_by: authUser?.id,
+      payment_method: pedidoFormaPago,
+      items
+    };
     try {
-      pedido = await apiPost<{ order_number: string; total_amount: string | number; created_at?: string }>("/orders", {
-        customer_id: selectedCustomerId,
-        delivery_date: (form.get("delivery_date") as string) || undefined,
-        notes: (form.get("order_notes") as string) || undefined,
-        created_by: authUser?.id,
-        payment_method: pedidoFormaPago,
-        items
-      }, ventaOpts);
+      // Un cliente creado sin conexión todavía no existe en el servidor: ese pedido va directo a los pendientes.
+      if (ES_CLIENTE_TEMPORAL(selectedCustomerId)) throw new Error(SIN_CONEXION);
+      pedido = await apiPost<{ order_number: string; total_amount: string | number; created_at?: string }>("/orders", datosPedido, { ...ventaOpts, silencioSinConexion: true });
       setPedidoFormaPago("");
+    } catch (e) {
+      if (!(e instanceof Error && e.message === SIN_CONEXION)) throw e;
+      // 📴 SIN CONEXIÓN: el pedido queda en este celular y se envía solo cuando vuelva el servidor.
+      const clienteNombre = customers.find((c) => c.id === selectedCustomerId)?.full_name ?? customerSearch;
+      const total = round2(items.reduce((s, it) => s + Number(it.quantity) * Number(it.unit_price), 0));
+      const socioId = ventaSocioId || activeAccionistaId;
+      await guardarPedidoPendiente({
+        accionistaId: socioId ?? null,
+        accionistaNombre: accionistas.find((a) => a.id === socioId)?.name ?? null,
+        clienteNombre, total, payload: datosPedido,
+        clienteNuevo: ES_CLIENTE_TEMPORAL(selectedCustomerId) ? (await clientesTemporales()).find((t) => t.tempId === selectedCustomerId) : undefined
+      });
+      setPedidoFormaPago("");
+      safeResetForm(formElement);
+      setSaleLineItems([]);
+      setSaleLineForm({ product_id: "", presentation_id: "", quantity: "", unit_price: "" });
+      setSelectedCustomerId("");
+      setCustomerSearch("");
+      setFilteredCustomers([]);
+      setSelectedPresentationId("");
+      setSaleProductPresentations([]);
+      addToast(`📴 Sin conexión: el pedido de ${clienteNombre} (${money(total)}) quedó guardado en este celular. Se enviará solo a bodega cuando vuelva el servidor.`, "warn");
+      return;
     } finally {
       pedidoGuardandoRef.current = false;
       setPedidoGuardando(false);
@@ -14144,9 +14223,9 @@ Motivo (obligatorio):`, ""));
             <button className="logoutBtn mailBtn" title="Mi correo de recuperación de clave" aria-label="Mi correo de recuperación de clave" onClick={() => setCorreoModalAbierto(true)}>✉️</button>
             <button className="logoutBtn" title="Cerrar sesión" onClick={logout}>⏻</button>
           </div>
-          <span className={apiOnline ? "apiState on" : "apiState"}>
+          <span className={apiOnline && !conexionServidor.sinConexion ? "apiState on" : "apiState"}>
             <i />
-            API {apiOnline ? "conectada" : "sin conexión"}
+            API {apiOnline && !conexionServidor.sinConexion ? "conectada" : "sin conexión"}
           </span>
           <small>Bascula ERP · Web Admin</small>
         </div>
@@ -14202,12 +14281,13 @@ Motivo (obligatorio):`, ""));
             {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
             <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null}
               onAbrir={(n) => { if (n.referencia_tipo === "sales_orders" && visibleTabs.includes("Ventas")) { setVentasView("despachos"); irATab("Ventas"); } }} />
-            <span className={apiOnline ? "pill online" : "pill offline"}>
-              API {apiOnline ? "conectada" : "sin conexión"}
+            <span className={apiOnline && !conexionServidor.sinConexion ? "pill online" : "pill offline"}>
+              API {apiOnline && !conexionServidor.sinConexion ? "conectada" : "sin conexión"}
             </span>
           </div>
         </header>
         <div className="content">
+        <BannerConexion conexion={conexionServidor} pendientes={pedidosEnCelular} onEnviarAhora={enviarPedidosAhora} />
 
         {/* 📂 Cambio rápido de accionista dentro del módulo (como «Vendiendo como» de Ventas): solo los
             accionistas en los que el usuario tiene ESTE módulo. Ventas ya tiene el suyo; Transporte es de la Matriz. */}
@@ -17737,6 +17817,7 @@ Motivo (obligatorio):`, ""));
               })}
             </div>
             {avisoSoloLectura("Ventas", ventasView)}
+            {ventasView === "nuevo" && <PanelPedidosPendientes pendientes={pedidosEnCelular} onEnviarAhora={enviarPedidosAhora} />}
             {/* SalesSessionSwitcher («Vendiendo como»): socio del pedido NUEVO; solo en Nuevo Pedido. En Cola, Guías e
                 Historial manda «Trabajando en» (arriba): CEYRO = pedidos de todos; un socio = solo los suyos. */}
             {ventasView === "despachos" ? (
@@ -17786,8 +17867,8 @@ Motivo (obligatorio):`, ""));
                 {filteredCustomers.length > 0 && (
                   <div style={{ border: "1px solid #d1d5db", borderRadius: 4, marginTop: 4, maxHeight: 150, overflowY: "auto" }}>
                     {filteredCustomers.map((c) => (
-                      <button key={c.id} type="button" onClick={() => { setSelectedCustomerId(c.id); setCustomerSearch(c.full_name); setFilteredCustomers([]); window.setTimeout(() => pedidoProductoRef.current?.focus(), 0); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "white", border: "none", borderBottom: "1px solid #e5e7eb", cursor: "pointer", fontSize: 13 }}>
-                        {c.full_name} {c.phone ? `(${c.phone})` : ""}
+                      <button key={c.id} type="button" onClick={() => { if (!customers.some((x) => x.id === c.id)) setCustomers((prev) => [...prev, c]); setSelectedCustomerId(c.id); setCustomerSearch(c.full_name); setFilteredCustomers([]); window.setTimeout(() => pedidoProductoRef.current?.focus(), 0); }} style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", background: "white", border: "none", borderBottom: "1px solid #e5e7eb", cursor: "pointer", fontSize: 13 }}>
+                        {c.full_name} {c.phone ? `(${c.phone})` : ""}{ES_CLIENTE_TEMPORAL(c.id) ? " · 📴 nuevo, sin enviar" : ""}
                       </button>
                     ))}
                   </div>
