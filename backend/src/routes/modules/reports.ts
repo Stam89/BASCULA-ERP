@@ -167,7 +167,8 @@ reportsRouter.get("/summary", asyncRoute(async (req, res) => {
        WHERE cm.movement = 'EXPENSE' AND ${MOV_VIGENTE}
          AND cm.created_at::date BETWEEN $1 AND $2
          AND ((($3::uuid IS NULL OR cr.accionista_id = $3) AND NOT (upper(cm.category) = ANY ($4::text[])))
-              OR (cm.category = 'GASTO_POR_SOCIO' AND cm.por_cuenta_de IS NOT NULL AND ($3::uuid IS NULL OR cm.por_cuenta_de = $3)))`,
+              OR (cm.category = 'GASTO_POR_SOCIO' AND cm.por_cuenta_de IS NOT NULL AND ($3::uuid IS NULL OR cm.por_cuenta_de = $3)
+                  AND NOT (upper(COALESCE(cm.categoria_por_cuenta, '')) = ANY ($4::text[]))))`,
       [from, to, acc, CATEGORIAS_NO_OPERATIVAS]
     ),
     pool.query(

@@ -74,3 +74,36 @@ export function BuscadorCombo({ id, placeholder, opciones, onElegir, crear, onCr
     </div>
   );
 }
+
+/**
+ * Para elegir UNO de una lista larga escribiendo (pedido del dueño 2026-10-22: «que me permita escribir para que la
+ * búsqueda sea más rápida»): sin elegir, es el buscador; ya elegido, muestra la opción con «Cambiar». Con `nombre`
+ * deja un campo oculto para los formularios que leen FormData.
+ */
+export function ElegirBuscando({ id, placeholder, opciones, valor, onCambiar, vacio, nombre, max = 12 }: {
+  id: string;
+  placeholder: string;
+  opciones: OpcionCombo[];
+  valor: string;
+  onCambiar: (key: string) => void;
+  vacio?: string;
+  nombre?: string;
+  max?: number;
+}) {
+  const elegida = valor ? opciones.find((o) => o.key === valor) : undefined;
+  return (
+    <>
+      {nombre && <input type="hidden" name={nombre} value={elegida ? valor : ""} />}
+      {elegida ? (
+        <div className="combo__elegida">
+          <span className="combo__titulo">✓ {elegida.titulo}</span>
+          {elegida.etiqueta && <span className="combo__tag">{elegida.etiqueta}</span>}
+          {elegida.detalle && <span className="combo__detalle">{elegida.detalle}</span>}
+          <button type="button" className="btnGhost" onClick={() => onCambiar("")}>Cambiar</button>
+        </div>
+      ) : (
+        <BuscadorCombo id={id} placeholder={placeholder} opciones={opciones} onElegir={onCambiar} vacio={vacio} max={max} />
+      )}
+    </>
+  );
+}

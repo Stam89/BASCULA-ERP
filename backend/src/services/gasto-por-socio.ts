@@ -39,19 +39,24 @@ export async function validarSocioDelGasto(client: Db, pagadorId: string, socioI
  */
 export async function cruzarGastoPorSocio(client: PoolClient, o: {
   movimientoId: string; pagadorId: string; socio: { id: string; name: string }; monto: number; concepto: string;
+  /** «fomento»: la caja de la Matriz entregó un fomento del socio (queda en su fomento, no en sus gastos). */
+  tipo?: "gasto" | "fomento";
 }): Promise<{ descontado: number; por_cobrar: number }> {
   const pagador = (await client.query("SELECT name FROM accionistas WHERE id = $1", [o.pagadorId])).rows[0]?.name ?? "la Matriz";
   const { descontado, resto } = await bajarDeudasDe(client, { movimientoId: o.movimientoId, deudorId: o.pagadorId, acreedorId: o.socio.id, monto: o.monto });
   const porCobrar = resto > 0.005 ? resto : 0;
+  const fomento = o.tipo === "fomento";
   await crearDeudaEntreSocios(client, {
     movimientoId: o.movimientoId, deudorId: o.socio.id, acreedorId: o.pagadorId, monto: porCobrar,
-    descDeudor: `${pagador} pagó un gasto tuyo: ${o.concepto}`,
-    descAcreedor: `Pagaste un gasto de ${o.socio.name}: ${o.concepto}`
+    descDeudor: fomento ? `${pagador} entregó por ti: ${o.concepto}` : `${pagador} pagó un gasto tuyo: ${o.concepto}`,
+    descAcreedor: fomento ? `Entregaste por ${o.socio.name}: ${o.concepto}` : `Pagaste un gasto de ${o.socio.name}: ${o.concepto}`
   });
   await notificar(client, {
     accionistaId: o.socio.id, tipo: "PAGO",
-    titulo: `${pagador} pagó un gasto tuyo`,
-    mensaje: `${pagador} pagó ${dinero(o.monto)} de ${o.concepto}. Queda en tus gastos.` +
+    titulo: fomento ? `${pagador} entregó un fomento tuyo` : `${pagador} pagó un gasto tuyo`,
+    mensaje: (fomento
+      ? `${pagador} entregó ${dinero(o.monto)} de su caja: ${o.concepto}. Quedó anotado en tu fomento.`
+      : `${pagador} pagó ${dinero(o.monto)} de ${o.concepto}. Queda en tus gastos.`) +
       (descontado > 0 ? ` Se descontaron ${dinero(descontado)} de lo que ${pagador} te debía.` : "") +
       (porCobrar > 0 ? ` Le debes ${dinero(porCobrar)} a ${pagador} (Por Pagar).` : ""),
     monto: o.monto, referenciaTipo: "cash_movements", referenciaId: o.movimientoId

@@ -13,7 +13,7 @@ import type { GanaOperacion } from "./components/ResultadoMensual";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosMovimientosRecientes, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
-import { BuscadorCombo, type OpcionCombo } from "./components/BuscadorCombo";
+import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -1644,6 +1644,9 @@ type Fomento = {
   modo_interes?: "DINAMICO" | "FIJO_1_MES" | "MANUAL";
   interes_fijo_monto?: number | null;
 };
+
+// Caja › Fomentos: en la caja de la Matriz también salen los fomentos de los socios (GET /fomentos/para-caja).
+type FomentoCaja = Fomento & { accionista_nombre: string; es_de_otro_socio: boolean };
 
 type FomentoEntrega = {
   id: string;
@@ -3935,6 +3938,7 @@ export function App() {
 
   // Sub-tab Fomentos en Caja
   const [cajaFomentoId, setCajaFomentoId] = useState("");
+  const [cajaFomentos, setCajaFomentos] = useState<FomentoCaja[]>([]);
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
   const [cajaFomentoMonto, setCajaFomentoMonto] = useState("");
   const [cajaFomentoConcepto, setCajaFomentoConcepto] = useState("");
@@ -7558,7 +7562,7 @@ export function App() {
     setCajaFomentosCargando(true);
     setCajaFomentosError("");
     try {
-      await refreshFomentos();
+      setCajaFomentos(await apiGet<FomentoCaja[]>("/fomentos/para-caja"));
     } catch (error) {
       const mensaje = error instanceof Error ? error.message : "No se pudieron cargar los fomentos";
       setCajaFomentosError(mensaje);
@@ -7573,7 +7577,7 @@ export function App() {
   useEffect(() => {
     if (activeTab !== "Caja" || cajaSubTab !== "fomentos") return;
     setCajaFomentoId("");
-    setFomentos([]);
+    setCajaFomentos([]);
     refreshCajaFomentos().catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, cajaSubTab, activeAccionistaId]);
@@ -9841,8 +9845,12 @@ export function App() {
     if (!registerId) { addToast("No hay caja abierta", "error"); return; }
     const valor = round2(Number(cajaFomentoMonto));
     if (!(valor > 0)) { addToast("Ingresa un monto mayor a cero", "error"); return; }
-    const seleccionado = fomentos.find((f) => f.id === cajaFomentoId && f.status === "ACTIVOS");
+    const seleccionado = cajaFomentos.find((f) => f.id === cajaFomentoId && f.status === "ACTIVOS");
     if (!seleccionado) { addToast("El fomento seleccionado ya no está activo. Actualiza la lista.", "error"); return; }
+    if (seleccionado.es_de_otro_socio && cajaFomentoAccion === "pago") {
+      addToast(`El pago de un fomento de ${seleccionado.accionista_nombre} se recibe en su caja.`, "error");
+      return;
+    }
     const deuda = obtenerResumenCuentaFomento(seleccionado).deudaPendiente;
     if (cajaFomentoAccion === "pago" && valor > deuda + 0.005) {
       addToast(`El pago supera la deuda. El máximo es ${money(deuda)}.`, "error");
@@ -9853,7 +9861,7 @@ export function App() {
       : `/fomentos/${cajaFomentoId}/pagos`;
     setCajaFomentoGuardando(true);
     try {
-      await apiPost(endpoint, {
+      const r = await apiPost<{ entregado_por_matriz?: { socio: string; descontado: number; por_cobrar: number } }>(endpoint, {
         fecha: fechaLocalIso(),
         valor,
         concepto: cajaFomentoConcepto.trim() || (cajaFomentoAccion === "entrega" ? "Entrega de insumos" : "Pago de fomento"),
@@ -9863,7 +9871,13 @@ export function App() {
       setCajaFomentoMonto("");
       setCajaFomentoConcepto("");
       setMedioOperacion("EFECTIVO");
-      addToast(cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
+      const porSocio = r?.entregado_por_matriz;
+      addToast(porSocio
+        ? `Entregado ${money(valor)} del fomento de ${porSocio.socio} (${seleccionado.farmer_name}) con esta caja.` +
+          (porSocio.descontado > 0.005 ? ` Se descontó ${money(porSocio.descontado)} de lo que se le debía a ${porSocio.socio}.` : "") +
+          (porSocio.por_cobrar > 0.005 ? ` ${porSocio.socio} queda debiendo ${money(porSocio.por_cobrar)} (Por Cobrar).` : "")
+        : cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
+      if (porSocio) setCajaFomentoId("");
       await Promise.all([
         refreshCajaFomentos().catch((error) => addToast(`La operación se registró, pero no se pudo actualizar Fomentos: ${error instanceof Error ? error.message : "error"}`, "error")),
         refreshCaja(registerId).catch((error) => addToast(`La operación se registró, pero no se pudo actualizar Caja: ${error instanceof Error ? error.message : "error"}`, "error"))
@@ -19784,13 +19798,9 @@ Motivo (obligatorio):`, ""));
                       <>
                         <label style={{ display: "block", marginBottom: 16 }}>
                           <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Agricultor</span>
-                          <select name="farmer_id" required value={anticipoFarmerId} onChange={(e) => setAnticipoFarmerId(e.target.value)}
-                            style={{ width: "100%", padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                            <option value="">Seleccione un agricultor</option>
-                            {farmersWithPendingLiq.map((f) => (
-                              <option key={f.id} value={f.id}>{f.full_name} (Pendiente: {money(f.pending_advance_balance)})</option>
-                            ))}
-                          </select>
+                          <ElegirBuscando id="anticipoAgricultor" nombre="farmer_id" valor={anticipoFarmerId} onCambiar={setAnticipoFarmerId}
+                            placeholder="🔍 Escribe el nombre del agricultor…" vacio="Ningún agricultor con saldo pendiente con ese nombre."
+                            opciones={farmersWithPendingLiq.map((f) => ({ key: f.id, titulo: f.full_name, detalle: `Pendiente ${money(f.pending_advance_balance)}` }))} />
                         </label>
                         <Input name="amount" label="Monto $" type="number" />
                         <Input name="concept" label="Concepto" />
@@ -20735,7 +20745,10 @@ Motivo (obligatorio):`, ""));
                             background: cajaFomentoAccion === "pago" ? "#16a34a" : "transparent",
                             color: cajaFomentoAccion === "pago" ? "#fff" : "inherit",
                             cursor: "pointer", fontWeight: 700, fontSize: 13 }}
-                          onClick={() => setCajaFomentoAccion("pago")}>
+                          onClick={() => {
+                            setCajaFomentoAccion("pago");
+                            if (cajaFomentos.find((f) => f.id === cajaFomentoId)?.es_de_otro_socio) setCajaFomentoId("");
+                          }}>
                           ⬆ Recibir Pago
                         </button>
                       </div>
@@ -20749,31 +20762,33 @@ Motivo (obligatorio):`, ""));
                           <button type="button" className="btnGhost" onClick={() => refreshCajaFomentos().catch(() => undefined)}>Reintentar</button>
                         </div>
                       )}
-                      {!cajaFomentosCargando && !cajaFomentosError && fomentos.filter(f => f.status === "ACTIVOS").length === 0 && (
+                      {!cajaFomentosCargando && !cajaFomentosError && cajaFomentos.length === 0 && (
                         <div className="infoBox" style={{ marginBottom: 10 }}>No hay fomentos activos para el socio seleccionado.</div>
                       )}
 
                       {/* Seleccionar agricultor fomentado */}
-                      <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginBottom: 8 }}>
-                        Agricultor Fomentado
-                        <select required disabled={cajaFomentosCargando || !!cajaFomentosError} value={cajaFomentoId} onChange={e => setCajaFomentoId(e.target.value)}
-                          style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3, fontSize: 13 }}>
-                          <option value="">{cajaFomentosCargando ? "— Cargando —" : "— Seleccionar —"}</option>
-                          {fomentos.filter(f => f.status === "ACTIVOS").map(f => {
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+                        <span style={{ display: "block", marginBottom: 3 }}>Agricultor Fomentado</span>
+                        {/* Se escribe el nombre y aparecen las coincidencias (pedido del dueño 2026-10-22). El pago de un fomento
+                            de otro socio entra a SU caja: aquí solo se le puede entregar. */}
+                        <ElegirBuscando id="cajaFomento" valor={cajaFomentoId} onCambiar={setCajaFomentoId}
+                          placeholder={cajaFomentosCargando ? "Cargando agricultores…" : "🔍 Escribe el nombre del agricultor…"}
+                          vacio="Ningún agricultor fomentado con ese nombre."
+                          opciones={cajaFomentos.filter((f) => cajaFomentoAccion === "entrega" || !f.es_de_otro_socio).map((f) => {
                             const cuenta = obtenerResumenCuentaFomento(f);
                             const disponible = Number(f.falta_por_pedir);
-                            return (
-                              <option key={f.id} value={f.id}>
-                                {f.farmer_name} | Deuda: {money(cuenta.deudaPendiente)} | {disponible > 0.005 ? `Disponible: ${money(disponible)}` : "Límite superado"}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </label>
+                            return {
+                              key: f.id, titulo: f.farmer_name,
+                              detalle: `Deuda ${money(cuenta.deudaPendiente)} · ${disponible > 0.005 ? `Disponible ${money(disponible)}` : "Límite superado"}`,
+                              etiqueta: f.es_de_otro_socio ? `de ${f.accionista_nombre}` : undefined,
+                              buscar: f.accionista_nombre
+                            };
+                          })} />
+                      </div>
 
                       {/* Resumen del fomento seleccionado */}
                       {cajaFomentoId && (() => {
-                        const f = fomentos.find(x => x.id === cajaFomentoId);
+                        const f = cajaFomentos.find(x => x.id === cajaFomentoId);
                         if (!f) return null;
                         const cuenta = obtenerResumenCuentaFomento(f);
                         const limite = Number(f.monto_limite);
@@ -20784,6 +20799,13 @@ Motivo (obligatorio):`, ""));
                         const mostrarAvisoLimite = cajaFomentoAccion === "entrega" && (disponible <= 0.005 || excesoResultante > 0.005);
                         return (
                           <>
+                            {f.es_de_otro_socio && (
+                              <div className="infoBox" style={{ marginBottom: 8, fontSize: 12, lineHeight: 1.5 }}>
+                                💡 Es un fomento de <b>{f.accionista_nombre}</b>: la plata sale de <b>esta caja</b>, la entrega queda en el
+                                fomento de {f.accionista_nombre} y {f.accionista_nombre} se la queda debiendo a {activeAccionista?.name ?? "la Matriz"}
+                                {" "}(primero se descuenta de lo que {activeAccionista?.name ?? "la Matriz"} le debía).
+                              </div>
+                            )}
                             <div style={{ background: "#f0fdf4", borderRadius: 6, padding: "8px 12px", marginBottom: mostrarAvisoLimite ? 6 : 10, fontSize: 12, display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
                               <div><span style={{ color: "var(--c-muted)" }}>Límite</span><br/><strong>{money(limite)}</strong></div>
                               <div><span style={{ color: "var(--c-muted)" }}>Entregado</span><br/><strong>{money(entregado)}</strong></div>
@@ -20809,7 +20831,7 @@ Motivo (obligatorio):`, ""));
                         Monto ($)
                         <input required type="number" step="0.01" min="0.01"
                           max={cajaFomentoAccion === "pago" && cajaFomentoId
-                            ? obtenerResumenCuentaFomento(fomentos.find((f) => f.id === cajaFomentoId) ?? { total_pedido: 0, gasto_adm: 0, total_pagado: 0 }).deudaPendiente
+                            ? obtenerResumenCuentaFomento(cajaFomentos.find((f) => f.id === cajaFomentoId) ?? { total_pedido: 0, gasto_adm: 0, total_pagado: 0 }).deudaPendiente
                             : undefined}
                           value={cajaFomentoMonto}
                           onChange={e => setCajaFomentoMonto(e.target.value)}
@@ -21025,20 +21047,18 @@ Motivo (obligatorio):`, ""));
 
                   <label>
                     <span>Agricultor</span>
-                    <select value={liqFarmerId}
-                      onChange={(e) => {
-                        setLiqFarmerId(e.target.value);
+                    <ElegirBuscando id="liqAgricultor" valor={liqFarmerId}
+                      placeholder="🔍 Escribe el nombre del agricultor…" vacio="Ningún agricultor con ingresos por liquidar con ese nombre."
+                      opciones={farmersWithLots.map((f) => ({ key: f.id, titulo: f.full_name }))}
+                      onCambiar={(id) => {
+                        setLiqFarmerId(id);
                         setLiqLines([]);
                         setLiqEntryMultiPick([]);
                         setLiqEntryPickerOpen(false);
                         setLiqCosechadoras([]);
                         // Los fomentos del agricultor (de todos los socios) los carga el
                         // efecto por `liqFarmerId` y prellena su monto con el saldo.
-                      }}
-                      required>
-                      <option value="">Seleccione</option>
-                      {farmersWithLots.map((f) => <option key={f.id} value={f.id}>{f.full_name}</option>)}
-                    </select>
+                      }} />
                   </label>
 
                   <div style={{ marginTop: 8 }}>

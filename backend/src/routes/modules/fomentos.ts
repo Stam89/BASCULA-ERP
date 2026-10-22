@@ -15,6 +15,7 @@ import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-au
 import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 import { calcularLimiteFomento } from "../../services/fomento-limite.js";
 import { hoyEc } from "../../utils/fechas.js";
+import { cruzarGastoPorSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 
 export const fomentosRouter = Router();
 
@@ -141,6 +142,37 @@ const SELECT_FOMENTO = `
 fomentosRouter.get("/", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const result = await pool.query(`${SELECT_FOMENTO} WHERE f.accionista_id = $1 ORDER BY f.created_at DESC`, [accionistaId]);
+  res.json(result.rows);
+}));
+
+/** Accionistas que el usuario puede ver (el administrador, todos los activos). */
+async function accionistasVisibles(req: Request): Promise<string[]> {
+  const r = req as AuthenticatedRequest;
+  if (r.user?.role_name === "ADMINISTRADOR") {
+    return (await pool.query("SELECT id FROM accionistas WHERE is_active = true")).rows.map((x) => x.id as string);
+  }
+  return (await pool.query("SELECT accionista_id FROM user_accionistas WHERE user_id = $1", [r.user?.id ?? null])).rows.map((x) => x.accionista_id as string);
+}
+
+async function esMatriz(db: { query: PoolClient["query"] }, accionistaId: string): Promise<boolean> {
+  return (await db.query("SELECT tipo FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.tipo === "MATRIZ";
+}
+
+// 💸 Caja › Fomentos (pedido del dueño 2026-10-22): la caja de la MATRIZ también entrega fomentos de los SOCIOS (la plata
+// sale de la caja de la Matriz, la entrega queda en el fomento del socio y el socio se la debe a la Matriz). Por eso, si el
+// accionista activo es la Matriz, la lista trae los fomentos ACTIVOS suyos y los de los socios que el usuario puede ver.
+fomentosRouter.get("/para-caja", asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const ids = (await esMatriz(pool, accionistaId))
+    ? [...new Set([accionistaId, ...(await accionistasVisibles(req))])]
+    : [accionistaId];
+  const result = await pool.query(
+    `SELECT x.*, a.name AS accionista_nombre, (x.accionista_id <> $2) AS es_de_otro_socio
+       FROM (${SELECT_FOMENTO} WHERE f.accionista_id = ANY($1::uuid[]) AND f.status = 'ACTIVOS') x
+       JOIN accionistas a ON a.id = x.accionista_id
+      ORDER BY (x.accionista_id <> $2), x.farmer_name`,
+    [ids, accionistaId]
+  );
   res.json(result.rows);
 }));
 
@@ -926,16 +958,27 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (client) => {
-    const fomentoBloqueado = await client.query<{ farmer_name: string; limite: number }>(
-      `SELECT farmer_name, ROUND(cuadras * 800, 2)::float AS limite
+    const fomentoBloqueado = await client.query<{ farmer_name: string; limite: number; accionista_id: string | null }>(
+      `SELECT farmer_name, ROUND(cuadras * 800, 2)::float AS limite, accionista_id
          FROM fomentos
-        WHERE id = $1 AND accionista_id = $2
+        WHERE id = $1
         FOR UPDATE`,
-      [fomentoId, accionistaId]
+      [fomentoId]
     );
-    if (!fomentoBloqueado.rowCount) {
-      throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
-    }
+    if (!fomentoBloqueado.rowCount) throw new ApiError(404, "Fomento no encontrado");
+    // Fomento de OTRO socio: solo lo entrega la caja de la Matriz (la plata sale de su caja y el socio se la debe).
+    const duenoId = fomentoBloqueado.rows[0].accionista_id;
+    const socio = duenoId !== accionistaId
+      ? await (async () => {
+        if (!duenoId) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+        if (!data.cash_register_id || data.es_saldo_anterior) {
+          throw new ApiError(403, "Este fomento es de otro socio: solo se le puede entregar dinero desde la caja de la Matriz.");
+        }
+        if (!(await esMatriz(client, accionistaId))) throw new ApiError(403, "Solo la caja de la Matriz entrega fomentos de los socios.");
+        if (!(await accionistasVisibles(req)).includes(duenoId)) throw new ApiError(403, "No tienes acceso a los fomentos de ese socio.");
+        return validarSocioDelGasto(client, accionistaId, duenoId);
+      })()
+      : null;
 
     // El saldo anterior describe una deuda histórica; no es una nueva entrega
     // de crédito. Las entregas operativas sí requieren confirmación al rebasar
@@ -979,14 +1022,25 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
 
     // Un saldo ARRASTRADO no es un desembolso nuevo de caja: no genera egreso.
     if (data.cash_register_id && !data.es_saldo_anterior) {
-      await client.query(
+      const agricultor = fomentoBloqueado.rows[0]?.farmer_name ?? "agricultor";
+      const mov = await client.query<{ id: string }>(
+        // De otro socio: GASTO_POR_SOCIO (no es fomento de la Matriz) con la categoría real FOMENTO_ENTREGA, que no
+        // cuenta como gasto del socio (es plata que el agricultor le devuelve en su liquidación).
         `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
-         VALUES ($1, 'EXPENSE', 'FOMENTO_ENTREGA', 'fomento_entregas', $2, $3, $4, $5)`,
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, por_cuenta_de, categoria_por_cuenta)
+         VALUES ($1, 'EXPENSE', $6, 'fomento_entregas', $2, $3, $4, $5, $7, $8) RETURNING id`,
         [data.cash_register_id, entrega.rows[0].id, data.valor,
-         `Fomento entregado a ${fomentoBloqueado.rows[0]?.farmer_name ?? "agricultor"}`,
-         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
+         socio ? `Fomento de ${socio.name} entregado a ${agricultor}` : `Fomento entregado a ${agricultor}`,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago),
+         socio ? "GASTO_POR_SOCIO" : "FOMENTO_ENTREGA", socio?.id ?? null, socio ? "FOMENTO_ENTREGA" : null]
       );
+      if (socio) {
+        const cruce = await cruzarGastoPorSocio(client, {
+          movimientoId: mov.rows[0].id, pagadorId: accionistaId, socio, monto: data.valor,
+          concepto: `fomento entregado a ${agricultor}`, tipo: "fomento"
+        });
+        return { ...entrega.rows[0], entregado_por_matriz: { socio: socio.name, ...cruce } };
+      }
     }
     return entrega.rows[0];
   });
