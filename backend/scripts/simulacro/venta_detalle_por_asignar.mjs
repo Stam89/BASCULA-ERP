@@ -60,7 +60,9 @@ try {
 
   // D. Reglas y anulación
   const fiado = await vender(0.1, 5, "SIM FIADO", { pagado: 0 });
-  check(fiado.status === 400, "D1. «Decidir después» no se puede fiar", mostrar(fiado));
+  // Desde 2026-10-22 sí se puede fiar sin dueño (ver venta_detalle_por_asignar_fiada): aquí se anula para seguir.
+  check(fiado.status === 201 && fiado.data.credito?.debe > 0, "D1. «Decidir después» también se puede fiar", mostrar(fiado));
+  if (fiado.ok) exigir(await api("POST", `/sales/retail/por-asignar/${fiado.data.id}/anular`, {}, matriz), "D1b. se anula esa fiada (no cobró nada)");
   const v4 = exigir(await vender(0.1, 5, "SIM ANULAR"), "D2. otra venta por asignar");
   const mov4 = (await q("SELECT cash_movement_id id FROM ventas_detalle_por_asignar WHERE id=$1", [v4.id]))[0].id;
   exigir(await api("POST", `/cash/movements/${mov4}/reverse`, { reason: "SIM se cobró mal" }, matriz), "D3. anular en Caja la venta por asignar");

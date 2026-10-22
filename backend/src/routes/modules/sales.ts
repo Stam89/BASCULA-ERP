@@ -10,7 +10,7 @@ import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -254,32 +254,45 @@ async function ventaDetalleFiada(
 
 // 🕒 VENTA DETALLE POR ASIGNAR (pedido del dueño 2026-10-21): se cobra ahora (la plata entra a esta caja) sin decidir
 // de quién es el arroz; el inventario NO se descuenta hasta asignarla (POST /retail/por-asignar/asignar).
-async function ventaDetallePorAsignar(client: PoolClient, req: AuthenticatedRequest, body: RetailBody, lineas: LineaDetalle[]) {
+async function ventaDetallePorAsignar(client: PoolClient, req: AuthenticatedRequest, body: RetailBody, lineas: LineaDetalle[], fiada: boolean) {
   const accionistaId = req.accionistaId;
   await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
   const cliente = await resolverClienteVentaDetalle(client, body.buyer, accionistaId);
   const caja = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [body.cash_register_id])).rows[0];
   const medio = caja?.tipo === "BANCO" ? "BANCO" : caja?.tipo === "MIXTO" ? (body.medio ?? "EFECTIVO") : "EFECTIVO";
-  // Una fila (y un ingreso) por producto: cada uno se puede asignar a un dueño distinto.
+  const totalVenta = round2(lineas.reduce((t, l) => t + l.total, 0));
+  // 📝 Fiada (2026-10-22): lo pagado se reparte entre los productos según su valor (la última línea lleva el resto).
+  let porRepartir = fiada ? round2(Math.min(Number(body.pagado ?? 0), totalVenta)) : totalVenta;
+  // Una fila (y un ingreso, si pagó algo) por producto: cada uno se puede asignar a un dueño distinto.
   const ids: string[] = [];
   let total = 0;
-  for (const l of lineas) {
+  for (const [i, l] of lineas.entries()) {
+    const pagadoLinea = !fiada ? l.total
+      : i === lineas.length - 1 ? porRepartir : round2(Math.min(porRepartir, (Number(body.pagado ?? 0) * l.total) / totalVenta));
+    porRepartir = round2(porRepartir - pagadoLinea);
     const id = (await client.query(
-      `INSERT INTO ventas_detalle_por_asignar (accionista_id, cash_register_id, product_id, warehouse_id, product_name, quantity_qq, unit_price_qq, total, libras, customer_id, customer_name, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+      `INSERT INTO ventas_detalle_por_asignar (accionista_id, cash_register_id, product_id, warehouse_id, product_name, quantity_qq, unit_price_qq, total, libras, customer_id, customer_name, created_by, pagado)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING id`,
       [accionistaId, body.cash_register_id, l.product_id, l.warehouse_id, l.product_name, l.quantity_qq, l.unit_price_qq, l.total,
-       round2(l.quantity_qq * QQ_TO_LB), cliente.id, cliente.full_name, req.user?.id ?? null]
+       round2(l.quantity_qq * QQ_TO_LB), cliente.id, cliente.full_name, req.user?.id ?? null, fiada ? pagadoLinea : null]
     )).rows[0].id as string;
-    const mov = (await client.query(
-      `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, created_by)
-       VALUES ($1, 'INCOME', 'VENTA_DETALLE_POR_ASIGNAR', 'venta_detalle_por_asignar', $2, $3, $4, $5, $6) RETURNING id`,
-      [body.cash_register_id, id, l.total, `Venta detalle por asignar: ${l.product_name} · ${cliente.full_name}`, medio, req.user?.id ?? null]
-    )).rows[0].id as string;
-    await client.query("UPDATE ventas_detalle_por_asignar SET cash_movement_id = $2 WHERE id = $1", [id, mov]);
+    if (pagadoLinea > 0.005) {
+      const mov = (await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, created_by)
+         VALUES ($1, 'INCOME', 'VENTA_DETALLE_POR_ASIGNAR', 'venta_detalle_por_asignar', $2, $3, $4, $5, $6) RETURNING id`,
+        [body.cash_register_id, id, pagadoLinea,
+         `Venta detalle por asignar: ${l.product_name} · ${cliente.full_name}${fiada ? ` (abono; debe ${dinero(round2(l.total - pagadoLinea))})` : ""}`, medio, req.user?.id ?? null]
+      )).rows[0].id as string;
+      await client.query("UPDATE ventas_detalle_por_asignar SET cash_movement_id = $2 WHERE id = $1", [id, mov]);
+    }
     ids.push(id);
     total = round2(total + l.total);
   }
-  return { id: ids[0], ids, total_amount: total, customer_id: cliente.id, customer_name: cliente.full_name, por_asignar: true };
+  const pagado = fiada ? round2(Math.min(Number(body.pagado ?? 0), totalVenta)) : totalVenta;
+  return {
+    id: ids[0], ids, total_amount: total, customer_id: cliente.id, customer_name: cliente.full_name, por_asignar: true,
+    ...(fiada ? { credito: { pagado, debe: round2(total - pagado), de: "quien se le asigne el arroz" } } : {})
+  };
 }
 
 // Ventas por asignar de esta caja + cuánto arroz tiene cada accionista de esos productos (para decidir a quién).
@@ -287,10 +300,10 @@ salesRouter.get("/retail/por-asignar", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const ventas = (await pool.query(
     `SELECT v.id, v.product_id, v.warehouse_id, v.product_name, v.quantity_qq::float AS qq, v.libras::float AS libras, v.total::float AS total,
-            v.customer_name, v.created_at
+            v.customer_name, v.created_at, v.pagado::float AS pagado, (v.cash_movement_id IS NOT NULL) AS en_caja
        FROM ventas_detalle_por_asignar v
-       JOIN cash_movements m ON m.id = v.cash_movement_id
-      WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND m.reversed_at IS NULL
+       LEFT JOIN cash_movements m ON m.id = v.cash_movement_id
+      WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND (m.id IS NULL OR m.reversed_at IS NULL)
       ORDER BY v.created_at`,
     [accionistaId]
   )).rows;
@@ -323,22 +336,26 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
     const esPropia = dueno.id === accionistaId;
     const cajero = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
     const filas = (await client.query(
-      `SELECT v.*, m.reversed_at FROM ventas_detalle_por_asignar v JOIN cash_movements m ON m.id = v.cash_movement_id
+      `SELECT v.*, m.reversed_at FROM ventas_detalle_por_asignar v LEFT JOIN cash_movements m ON m.id = v.cash_movement_id
         WHERE v.id = ANY($1::uuid[]) AND v.accionista_id = $2 ORDER BY v.created_at FOR UPDATE OF v`,
       [body.ids, accionistaId]
     )).rows;
     if (filas.length !== new Set(body.ids).size) throw new ApiError(404, "Alguna venta no existe o es de otra caja. Refresca la pantalla.");
     let total = 0;
+    let cobrado = 0;
+    let fiado = 0;
     for (const v of filas) {
       if (v.asignado_at || v.anulado_at || v.reversed_at) throw new ApiError(409, "Alguna venta ya se asignó o se anuló. Refresca la pantalla.");
       const fecha = new Date(v.created_at).toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" });
+      // 📝 Fiada: la venta del dueño nace A CRÉDITO a nombre del cliente y lo que pagó (ya en la caja) se le abona.
+      const esFiada = v.pagado != null && Number(v.pagado) < Number(v.total) - 0.005;
       let venta;
       try {
         venta = await crearVenta(client, dueno.id, {
           customer_id: v.customer_id,
-          payment_method: "CASH",
+          payment_method: esFiada ? "CREDIT" : "CASH",
           sack_weight_lb: 100,
-          description: `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"} (del ${fecha}${esPropia ? "" : `, cobró ${cajero}`})`,
+          description: `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"} (del ${fecha}${esFiada ? ", fiado" : ""}${esPropia ? "" : `, cobró ${cajero}`})`,
           items: [{ product_id: v.product_id, warehouse_id: v.warehouse_id, quantity: Number(v.quantity_qq), unit_price: Number(v.unit_price_qq) }]
         });
       } catch (e) {
@@ -347,13 +364,37 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
         }
         throw e;
       }
-      const monto = round2(Number(v.total));
-      await client.query(
-        `UPDATE cash_movements SET category = $2, reference_type = 'sales', reference_id = $3, description = $4 WHERE id = $1`,
-        [v.cash_movement_id, esPropia ? "VENTA" : "COBRO_POR_SOCIO", venta.id,
-         esPropia ? `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"}` : `Venta detalle de ${dueno.name}: ${v.product_name} · ${v.customer_name ?? "cliente"} (se lo debes)`]
-      );
-      if (!esPropia) {
+      const monto = esFiada ? round2(Number(v.pagado)) : round2(Number(v.total));
+      if (esFiada) {
+        fiado = round2(fiado + Number(v.total) - monto);
+        if (monto > 0.005 && v.cash_movement_id) {
+          // El abono ya entró a la caja: se aplica a la cuenta nueva como un cobro de Por Cobrar (con su desglose,
+          // así anularlo en Caja la devuelve a deber).
+          const cxc = (await client.query(
+            "SELECT id, amount FROM accounts_receivable WHERE sale_id = $1 AND status <> 'CANCELLED' ORDER BY created_at LIMIT 1 FOR UPDATE", [venta.id]
+          )).rows[0];
+          if (!cxc) throw new ApiError(500, "No se creó la cuenta por cobrar de la venta fiada.");
+          const saldo = round2(Number(cxc.amount) - monto);
+          await client.query("UPDATE accounts_receivable SET balance = $2, status = $3 WHERE id = $1", [cxc.id, saldo, saldo < 0.01 ? "PAID" : "PARTIAL"]);
+          await client.query(
+            "INSERT INTO cash_movement_cuentas (cash_movement_id, tabla, cuenta_id, monto) VALUES ($1, 'accounts_receivable', $2, $3)",
+            [v.cash_movement_id, cxc.id, monto]
+          );
+          await client.query(
+            `UPDATE cash_movements SET category = $2, reference_type = 'accounts_receivable', reference_id = $3, description = $4 WHERE id = $1`,
+            [v.cash_movement_id, esPropia ? "COBRO_CREDITO" : "COBRO_POR_SOCIO", cxc.id,
+             esPropia ? `Abono venta detalle fiada: ${v.product_name} · ${v.customer_name ?? "cliente"}`
+               : `Abono de ${v.customer_name ?? "cliente"} para ${dueno.name}: ${v.product_name} (se lo debes)`]
+          );
+        }
+      } else {
+        await client.query(
+          `UPDATE cash_movements SET category = $2, reference_type = 'sales', reference_id = $3, description = $4 WHERE id = $1`,
+          [v.cash_movement_id, esPropia ? "VENTA" : "COBRO_POR_SOCIO", venta.id,
+           esPropia ? `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"}` : `Venta detalle de ${dueno.name}: ${v.product_name} · ${v.customer_name ?? "cliente"} (se lo debes)`]
+        );
+      }
+      if (!esPropia && monto > 0.005 && v.cash_movement_id) {
         await client.query(
           `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
            VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
@@ -369,19 +410,35 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
         "UPDATE ventas_detalle_por_asignar SET asignado_a = $2, sale_id = $3, asignado_at = now(), asignado_by = $4 WHERE id = $1",
         [v.id, dueno.id, venta.id, r.user?.id ?? null]
       );
-      total = round2(total + monto);
+      total = round2(total + Number(v.total));
+      cobrado = round2(cobrado + monto);
     }
     if (!esPropia) {
       await notificar(client, {
         accionistaId: dueno.id, tipo: "PAGO",
         titulo: `${cajero} te asignó ventas al detalle`,
-        mensaje: `${cajero} te asignó ${filas.length} venta(s) al detalle por ${dinero(total)}. Salieron de tu inventario y ${cajero} te lo debe (Por Cobrar).`,
+        mensaje: `${cajero} te asignó ${filas.length} venta(s) al detalle por ${dinero(total)}. Salieron de tu inventario` +
+          (cobrado > 0.005 ? ` y ${cajero} te debe lo que cobró, ${dinero(cobrado)} (Por Cobrar)` : "") +
+          (fiado > 0.005 ? `. Quedaron fiados ${dinero(fiado)}: los clientes te los deben a ti (Por Cobrar)` : "") + ".",
         monto: total, referenciaTipo: "ventas_detalle_por_asignar", referenciaId: filas[0].id
       });
     }
-    return { asignadas: filas.length, total, dueno: dueno.name, se_lo_debes: esPropia ? 0 : total };
+    return { asignadas: filas.length, total, dueno: dueno.name, se_lo_debes: esPropia ? 0 : cobrado, fiado };
   });
   res.json(out);
+}));
+
+// Anular una venta por asignar que no tiene ingreso en Caja (fiada sin abono). Las que sí cobraron algo se anulan en
+// Caja (el ingreso), como cualquier movimiento. Solo administrador.
+salesRouter.post("/retail/por-asignar/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const v = (await pool.query(
+    `UPDATE ventas_detalle_por_asignar SET anulado_at = now()
+      WHERE id = $1 AND accionista_id = $2 AND asignado_at IS NULL AND anulado_at IS NULL AND cash_movement_id IS NULL RETURNING id`,
+    [req.params.id, accionistaId]
+  )).rows[0];
+  if (!v) throw new ApiError(409, "Esa venta ya se asignó, ya se anuló o cobró algo: si cobró, anula su ingreso en Caja.");
+  res.json({ ok: true });
 }));
 
 salesRouter.post("/retail", asyncRoute(async (req, res) => {
@@ -394,11 +451,11 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
   if (aCredito && /consumidor\s*final/i.test(body.buyer.full_name)) {
     throw new ApiError(400, "Para fiar escribe el nombre de la persona que queda debiendo (no «Consumidor final»).");
   }
-  if (body.por_asignar && (aCredito || dueno || body.a_cuenta)) {
-    throw new ApiError(400, "«Decidir después» es solo para ventas pagadas completas: para fiar o cargar a su cuenta, elige de quién es el arroz.");
+  if (body.por_asignar && (dueno || body.a_cuenta)) {
+    throw new ApiError(400, "«Decidir después» no se carga a la cuenta de la persona: para eso elige de quién es el arroz.");
   }
   const result = await inTransaction(async (client) => {
-    if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, lineas);
+    if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, lineas, aCredito);
     if (body.a_cuenta) return await ventaDetalleACuenta(client, req as AuthenticatedRequest, body, dueno, lineas);
     if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, lineas);
     const nombres = nombresDe(lineas);

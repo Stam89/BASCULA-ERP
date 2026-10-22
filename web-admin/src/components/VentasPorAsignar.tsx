@@ -7,7 +7,7 @@ import { confirmar } from "./Dialogo";
 // arroz; al cierre del día (o al otro) se adjudica a la Matriz o a un socio según quién tenga arroz. Al asignar sale
 // de SU inventario; si es de un socio, la plata que cobró la caja queda debiéndosela (Por Cobrar del socio).
 
-type Venta = { id: string; product_id: string; warehouse_id: string; product_name: string; qq: number; libras: number; total: number; customer_name: string | null; created_at: string };
+type Venta = { id: string; product_id: string; warehouse_id: string; product_name: string; qq: number; libras: number; total: number; customer_name: string | null; created_at: string; pagado: number | null; en_caja: boolean };
 type Stock = { product_id: string; warehouse_id: string; accionista_id: string; qq: number };
 type Acc = { id: string; name: string; tipo: string };
 
@@ -54,13 +54,29 @@ export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCa
       (propio ? " y queda como venta suya." : `; ${caja} cobró esa plata y se la queda debiendo a ${dueno.name} (Por Cobrar de ${dueno.name}).`)))) return;
     setBusy(true);
     try {
-      const r = await apiPost<{ asignadas: number; total: number; dueno: string; se_lo_debes: number }>("/sales/retail/por-asignar/asignar", { ids, dueno_id: dueno.id });
-      avisar(`🕒 ${r.asignadas} venta(s) asignadas a ${r.dueno} (${money(r.total)})` + (r.se_lo_debes > 0 ? ` · le debes ${money(r.se_lo_debes)}` : ""), "success");
+      const r = await apiPost<{ asignadas: number; total: number; dueno: string; se_lo_debes: number; fiado?: number }>("/sales/retail/por-asignar/asignar", { ids, dueno_id: dueno.id });
+      avisar(`🕒 ${r.asignadas} venta(s) asignadas a ${r.dueno} (${money(r.total)})` + (r.se_lo_debes > 0 ? ` · le debes ${money(r.se_lo_debes)}` : "") +
+        ((r.fiado ?? 0) > 0.005 ? ` · fiado ${money(r.fiado ?? 0)}: ahora lo deben a ${r.dueno} (Por Cobrar)` : ""), "success");
       setMarcadas([]);
       await cargar();
       await onCambio();
     } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo asignar", "error"); } finally { setBusy(false); }
   }
+
+  // Fiada sin abono: no tiene ingreso en Caja que anular, se anula aquí (administrador).
+  async function anular(v: Venta) {
+    if (!(await confirmar(`¿Anular la venta fiada de ${v.product_name} a ${v.customer_name ?? "cliente"} por ${money(v.total)}?
+
+No pagó nada, así que no hay nada en la caja.`))) return;
+    setBusy(true);
+    try {
+      await apiPost(`/sales/retail/por-asignar/${v.id}/anular`, {});
+      avisar("Venta anulada", "success");
+      await cargar();
+      await onCambio();
+    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo anular", "error"); } finally { setBusy(false); }
+  }
+  const debeDe = (v: Venta) => (v.pagado == null ? 0 : r2(v.total - v.pagado));
 
   return (
     <div className="vpa">
@@ -68,19 +84,21 @@ export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCa
         <strong>🕒 Ventas al detalle por asignar</strong>
         <span>{datos.ventas.length} venta(s) · {money(totalGeneral)}</span>
       </div>
-      <p className="vpa__ayuda">La plata ya está en la caja. Elige de quién es el arroz: sale de su inventario y, si es de un socio, la caja se lo queda debiendo.</p>
+      <p className="vpa__ayuda">Lo cobrado ya está en la caja. Elige de quién es el arroz: sale de su inventario y, si es de un socio, la caja le debe lo cobrado.
+        Lo fiado (📝) pasa a ser Por Cobrar del dueño, a nombre del cliente.</p>
       {grupos.map((g) => {
         const sel = g.ventas.filter((v) => marcadas.includes(v.id));
         const usar = sel.length > 0 ? sel : g.ventas;
         const qq = r2(usar.reduce((s, v) => s + v.qq, 0));
         const lb = r2(usar.reduce((s, v) => s + v.libras, 0));
         const total = r2(usar.reduce((s, v) => s + v.total, 0));
+        const debe = r2(usar.reduce((s, v) => s + debeDe(v), 0));
         const abierto = abiertos.includes(g.key);
         return (
           <section key={g.key} className="vpa__grupo">
             <div className="vpa__fila">
               <span><b>{g.nombre}</b> · {g.ventas.length} venta(s){sel.length > 0 ? ` (${sel.length} marcadas)` : ""}</span>
-              <span>{lb.toFixed(2)} lb · {qq.toFixed(2)} QQ · <b>{money(total)}</b></span>
+              <span>{lb.toFixed(2)} lb · {qq.toFixed(2)} QQ · <b>{money(total)}</b>{debe > 0.005 ? ` · 📝 fiado ${money(debe)}` : ""}</span>
             </div>
             <div className="vpa__duenos">
               <small>{sel.length > 0 ? `Asignar las ${sel.length} marcadas a:` : "Asignar todas a:"}</small>
@@ -108,7 +126,10 @@ export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCa
                       <input type="checkbox" checked={on} onChange={() => setMarcadas(on ? marcadas.filter((x) => x !== v.id) : [...marcadas, v.id])} />
                       <span>{new Date(v.created_at).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · {v.customer_name ?? "cliente"}</span>
                       <span>{v.libras.toFixed(2)} lb</span>
-                      <b>{money(v.total)}</b>
+                      <b>{money(v.total)}{debeDe(v) > 0.005 ? ` · 📝 debe ${money(debeDe(v))}` : ""}</b>
+                      {!v.en_caja && (
+                        <button type="button" className="btnGhost" disabled={busy} onClick={(ev) => { ev.preventDefault(); void anular(v); }}>Anular</button>
+                      )}
                     </label>
                   );
                 })}

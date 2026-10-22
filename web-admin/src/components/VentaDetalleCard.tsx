@@ -167,7 +167,6 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
     if (compradorTexto.trim().length < 2) { onAviso("Escriba o seleccione el nombre del cliente"); return; }
     const totalVenta = Math.round(todas.reduce((s, l) => s + l.total, 0) * 100) / 100;
     if ((formaPago === "cuenta" || formaPago === "fomento") && dueno === "POR_ASIGNAR") { onAviso("Para cargar a su cuenta elige de quién es el arroz (no «Decidir después»)"); return; }
-    if (formaPago !== "todo" && dueno === "POR_ASIGNAR") { onAviso("Para fiar elige de quién es el arroz (no «Decidir después»)"); return; }
     if (formaPago !== "todo" && /consumidor\s*final/i.test(compradorTexto)) { onAviso("Para fiar escribe el nombre de la persona que queda debiendo"); return; }
     const pagadoAhora = formaPago === "fiado" ? 0 : formaPago === "parte" ? Math.round(Number(pagadoTxt) * 100) / 100 : undefined;
     if (formaPago === "parte" && !(Number(pagadoAhora) > 0 && Number(pagadoAhora) < totalVenta)) {
@@ -344,13 +343,14 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
               <button key={a.id} type="button" className={`cj-dequien__op ${dueno === a.id ? "is-on" : ""}`} onClick={() => onDueno(a.id)}>🤝 De {a.name}</button>
             ))}
             {permitirDespues && (
-              <button type="button" className={`cj-dequien__op ${dueno === "POR_ASIGNAR" ? "is-on" : ""}`} onClick={() => { onDueno("POR_ASIGNAR"); setFormaPago("todo"); }}>🕒 Decidir después</button>
+              <button type="button" className={`cj-dequien__op ${dueno === "POR_ASIGNAR" ? "is-on" : ""}`} onClick={() => { onDueno("POR_ASIGNAR"); if (formaPago === "cuenta" || formaPago === "fomento") setFormaPago("todo"); }}>🕒 Decidir después</button>
             )}
           </div>
           {dueno === "POR_ASIGNAR" && (
             <small className="cj-dequien__info">
-              La plata entra ahora a esta caja y el arroz <b>todavía no sale de ningún inventario</b>. Al cierre del día (o cuando se sepa)
-              lo asignas arriba en «🕒 Ventas por asignar»: si es de un socio, {duenoPropio} se lo queda debiendo.
+              Lo que pague entra ahora a esta caja y el arroz <b>todavía no sale de ningún inventario</b>. Al cierre del día (o cuando se sepa)
+              lo asignas arriba en «🕒 Ventas por asignar»: si es de un socio, {duenoPropio} le debe lo cobrado y, si quedó debiendo, la deuda del
+              cliente pasa a ese socio.
             </small>
           )}
           {dueno && dueno !== "POR_ASIGNAR" && (
@@ -370,7 +370,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
             ...(persona?.farmer_id ? [["cuenta", "🌾 A su cuenta de agricultor"]] : []),
             ...(persona?.roles.some((r) => /fomento/i.test(r)) ? [["fomento", "🌱 Cargar a su fomento"]] : [])] as Array<[FormaPago, string]>).map(([k, t]) => (
             <button key={k} type="button" role="radio" aria-checked={formaPago === k} className={formaPago === k ? "is-on" : ""}
-              disabled={k !== "todo" && dueno === "POR_ASIGNAR"} title={k !== "todo" && dueno === "POR_ASIGNAR" ? "Para fiar o cargar a su cuenta elige de quién es el arroz" : undefined}
+              disabled={(k === "cuenta" || k === "fomento") && dueno === "POR_ASIGNAR"} title={(k === "cuenta" || k === "fomento") && dueno === "POR_ASIGNAR" ? "Para cargar a su cuenta elige de quién es el arroz" : undefined}
               onClick={() => setFormaPago(k)}>{t}</button>
           ))}
         </div>
@@ -390,7 +390,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         {(formaPago === "fiado" || formaPago === "parte") && (calculo || lineas.length > 0) && (() => {
           const totalVenta = Math.round(([...lineas.map((l) => l.total), calculo && hayCantidad ? calculo.total : 0]).reduce((s, x) => s + x, 0) * 100) / 100;
           const pagaAhora = formaPago === "fiado" ? 0 : Math.max(0, Math.min(Number(pagadoTxt) || 0, totalVenta));
-          const nombreDueno = dueno ? duenos.find((a) => a.id === dueno)?.name : duenoPropio;
+          const nombreDueno = dueno === "POR_ASIGNAR" ? "quien se le asigne el arroz" : dueno ? duenos.find((a) => a.id === dueno)?.name : duenoPropio;
           return (
             <p className="vdPago__info">
               {pagaAhora > 0 ? <>Paga ahora <b>{money(pagaAhora)}</b> · </> : null}

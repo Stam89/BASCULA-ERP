@@ -356,8 +356,8 @@ export async function reunirDatos(
     const r = (await db.query(
       `SELECT COUNT(*)::int AS n, COALESCE(SUM(v.total), 0)::float AS monto,
               COUNT(*) FILTER (WHERE (v.created_at AT TIME ZONE 'America/Guayaquil')::date < (now() AT TIME ZONE 'America/Guayaquil')::date)::int AS viejas
-         FROM ventas_detalle_por_asignar v JOIN cash_movements m ON m.id = v.cash_movement_id
-        WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND m.reversed_at IS NULL`,
+         FROM ventas_detalle_por_asignar v LEFT JOIN cash_movements m ON m.id = v.cash_movement_id
+        WHERE v.accionista_id = $1 AND v.asignado_at IS NULL AND v.anulado_at IS NULL AND (m.id IS NULL OR m.reversed_at IS NULL)`,
       [acc]
     )).rows[0];
     return { n: Number(r.n), monto: Number(r.monto), viejas: Number(r.viejas) };

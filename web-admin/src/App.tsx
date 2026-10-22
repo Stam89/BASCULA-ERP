@@ -3691,6 +3691,22 @@ export function App() {
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
   const [fomentoFilter, setFomentoFilter] = useState<"TODOS"|"ACTIVOS"|"NO ACTIVOS"|"APROBADOS"|"ARCHIVADOS">("TODOS");
   const [fomentoSearch, setFomentoSearch] = useState("");
+  // Orden de la lista de fomentos (pedido del dueño 2026-10-22); se recuerda en este equipo.
+  type OrdenFomento = "reciente" | "antiguo" | "nombre" | "deuda" | "disponible" | "inicio";
+  const [fomentoOrden, setFomentoOrdenState] = useState<OrdenFomento>(() => {
+    try { return (localStorage.getItem("bascula-erp:fomento-orden") as OrdenFomento | null) ?? "reciente"; } catch { return "reciente"; }
+  });
+  const setFomentoOrden = (o: OrdenFomento) => { setFomentoOrdenState(o); try { localStorage.setItem("bascula-erp:fomento-orden", o); } catch { /* sin almacenamiento */ } };
+  const ordenarFomentos = (a: Fomento, b: Fomento) => {
+    switch (fomentoOrden) {
+      case "nombre": return a.farmer_name.localeCompare(b.farmer_name, "es", { sensitivity: "base" });
+      case "deuda": return obtenerResumenCuentaFomento(b).deudaPendiente - obtenerResumenCuentaFomento(a).deudaPendiente;
+      case "disponible": return Number(b.falta_por_pedir) - Number(a.falta_por_pedir);
+      case "inicio": return String(a.inicio).localeCompare(String(b.inicio));
+      case "antiguo": return String(a.created_at).localeCompare(String(b.created_at));
+      default: return String(b.created_at).localeCompare(String(a.created_at));
+    }
+  };
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
   const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
@@ -8480,18 +8496,20 @@ export function App() {
       (porAsignar ? " · 🕒 por asignar: al cierre decide de quién es el arroz" : "") +
       (cr ? ` · 📝 ${cr.pagado > 0 ? `pagó ${money(cr.pagado)} y ` : ""}queda debiendo ${money(cr.debe)} a ${cr.de} (Por Cobrar)` : "") +
       (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario${(venta.se_lo_debes ?? 0) > 0 ? ` y le debes ${money(venta.se_lo_debes ?? 0)}` : ""}` : ""), "success");
-    // Ticket térmico 80mm (comprobante de mostrador).
+    // Ticket térmico 80mm (comprobante de mostrador). Libras: por dólares se entregan libras enteras (10.63 → 10, pedido
+    // del dueño 2026-10-22); por libras, lo que se digitó (sin ceros de más).
+    const lbTicket = (n: number, modo: string) => modo === "DOLARES" ? String(Math.floor(n + 1e-9)) : String(Math.round(n * 100) / 100);
     printTicketVentaDetalle({
       producto: v.producto,
       cliente: venta.customer_name,
-      libras: librasStr,
+      libras: lbTicket(v.libras, v.modo),
       precioLibra: v.precioLibra,
       total: v.total,
       unidad: v.modo === "QQ" ? "QQ" : "lb",
-      cantidad: v.modo === "QQ" ? qqStr : librasStr,
+      cantidad: v.modo === "QQ" ? qqStr : lbTicket(v.libras, v.modo),
       precioUnitario: v.precioAplicado,
       ...(cr ? { pagado: cr.pagado, debe: cr.debe } : {}),
-      ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: l.libras.toFixed(3), total: l.total })) } : {}),
+      ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: lbTicket(l.libras, l.modo), total: l.total })) } : {}),
       ...(ac ? { nota: ac.tipo === "AGRICULTOR" ? "A su cuenta de agricultor" : "Cargado a su fomento" } : {})
     });
     await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
@@ -21705,12 +21723,25 @@ Motivo (obligatorio):`, ""));
                       style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--c-muted)", fontSize: 14 }}>✕</button>
                   )}
                 </div>
+                <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 12.5 }}>
+                  <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>↕ Ordenar:</span>
+                  <select value={fomentoOrden} onChange={(e) => setFomentoOrden(e.target.value as OrdenFomento)}
+                    style={{ flex: 1, padding: "6px 8px", borderRadius: 8, border: "1px solid #d1d5db", fontSize: 13 }}>
+                    <option value="reciente">Más recientes primero</option>
+                    <option value="antiguo">Más antiguos primero</option>
+                    <option value="nombre">Nombre (A → Z)</option>
+                    <option value="deuda">Mayor deuda primero</option>
+                    <option value="disponible">Más disponible primero</option>
+                    <option value="inicio">Fecha de inicio</option>
+                  </select>
+                </label>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 420, overflowY: "auto" }}>
                   {fomentos
                     .filter(f => fomentoFilter === "ARCHIVADOS" ? f.status === "CERRADO_LIQUIDACION"
                                : fomentoFilter === "TODOS" ? f.status !== "CERRADO_LIQUIDACION"
                                : f.status === fomentoFilter)
                     .filter(f => { const q = fomentoSearch.trim().toLowerCase(); return !q || [f.farmer_name, f.folio, f.id].some(x => String(x ?? "").toLowerCase().includes(q)); })
+                    .sort(ordenarFomentos)
                     .map(f => {
                       const habilitado = f.estado_credito === "HABILITADO";
                       const statusColor = f.status === "ACTIVOS" ? "#16a34a" : f.status === "APROBADOS" ? "#1d4ed8" : f.status === "CERRADO_LIQUIDACION" ? "#374151" : "#6b7280";

@@ -58,14 +58,18 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
               OR abs(md.amount - d.monto) > 0.005 OR abs(mp.amount - d.monto) > 0.005
               OR abs(COALESCE(x.cruzado, 0) + COALESCE(p.amount, 0) - d.monto) > 0.005))
         OR (d.anulado_at IS NOT NULL AND (md.reversed_at IS NULL OR mp.reversed_at IS NULL OR COALESCE(x.cruzado, 0) > 0.005 OR p.id IS NOT NULL))` },
-  { modulo: "Ventas", nombre: "Ventas al detalle por asignar: las pendientes tienen su ingreso vivo por el mismo valor; las asignadas, su venta y el ingreso apuntando a ella", sql: `
-    SELECT v.id, v.total::float AS total, m.amount::float AS caja, m.category, m.reference_type, v.sale_id, v.asignado_at IS NOT NULL AS asignada
+  { modulo: "Ventas", nombre: "Ventas al detalle por asignar: las pendientes tienen su ingreso vivo por lo pagado (fiadas sin abono, ninguno); las asignadas, su venta y el ingreso apuntando a ella (fiadas, a su cuenta)", sql: `
+    SELECT v.id, v.total::float AS total, v.pagado::float AS pagado, m.amount::float AS caja, m.category, m.reference_type, v.sale_id, v.asignado_at IS NOT NULL AS asignada
       FROM ventas_detalle_por_asignar v LEFT JOIN cash_movements m ON m.id = v.cash_movement_id
-     WHERE v.anulado_at IS NULL AND m.reversed_at IS NULL
-       AND (m.id IS NULL OR abs(m.amount - v.total) > 0.005
-            OR (v.asignado_at IS NULL AND m.category <> 'VENTA_DETALLE_POR_ASIGNAR')
-            OR (v.asignado_at IS NOT NULL AND (v.sale_id IS NULL OR m.reference_type <> 'sales' OR m.reference_id <> v.sale_id
-                 OR NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = v.sale_id AND s.accionista_id = v.asignado_a))))` },
+     WHERE v.anulado_at IS NULL AND (m.id IS NULL OR m.reversed_at IS NULL)
+       AND ((m.id IS NULL AND COALESCE(v.pagado, v.total) > 0.005)
+            OR (m.id IS NOT NULL AND abs(m.amount - COALESCE(v.pagado, v.total)) > 0.005)
+            OR (v.asignado_at IS NULL AND m.id IS NOT NULL AND m.category <> 'VENTA_DETALLE_POR_ASIGNAR')
+            OR (v.asignado_at IS NOT NULL AND (v.sale_id IS NULL
+                 OR NOT EXISTS (SELECT 1 FROM sales s WHERE s.id = v.sale_id AND s.accionista_id = v.asignado_a)
+                 OR (m.id IS NOT NULL AND v.pagado IS NULL AND (m.reference_type <> 'sales' OR m.reference_id <> v.sale_id))
+                 OR (m.id IS NOT NULL AND v.pagado IS NOT NULL AND (m.reference_type <> 'accounts_receivable'
+                      OR NOT EXISTS (SELECT 1 FROM accounts_receivable ar WHERE ar.id = m.reference_id AND ar.sale_id = v.sale_id))))))` },
   { modulo: "Cuentas", nombre: "Gastos de un socio pagados por la Matriz: tienen el socio y su categoría real", sql: `
     SELECT cm.id FROM cash_movements cm
      WHERE cm.category = 'GASTO_POR_SOCIO' AND cm.reversal_of IS NULL
