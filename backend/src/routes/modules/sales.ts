@@ -14,6 +14,7 @@ import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
+import { cobrarCuentasEnGrupo } from "./receivable.js";
 
 export const salesRouter = Router();
 
@@ -97,6 +98,9 @@ const retailSaleInputSchema = z.object({
   // «¿De quién es el arroz?»: la caja (casi siempre la Matriz) vende arroz de OTRO socio. La venta y el inventario son
   // de ese socio; el dinero entra a esta caja (COBRO_POR_SOCIO) y esta caja queda debiéndoselo (cobro_por_socio).
   dueno_id: z.string().uuid().optional(),
+  // 📝 FIADO (pedido del dueño 2026-10-21): cuánto pagó ahora. Sin dato = pagó todo (contado). Si es menos, la venta
+  // queda a crédito y lo que falta es Por Cobrar del DUEÑO del arroz a esa persona (lo pagado entra a esta caja).
+  pagado: z.number().nonnegative().max(100000000).optional(),
   product_name: z.string().trim().min(1).max(180),
   buyer: z.object({
     full_name: z.string().trim().min(2).max(180),
@@ -109,12 +113,66 @@ const retailSaleInputSchema = z.object({
 
 // Mostrador: cliente + venta + salida de inventario + ingreso a Caja quedan en
 // UNA transacción. Si algo falla, no queda medio cobro ni doble descuento.
+// 📝 Venta detalle FIADA (toda o en parte): la venta es del dueño del arroz (esta caja o el socio elegido) y queda
+// a crédito a nombre de la persona; lo que pagó ahora se cobra con el mismo camino de Por Cobrar (si el arroz es de
+// otro socio, el dinero entra a esta caja como cobro recibido por él y esta caja se lo debe).
+async function ventaDetalleFiada(
+  client: PoolClient, req: AuthenticatedRequest, body: z.infer<typeof retailSaleInputSchema>, dueno: string | null, unitPriceQq: number
+) {
+  const accionistaId = req.accionistaId;
+  await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+  const duenoId = dueno ?? accionistaId;
+  const duenoNombre = (await client.query("SELECT name FROM accionistas WHERE id = $1", [duenoId])).rows[0]?.name ?? "el socio";
+  const cajero = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
+  const cliente = await resolverClienteVentaDetalle(client, body.buyer, duenoId);
+  const venta = await crearVenta(client, duenoId, {
+    customer_id: cliente.id,
+    payment_method: "CREDIT",
+    sack_weight_lb: 100,
+    description: `Venta detalle ${body.product_name} · ${cliente.full_name} (fiado${dueno ? `, vendió ${cajero}` : ""})`,
+    items: [{ product_id: body.product_id, warehouse_id: body.warehouse_id, quantity: body.quantity_qq, unit_price: unitPriceQq }]
+  });
+  const total = round2(Number(venta.total_amount));
+  const pagado = round2(Math.min(Number(body.pagado ?? 0), total));
+  if (pagado > 0.005) {
+    // Efectivo o banco del abono (el disparador de caja lo toma de aquí).
+    if (body.medio) await client.query("SELECT set_config('app.medio_pago', $1, true)", [body.medio]);
+    const cxc = (await client.query("SELECT id FROM accounts_receivable WHERE sale_id = $1 AND status <> 'CANCELLED' ORDER BY created_at LIMIT 1", [venta.id])).rows[0];
+    if (!cxc) throw new ApiError(500, "No se creó la cuenta por cobrar de la venta fiada.");
+    await cobrarCuentasEnGrupo(client, { accionistaId: duenoId, user: req.user } as AuthenticatedRequest, {
+      receivable_ids: [cxc.id], amount: pagado,
+      ...(dueno ? { recibido_por: accionistaId, medio_pago: body.medio ?? "EFECTIVO" } : { cash_register_id: body.cash_register_id }),
+      concepto: `Abono al comprar ${body.product_name}`
+    });
+  }
+  const debe = round2(total - pagado);
+  if (dueno) {
+    await notificar(client, {
+      accionistaId: dueno, tipo: "COBRO",
+      titulo: `${cajero} vendió arroz tuyo fiado`,
+      mensaje: `${cajero} vendió ${body.product_name} a ${cliente.full_name} por ${dinero(total)}. Salió de tu inventario; ${cliente.full_name} te debe ${dinero(debe)} (Por Cobrar).` +
+        (pagado > 0.005 ? ` Pagó ${dinero(pagado)} que recibió ${cajero} (te lo debe).` : ""),
+      monto: total, referenciaTipo: "sales", referenciaId: venta.id
+    });
+  }
+  return {
+    ...venta, customer_id: cliente.id, customer_name: cliente.full_name,
+    ...(dueno ? { dueno: duenoNombre, se_lo_debes: pagado } : {}),
+    credito: { pagado, debe, de: duenoNombre }
+  };
+}
+
 salesRouter.post("/retail", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = retailSaleInputSchema.parse(req.body);
   const dueno = body.dueno_id && body.dueno_id !== accionistaId ? body.dueno_id : null;
+  const aCredito = body.pagado != null && round2(body.pagado) < round2(body.total_amount) - 0.005;
+  if (aCredito && /consumidor\s*final/i.test(body.buyer.full_name)) {
+    throw new ApiError(400, "Para fiar escribe el nombre de la persona que queda debiendo (no «Consumidor final»).");
+  }
   const result = await inTransaction(async (client) => {
     const unitPriceQq = Math.round((body.total_amount / body.quantity_qq) * 10000) / 10000;
+    if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, unitPriceQq);
     if (dueno) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
       const socio = (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [dueno])).rows[0];

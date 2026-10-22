@@ -8382,10 +8382,11 @@ export function App() {
       : `${librasStr} lb @ ${money(v.precioLibra)}/lb`;
 
     const duenoVenta = esMatrizActiva && ventaDetalleDueno ? ventaDetalleDueno : undefined;
-    let venta: { customer_name: string; dueno?: string; se_lo_debes?: number };
+    let venta: { customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } };
     try {
-      venta = await apiPost<{ customer_name: string; dueno?: string; se_lo_debes?: number }>("/sales/retail", {
+      venta = await apiPost<{ customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string } }>("/sales/retail", {
         dueno_id: duenoVenta,
+        pagado: v.pagado,
         cash_register_id: registerId,
         product_id: v.product_id,
         warehouse_id: finishedWarehouse.id,
@@ -8408,8 +8409,10 @@ export function App() {
     setPreciosLibraPorProducto(nuevosPrecios);
     try { localStorage.setItem(preciosLibraKey, JSON.stringify(nuevosPrecios)); } catch { /* almacenamiento no disponible */ }
 
+    const cr = venta.credito;
     addToast(`✓ ${venta.customer_name}: ${money(v.total)} · entregar ${librasStr} lb` +
-      (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario y se lo debes (${money(venta.se_lo_debes ?? v.total)})` : ""), "success");
+      (cr ? ` · 📝 ${cr.pagado > 0 ? `pagó ${money(cr.pagado)} y ` : ""}queda debiendo ${money(cr.debe)} a ${cr.de} (Por Cobrar)` : "") +
+      (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario${(venta.se_lo_debes ?? 0) > 0 ? ` y le debes ${money(venta.se_lo_debes ?? 0)}` : ""}` : ""), "success");
     // Ticket térmico 80mm (comprobante de mostrador).
     printTicketVentaDetalle({
       producto: v.producto,
@@ -8419,7 +8422,8 @@ export function App() {
       total: v.total,
       unidad: v.modo === "QQ" ? "QQ" : "lb",
       cantidad: v.modo === "QQ" ? qqStr : librasStr,
-      precioUnitario: v.precioAplicado
+      precioUnitario: v.precioAplicado,
+      ...(cr ? { pagado: cr.pagado, debe: cr.debe } : {})
     });
     await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
     Promise.all([
@@ -8482,6 +8486,8 @@ export function App() {
     producto: string; cliente: string; libras: string; precioLibra: number; total: number;
     /** Unidad vendida (por defecto libras); en QQ se imprime la cantidad y el $/QQ. */
     unidad?: "lb" | "QQ"; cantidad?: string; precioUnitario?: number;
+    /** Fiado: lo que pagó y lo que queda debiendo. */
+    pagado?: number; debe?: number;
   }) {
     const enQQ = t.unidad === "QQ";
     const esc = (s: string | null | undefined) => (s ?? "").replace(/</g, "&lt;");
@@ -8535,6 +8541,8 @@ export function App() {
         </table>
         ${enQQ ? `<div class="row"><span class="k">Equivale a:</span> <span>${esc(t.libras)} lb</span></div>` : ""}
         <div class="tot"><span>TOTAL</span><span>${money(t.total)}</span></div>
+        ${t.debe != null && t.debe > 0.005 ? `<div class="row"><span class="k">Pagó:</span> <span>${money(t.pagado ?? 0)}</span></div>
+        <div class="row" style="font-weight:900;font-size:15px"><span>QUEDA DEBIENDO:</span> <span>${money(t.debe)}</span></div>` : ""}
         <div class="foot">${appSettings?.receipt_footer?.trim() ? esc(appSettings.receipt_footer.trim()) : "¡Gracias por su compra!<br>Vuelva pronto 🌾"}</div>
       </div>
     </body></html>`;
@@ -20538,23 +20546,7 @@ Motivo (obligatorio):`, ""));
                     <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
                   </div>
                 )}
-                {cajaSubTab === "venta_detalle" && esMatrizActiva && sociosDelGasto.length > 0 && (
-                  <div className={`cj-dequien ${ventaDetalleDueno ? "is-socio" : ""}`}>
-                    <span className="cj-dequien__tit">¿De quién es el arroz?</span>
-                    <div className="cj-dequien__ops">
-                      <button type="button" className={`cj-dequien__op ${!ventaDetalleDueno ? "is-on" : ""}`} onClick={() => setVentaDetalleDueno("")}>🏭 De {matrizName || "la Matriz"}</button>
-                      {sociosDelGasto.map((a) => (
-                        <button key={a.id} type="button" className={`cj-dequien__op ${ventaDetalleDueno === a.id ? "is-on" : ""}`} onClick={() => setVentaDetalleDueno(a.id)}>🤝 De {a.name}</button>
-                      ))}
-                    </div>
-                    {ventaDetalleDueno && (
-                      <small className="cj-dequien__info">
-                        El arroz sale del inventario de <b>{sociosDelGasto.find((a) => a.id === ventaDetalleDueno)?.name}</b> y la venta es suya.
-                        El dinero entra a esta caja y {matrizName} queda debiéndoselo (se descuenta solo cuando {matrizName} pague algo por él).
-                      </small>
-                    )}
-                  </div>
-                )}
+                {/* «¿De quién es el arroz?» y «¿Cómo paga?» van al final de la tarjeta (VentaDetalleCard). */}
                 {cajaSubTab === "venta_detalle" && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
@@ -20568,6 +20560,10 @@ Motivo (obligatorio):`, ""));
                     }))}
                     descuentoQqDefecto={descuentoQqDefecto}
                     onRegistrar={registrarVentaDetalle}
+                    duenos={esMatrizActiva ? sociosDelGasto.map((a) => ({ id: a.id, name: a.name })) : []}
+                    dueno={ventaDetalleDueno}
+                    onDueno={setVentaDetalleDueno}
+                    duenoPropio={matrizName || "la Matriz"}
                     onAviso={(m) => addToast(m, "error")}
                     enlaceTarifas={(texto) => cfgLink("🛒 Tarifas por libra", texto)} />
                 )}

@@ -35,6 +35,8 @@ export type VentaDetalleRegistro = VentaDetalleCalculo & {
   };
   /** Nombre del producto como lo ve el cajero (para el ticket). */
   producto: string;
+  /** 📝 Cuánto pagó ahora (sin dato = pagó todo). Menos que el total = fiado: el resto queda Por Cobrar. */
+  pagado?: number;
 };
 
 const MODOS: Array<{ modo: ModoVentaDetalle; label: string }> = [
@@ -45,7 +47,15 @@ const MODOS: Array<{ modo: ModoVentaDetalle; label: string }> = [
 
 const normalizarNombre = (s: string) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/\s+/g, " ").trim();
 
-export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO }: {
+type FormaPago = "todo" | "fiado" | "parte";
+
+export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, enlaceTarifas, descuentoQqDefecto = DESCUENTO_QQ_DEFECTO, duenos = [], dueno = "", onDueno, duenoPropio = "esta caja" }: {
+  /** «¿De quién es el arroz?» (caja de la Matriz): socios cuyo arroz se puede vender aquí. Vacío = no se pregunta. */
+  duenos?: Array<{ id: string; name: string }>;
+  dueno?: string;
+  onDueno?: (id: string) => void;
+  /** Nombre del dueño por defecto (la caja activa, p. ej. CEYRO). */
+  duenoPropio?: string;
   /** Descuento en $ por quintal para Consumidor Final y clientes sin el suyo. */
   descuentoQqDefecto?: number;
   /** Productos de mostrador con su tarifa por libra (0 = sin tarifa). */
@@ -65,6 +75,9 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
   // Descuento por QQ de ESTA venta: vacío = el del cliente (o el por defecto); se puede cambiar.
   const [descuentoTxt, setDescuentoTxt] = useState("");
   const [enviando, setEnviando] = useState(false);
+  // 📝 ¿Cómo paga? (pedido del dueño 2026-10-21): todo ahora, fiado, o una parte y el resto queda debiendo.
+  const [formaPago, setFormaPago] = useState<FormaPago>("todo");
+  const [pagadoTxt, setPagadoTxt] = useState("");
   const enviandoRef = useRef(false); // candado contra el doble Enter
   const productoRef = useRef<HTMLSelectElement>(null);
   const cantidadRef = useRef<HTMLInputElement>(null);
@@ -122,6 +135,11 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
     if (!hayCantidad) { onAviso(`Digita ${enDolares ? "el monto en dólares" : enQQ ? "la cantidad en QQ" : "la cantidad en libras"}`); cantidadRef.current?.focus(); return; }
     if (compradorTexto.trim().length < 2) { onAviso("Escriba o seleccione el nombre del cliente"); return; }
     if (!calculo || !(calculo.total > 0)) { onAviso("El total debe ser mayor a 0"); cantidadRef.current?.focus(); return; }
+    if (formaPago !== "todo" && /consumidor\s*final/i.test(compradorTexto)) { onAviso("Para fiar escribe el nombre de la persona que queda debiendo"); return; }
+    const pagadoAhora = formaPago === "fiado" ? 0 : formaPago === "parte" ? Math.round(Number(pagadoTxt) * 100) / 100 : undefined;
+    if (formaPago === "parte" && !(Number(pagadoAhora) > 0 && Number(pagadoAhora) < calculo.total)) {
+      onAviso(`Escribe cuánto pagó ahora (más de $0 y menos de ${money(calculo.total)})`); return;
+    }
     enviandoRef.current = true;
     setEnviando(true);
     try {
@@ -130,6 +148,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         modo,
         product_id: producto.id,
         producto: producto.label,
+        ...(pagadoAhora !== undefined ? { pagado: pagadoAhora } : {}),
         comprador: {
           full_name: persona?.full_name ?? compradorTexto.trim(),
           ...(persona?.customer_id ? { customer_id: persona.customer_id } : {}),
@@ -144,6 +163,8 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         setCantidad("");
         setCompradorTexto("");
         setDescuentoTxt("");
+        setFormaPago("todo");
+        setPagadoTxt("");
         productoRef.current?.focus();
       }
     } finally {
@@ -257,6 +278,51 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
           </div>
         </div>
       )}
+
+      {/* 🤝 ¿De quién es el arroz? Al final, antes de registrar (pedido del dueño 2026-10-21). */}
+      {duenos.length > 0 && onDueno && (
+        <div className={`cj-dequien ${dueno ? "is-socio" : ""}`}>
+          <span className="cj-dequien__tit">¿De quién es el arroz?</span>
+          <div className="cj-dequien__ops">
+            <button type="button" className={`cj-dequien__op ${!dueno ? "is-on" : ""}`} onClick={() => onDueno("")}>🏭 De {duenoPropio}</button>
+            {duenos.map((a) => (
+              <button key={a.id} type="button" className={`cj-dequien__op ${dueno === a.id ? "is-on" : ""}`} onClick={() => onDueno(a.id)}>🤝 De {a.name}</button>
+            ))}
+          </div>
+          {dueno && (
+            <small className="cj-dequien__info">
+              El arroz sale del inventario de <b>{duenos.find((a) => a.id === dueno)?.name}</b> y la venta es suya. Lo que pague entra a esta caja y
+              {" "}{duenoPropio} se lo queda debiendo (Por Cobrar de {duenos.find((a) => a.id === dueno)?.name}).
+            </small>
+          )}
+        </div>
+      )}
+
+      {/* 📝 ¿Cómo paga? Fiado o una parte: lo que falta queda Por Cobrar del dueño del arroz, a nombre del cliente. */}
+      <div className="vdPago">
+        <span className="vdPago__tit">¿Cómo paga?</span>
+        <div className="vdPago__ops" role="radiogroup" aria-label="Cómo paga">
+          {([["todo", "💵 Pagó todo"], ["fiado", "📝 Fiado (paga después)"], ["parte", "💵📝 Pagó una parte"]] as Array<[FormaPago, string]>).map(([k, t]) => (
+            <button key={k} type="button" role="radio" aria-checked={formaPago === k} className={formaPago === k ? "is-on" : ""} onClick={() => setFormaPago(k)}>{t}</button>
+          ))}
+        </div>
+        {formaPago === "parte" && (
+          <label className="vdPago__monto">
+            <span>¿Cuánto pagó ahora?</span>
+            <input type="number" inputMode="decimal" min="0" step="0.01" value={pagadoTxt} placeholder="0.00" onChange={(e) => setPagadoTxt(e.target.value)} />
+          </label>
+        )}
+        {formaPago !== "todo" && calculo && hayCantidad && (() => {
+          const pagaAhora = formaPago === "fiado" ? 0 : Math.max(0, Math.min(Number(pagadoTxt) || 0, calculo.total));
+          const nombreDueno = dueno ? duenos.find((a) => a.id === dueno)?.name : duenoPropio;
+          return (
+            <p className="vdPago__info">
+              {pagaAhora > 0 ? <>Paga ahora <b>{money(pagaAhora)}</b> · </> : null}
+              <b>{compradorTexto.trim() || "El cliente"}</b> queda debiendo <b>{money(Math.round((calculo.total - pagaAhora) * 100) / 100)}</b> a {nombreDueno} (Por Cobrar).
+            </p>
+          );
+        })()}
+      </div>
 
       <button className="primary vdCard__boton" type="submit" disabled={enviando}>
         {enviando ? "Registrando…" : "✓ Registrar venta detalle"}
