@@ -8430,10 +8430,21 @@ export function App() {
   // el backend. Si una validación falla, la transacción completa se revierte.
   // «¿De quién es el arroz?» en Venta Detalle de la caja de la Matriz: "" = de esta caja; si no, el socio dueño.
   // Se recuerda en el equipo (muchas cajas trabajan siempre con «Decidir después»).
-  const [ventaDetalleDueno, setVentaDetalleDuenoState] = useState(() => { try { return localStorage.getItem("bascula-erp:vd-dueno") ?? ""; } catch { return ""; } });
-  const setVentaDetalleDueno = (v: string) => { setVentaDetalleDuenoState(v); try { localStorage.setItem("bascula-erp:vd-dueno", v); } catch { /* ignore */ } };
+  // Por defecto «Decidir después»: en el mostrador vende siempre la Matriz y al cierre se asigna (pedido del dueño
+  // 2026-10-22). Tras cada venta vuelve a «Decidir después».
+  const [ventaDetalleDueno, setVentaDetalleDueno] = useState("POR_ASIGNAR");
+  // Venta detalle en dos pestañas: vender | ventas por asignar (pedido del dueño 2026-10-22: que no ocupe la pantalla).
+  const [vdVista, setVdVista] = useState<"vender" | "asignar">("vender");
+  const [porAsignarConteo, setPorAsignarConteo] = useState<{ n: number; total: number }>({ n: 0, total: 0 });
   // 🕒 Ventas por asignar: se vuelven a leer después de cada venta.
   const [porAsignarKey, setPorAsignarKey] = useState(0);
+  useEffect(() => {
+    if (activeTab !== "Caja" || cajaSubTab !== "venta_detalle" || !esMatrizActiva) return;
+    apiGet<{ ventas: Array<{ total: number }> }>("/sales/retail/por-asignar")
+      .then((d) => setPorAsignarConteo({ n: d.ventas.length, total: Math.round(d.ventas.reduce((t, v) => t + Number(v.total), 0) * 100) / 100 }))
+      .catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, cajaSubTab, porAsignarKey, activeAccionistaId]);
   async function registrarVentaDetalle(v: VentaDetalleRegistro): Promise<boolean> {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) { addToast("No hay caja abierta", "error"); return false; }
@@ -8512,6 +8523,7 @@ export function App() {
       ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: lbTicket(l.libras, l.modo), total: l.total })) } : {}),
       ...(ac ? { nota: ac.tipo === "AGRICULTOR" ? "A su cuenta de agricultor" : "Cargado a su fomento" } : {})
     });
+    setVentaDetalleDueno("POR_ASIGNAR");
     await refreshCaja(registerId).catch(() => { /* el refresco no cambia la venta */ });
     Promise.all([
       apiGet<Customer[]>("/customers").then(setCustomers),
@@ -20704,12 +20716,21 @@ Motivo (obligatorio):`, ""));
                 )}
                 {/* «¿De quién es el arroz?» y «¿Cómo paga?» van al final de la tarjeta (VentaDetalleCard). */}
                 {cajaSubTab === "venta_detalle" && esMatrizActiva && (
+                  <div className="vdVistas" role="tablist">
+                    <button type="button" role="tab" aria-selected={vdVista === "vender"} className={vdVista === "vender" ? "is-on" : ""} onClick={() => setVdVista("vender")}>🛒 Vender</button>
+                    <button type="button" role="tab" aria-selected={vdVista === "asignar"} className={vdVista === "asignar" ? "is-on" : ""} onClick={() => setVdVista("asignar")}>
+                      🕒 Por asignar {porAsignarConteo.n > 0 && <span className="vdVistas__n">{porAsignarConteo.n} · {money(porAsignarConteo.total)}</span>}
+                    </button>
+                  </div>
+                )}
+                {cajaSubTab === "venta_detalle" && esMatrizActiva && vdVista === "asignar" && (
                   <VentasPorAsignar
                     accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
                     activoId={activeAccionistaId} recargar={porAsignarKey} avisar={addToast}
-                    onCambio={() => Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined)])} />
+                    vacio="No hay ventas por asignar. 👍"
+                    onCambio={() => { setPorAsignarKey((k) => k + 1); return Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined)]); }} />
                 )}
-                {cajaSubTab === "venta_detalle" && (
+                {cajaSubTab === "venta_detalle" && (!esMatrizActiva || vdVista === "vender") && (
                   <VentaDetalleCard
                     productos={productosVentaDetalle()}
                     personas={personasVentaDetalle.length > 0 ? personasVentaDetalle : customers.map((c) => ({

@@ -13,13 +13,15 @@ type Acc = { id: string; name: string; tipo: string };
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
-export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCambio }: {
+export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCambio, vacio }: {
   accionistas: Acc[];
   activoId: string | null;
   /** Cambia cuando se registra una venta nueva (para volver a leer). */
   recargar: number;
   avisar: (msg: string, tipo?: "success" | "error" | "warn") => void;
   onCambio: () => unknown;
+  /** Texto cuando no hay nada por asignar (en su propia pestaña); sin él, no se muestra nada. */
+  vacio?: string;
 }) {
   const [datos, setDatos] = useState<{ ventas: Venta[]; stock: Stock[] } | null>(null);
   const [abiertos, setAbiertos] = useState<string[]>([]);
@@ -43,7 +45,8 @@ export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCa
     return [...m.values()];
   }, [datos]);
 
-  if (!datos || datos.ventas.length === 0) return null;
+  if (!datos) return null;
+  if (datos.ventas.length === 0) return vacio ? <p className="vpa__vacio">{vacio}</p> : null;
   const totalGeneral = r2(datos.ventas.reduce((s, v) => s + v.total, 0));
   const duenos = [...accionistas].sort((a, b) => Number(b.tipo === "MATRIZ") - Number(a.tipo === "MATRIZ"));
 

@@ -43,6 +43,9 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
 }) {
   const [eq, setEq] = useState<Equipo | "BODEGA" | null>(inicial?.area && inicial.section ? { area: inicial.area, section: inicial.section } : null);
   const [qEq, setQEq] = useState("");
+  // Primero la MÁQUINA (área: Montacarga, Piladora…) y luego su parte: así el cajero solo ve lo de esa máquina
+  // (pedido del dueño 2026-10-22). Escribiendo se busca en todo.
+  const [areaEq, setAreaEq] = useState<string | null>(null);
   const [tipo, setTipo] = useState<Tipo | null>(inicial?.tipo ?? null);
   const [quien, setQuien] = useState<Quien | null>(null);
   const [nom, setNom] = useState("");
@@ -85,8 +88,17 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
   const equiposVisibles = useMemo(() => {
     const tk = sinTildes(qEq.trim()).split(/\s+/).filter(Boolean);
     const extra = (e: Equipo) => e.activoId ? `transporte cosechadora ${maquinasTransporte.find((m) => m.id === e.activoId)?.tipo ?? ""}` : "";
-    return todosEquipos.filter((e) => tk.every((k) => sinTildes(`${e.area} ${e.section} ${extra(e)}`).includes(k))).slice(0, tk.length ? 24 : 16);
-  }, [todosEquipos, qEq, maquinasTransporte]);
+    return todosEquipos
+      .filter((e) => !areaEq || e.area === areaEq)
+      .filter((e) => tk.every((k) => sinTildes(`${e.area} ${e.section} ${extra(e)}`).includes(k)))
+      .slice(0, tk.length || areaEq ? 60 : 16);
+  }, [todosEquipos, qEq, maquinasTransporte, areaEq]);
+  const areasEq = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of todosEquipos) m.set(e.area, (m.get(e.area) ?? 0) + 1);
+    return [...m.entries()].map(([area, n]) => ({ area, n }));
+  }, [todosEquipos]);
+  const verAreas = !areaEq && !qEq.trim();
 
   // ── 4) Lo que se puede agregar según lo escrito ──
   const sugerencias = useMemo(() => {
@@ -252,18 +264,30 @@ export function TrabajoEquipo({ equipos, maquinasTransporte = [], repuestos, tec
             <span>🔧 <b>{esBodega ? "Sin equipo · va a la bodega" : `${(eq as Equipo).area} · ${(eq as Equipo).section}`}</b>
               {!esBodega && /montacarga/i.test((eq as Equipo).area) && <small> · rubro Montacarga</small>}
               {esTransporte && <small> · 🚜 es de Transporte y Cosechadora</small>}</span>
-            <button type="button" className="btnGhost" onClick={() => { setEq(null); setErr(""); }}>Cambiar</button>
+            <button type="button" className="btnGhost" onClick={() => { setEq(null); setErr(""); setQEq(""); setAreaEq(eq !== "BODEGA" ? (eq as Equipo).area : null); }}>Cambiar</button>
           </div>
         ) : (
           <>
             <input type="search" className="teq-input" autoFocus value={qEq} onChange={(e) => setQEq(e.target.value)}
-              placeholder="Escribe: cilindro, pulidor, descascarador, motor, batería…"
-              onKeyDown={(e) => { if (e.key === "Enter" && equiposVisibles[0]) { e.preventDefault(); elegirEquipo(equiposVisibles[0]); } }} />
+              placeholder={areaEq ? `Buscar en ${areaEq}: motor, batería, llantas…` : "Elige la máquina o escribe: cilindro, motor, batería…"}
+              onKeyDown={(e) => { if (e.key === "Enter" && !verAreas && equiposVisibles[0]) { e.preventDefault(); elegirEquipo(equiposVisibles[0]); } }} />
+            {areaEq && (
+              <div className="teq-area">
+                <b>{areaEq === "TRANSPORTE" ? "🚜 " : "🔧 "}{areaEq}</b><span>· ¿qué parte?</span>
+                <button type="button" className="btnGhost" onClick={() => { setAreaEq(null); setQEq(""); }}>← Otra máquina</button>
+              </div>
+            )}
             <div className="teq-chips">
-              {equiposVisibles.map((e) => (
-                <button key={`${e.area}|${e.section}|${e.activoId ?? ""}`} type="button" className={e.activoId ? "teq-chip--tr" : ""} onClick={() => elegirEquipo(e)}>{e.activoId ? "🚜 " : ""}{e.area} · {e.section}</button>
+              {verAreas ? areasEq.map(({ area, n }) => (
+                <button key={area} type="button" className={`teq-chip--area ${area === "TRANSPORTE" ? "teq-chip--tr" : ""}`} onClick={() => setAreaEq(area)}>
+                  {area === "TRANSPORTE" ? "🚜 " : "🔧 "}{area} <small>{n}</small>
+                </button>
+              )) : equiposVisibles.map((e) => (
+                <button key={`${e.area}|${e.section}|${e.activoId ?? ""}`} type="button" className={e.activoId ? "teq-chip--tr" : ""} onClick={() => elegirEquipo(e)}>
+                  {e.activoId ? "🚜 " : ""}{areaEq ? e.section : `${e.area} · ${e.section}`}
+                </button>
               ))}
-              <button type="button" className="teq-chip--alt" onClick={() => elegirEquipo("BODEGA")}>📦 Sin equipo · va a la bodega</button>
+              {!areaEq && <button type="button" className="teq-chip--alt" onClick={() => elegirEquipo("BODEGA")}>📦 Sin equipo · va a la bodega</button>}
             </div>
             {equiposVisibles.length === 0 && <small className="muted">No hay equipos con esas palabras. Se crean en Configuración → Categorías de mantenimiento.</small>}
           </>
