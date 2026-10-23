@@ -3,11 +3,10 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../api";
 import {
-  AJUSTE_DEFECTO, DOCUMENTOS, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora, paginaDePrueba,
+  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_PAPEL, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora, paginaDePrueba,
   type AjusteDocumento, type AjusteImpresora, type Papel
 } from "../impresion";
 
-const NOMBRE_PAPEL: Record<Papel, string> = { "58": "58 mm", "80": "80 mm", A4: "A4", CARTA: "Carta", A5: "Media hoja" };
 const GRUPOS = [...new Set(DOCUMENTOS.map((d) => d.grupo))];
 
 export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar: (m: string, t?: "success" | "error" | "warn") => void }) {
@@ -72,7 +71,7 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                   {docs.length > 1 && (
                     <div className="impConf__todos">
                       <small>Todos los de este grupo:</small>
-                      {(["A4", "80"] as Papel[]).map((p) => (
+                      {(["15x21", "10.5x15", "A4"] as Papel[]).map((p) => (
                         <button key={p} type="button" className="btnGhost" onClick={() => aplicarATodos({ papel: p }, g)}>{NOMBRE_PAPEL[p]}</button>
                       ))}
                       {directas.length > 0 && (

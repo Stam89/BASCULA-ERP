@@ -12,7 +12,8 @@ import { ApiError } from "../../http/error-handler.js";
 // 🖨️ IMPRESIÓN DIRECTA (pedido del dueño 2026-10-23: «¿cómo selecciono la impresora? tengo 2»). Una página web no puede
 // elegir impresora; el servidor del ERP sí, porque corre en la PC de la oficina y ve las impresoras de Windows:
 //   documento HTML → PDF (Edge/Chrome sin ventana) → SumatraPDF lo manda a la impresora elegida, en silencio.
-// Así cada documento sale directo a su Epson, desde cualquier equipo (PC, celular o tablet).
+// Así cada documento sale directo a su Epson, desde cualquier equipo (PC, celular o tablet). Tamaño real (noscale): el PDF
+// ya trae el papel elegido (10×10, 10,5×15, 15×21 cm…), no se estira a la hoja de la impresora.
 export const impresionRouter = Router();
 const ejecutar = promisify(execFile);
 
@@ -80,7 +81,7 @@ impresionRouter.post("/imprimir", asyncRoute(async (req, res) => {
       `--user-data-dir=${path.join(dir, "perfil")}`, `--print-to-pdf=${pdf}`, `file:///${html.replace(/\\/g, "/")}`
     ], { windowsHide: true, timeout: 45_000 });
     if (!fs.existsSync(pdf) || fs.statSync(pdf).size < 200) throw new ApiError(500, "No se pudo preparar el documento para imprimir.");
-    await ejecutar(sumatra, ["-print-to", imp.nombre, "-print-settings", `${body.copias}x`, "-silent", "-exit-when-done", pdf],
+    await ejecutar(sumatra, ["-print-to", imp.nombre, "-print-settings", `${body.copias}x,noscale`, "-silent", "-exit-when-done", pdf],
       { windowsHide: true, timeout: 90_000 });
     res.json({ ok: true, impresora: imp.nombre, desconectada: imp.desconectada });
   } finally {

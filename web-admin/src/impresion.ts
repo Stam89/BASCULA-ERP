@@ -9,7 +9,17 @@
 //  · DIRECTA (2026-10-23): a una impresora de la PC del servidor, por su nombre (EPSON L3150, EPSON L455…), sin
 //    ventana y desde cualquier equipo: el servidor lo pasa a PDF y lo manda con SumatraPDF (routes/modules/impresion.ts).
 // Cada pantalla sigue armando su documento como antes; en vez de window.open usa ventanaDeImpresion(<documento>).
-export type Papel = "58" | "80" | "A4" | "CARTA" | "A5";
+// Papeles en cm que usa la piladora (pedido del dueño 2026-10-23): 10×10 (venta al detalle), 10.5×15 (recibo de venta) y
+// 15×21 (todo lo demás). Además los de rollo (58/80 mm) y las hojas normales.
+export type Papel = "58" | "80" | "10x10" | "10.5x15" | "15x21" | "A4" | "CARTA" | "A5";
+/** Medida en mm de los papeles fijos (ancho × alto). */
+export const MEDIDA_MM: Record<Exclude<Papel, "58" | "80">, [number, number]> = {
+  "10x10": [100, 100], "10.5x15": [105, 150], "15x21": [150, 210], A4: [210, 297], CARTA: [216, 279], A5: [148, 210]
+};
+export const NOMBRE_PAPEL: Record<Papel, string> = {
+  "58": "Rollo 58 mm", "80": "Rollo 80 mm", "10x10": "10 × 10 cm", "10.5x15": "10,5 × 15 cm", "15x21": "15 × 21 cm",
+  A4: "A4", CARTA: "Carta", A5: "Media hoja (A5)"
+};
 import { apiPost } from "./api";
 
 export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
@@ -17,36 +27,36 @@ export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
 export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string };
 
 export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
-const PEQUENO: Papel[] = ["58", "80", "A4"];
-const HOJA: Papel[] = ["A4", "CARTA", "A5"];
-const HOJA_O_ROLLO: Papel[] = ["A4", "CARTA", "A5", "80"];
+const PEQUENO: Papel[] = ["10x10", "10.5x15", "15x21", "58", "80", "A4"];
+const HOJA: Papel[] = ["15x21", "10.5x15", "A4", "CARTA", "A5"];
+const HOJA_O_ROLLO: Papel[] = ["15x21", "10.5x15", "10x10", "A4", "CARTA", "A5", "80"];
 
 /** Todos los documentos que el ERP imprime. El id se usa en ventanaDeImpresion(id). */
 export const DOCUMENTOS: DocumentoImprimible[] = [
-  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
-  { id: "recibo_venta", titulo: "Recibo de venta", grupo: "Ventas y bodega", papel: "A4", papeles: HOJA_O_ROLLO },
-  { id: "guia_remision", titulo: "Guía de remisión", grupo: "Ventas y bodega", papel: "A4", papeles: HOJA },
-  { id: "orden_carga", titulo: "Orden de carga", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
-  { id: "salida_seleccion", titulo: "Salida a selección / envejecido", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
-  { id: "liquidacion", titulo: "Liquidación de agricultor", grupo: "Liquidaciones y fomentos", papel: "A4", papeles: HOJA_O_ROLLO },
-  { id: "estado_fomento", titulo: "Estado de cuenta del fomento", grupo: "Liquidaciones y fomentos", papel: "A4", papeles: HOJA },
-  { id: "rol_pago", titulo: "Rol de pago (hoja)", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
-  { id: "recibo_pago_80", titulo: "Recibo de pago (rollo 80 mm)", grupo: "Nómina y cuadrilla", papel: "80", papeles: PEQUENO },
-  { id: "recibo_trabajador", titulo: "Recibo de trabajador", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
-  { id: "pago_semana", titulo: "Pago de la semana", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
-  { id: "cuadrilla_resumen", titulo: "Resumen de cuadrilla", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
-  { id: "cuadrilla_recibo", titulo: "Recibo de cuadrilla", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
-  { id: "bajada_carro", titulo: "Recibo de bajada de carro", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
-  { id: "estado_cuenta", titulo: "Estado de cuenta (Por Cobrar / Por Pagar)", grupo: "Cuentas y caja", papel: "A4", papeles: HOJA },
-  { id: "caja_movimientos", titulo: "Movimientos y cierre de caja", grupo: "Cuentas y caja", papel: "A4", papeles: HOJA },
-  { id: "reporte", titulo: "Reportes (tablas)", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
-  { id: "consolidado", titulo: "Consolidado", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
-  { id: "estados_financieros", titulo: "Estados financieros", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
-  { id: "resultado_mensual", titulo: "Resultado mensual", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
-  { id: "transporte_caja", titulo: "Caja de Transporte", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
-  { id: "transporte_estado_cuenta", titulo: "Estado de cuenta de cliente", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
-  { id: "transporte_compensacion", titulo: "Comprobante de compensación", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
-  { id: "transporte_pago_cxp", titulo: "Comprobante de pago (Por Pagar)", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA }
+  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "10x10", papeles: PEQUENO },
+  { id: "recibo_venta", titulo: "Recibo de venta", grupo: "Ventas y bodega", papel: "10.5x15", papeles: HOJA_O_ROLLO },
+  { id: "guia_remision", titulo: "Guía de remisión", grupo: "Ventas y bodega", papel: "15x21", papeles: HOJA },
+  { id: "orden_carga", titulo: "Orden de carga", grupo: "Ventas y bodega", papel: "15x21", papeles: PEQUENO },
+  { id: "salida_seleccion", titulo: "Salida a selección / envejecido", grupo: "Ventas y bodega", papel: "15x21", papeles: PEQUENO },
+  { id: "liquidacion", titulo: "Liquidación de agricultor", grupo: "Liquidaciones y fomentos", papel: "15x21", papeles: HOJA_O_ROLLO },
+  { id: "estado_fomento", titulo: "Estado de cuenta del fomento", grupo: "Liquidaciones y fomentos", papel: "15x21", papeles: HOJA },
+  { id: "rol_pago", titulo: "Rol de pago (hoja)", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA },
+  { id: "recibo_pago_80", titulo: "Recibo de pago (rollo 80 mm)", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: PEQUENO },
+  { id: "recibo_trabajador", titulo: "Recibo de trabajador", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA_O_ROLLO },
+  { id: "pago_semana", titulo: "Pago de la semana", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA },
+  { id: "cuadrilla_resumen", titulo: "Resumen de cuadrilla", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA },
+  { id: "cuadrilla_recibo", titulo: "Recibo de cuadrilla", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA_O_ROLLO },
+  { id: "bajada_carro", titulo: "Recibo de bajada de carro", grupo: "Nómina y cuadrilla", papel: "15x21", papeles: HOJA_O_ROLLO },
+  { id: "estado_cuenta", titulo: "Estado de cuenta (Por Cobrar / Por Pagar)", grupo: "Cuentas y caja", papel: "15x21", papeles: HOJA },
+  { id: "caja_movimientos", titulo: "Movimientos y cierre de caja", grupo: "Cuentas y caja", papel: "15x21", papeles: HOJA },
+  { id: "reporte", titulo: "Reportes (tablas)", grupo: "Reportes y contabilidad", papel: "15x21", papeles: HOJA },
+  { id: "consolidado", titulo: "Consolidado", grupo: "Reportes y contabilidad", papel: "15x21", papeles: HOJA },
+  { id: "estados_financieros", titulo: "Estados financieros", grupo: "Reportes y contabilidad", papel: "15x21", papeles: HOJA },
+  { id: "resultado_mensual", titulo: "Resultado mensual", grupo: "Reportes y contabilidad", papel: "15x21", papeles: HOJA },
+  { id: "transporte_caja", titulo: "Caja de Transporte", grupo: "Transporte y Cosechadora", papel: "15x21", papeles: HOJA },
+  { id: "transporte_estado_cuenta", titulo: "Estado de cuenta de cliente", grupo: "Transporte y Cosechadora", papel: "15x21", papeles: HOJA },
+  { id: "transporte_compensacion", titulo: "Comprobante de compensación", grupo: "Transporte y Cosechadora", papel: "15x21", papeles: HOJA },
+  { id: "transporte_pago_cxp", titulo: "Comprobante de pago (Por Pagar)", grupo: "Transporte y Cosechadora", papel: "15x21", papeles: HOJA }
 ];
 export type DocumentoId = (typeof DOCUMENTOS)[number]["id"];
 
@@ -58,9 +68,11 @@ export type AjusteImpresora = {
   margen: "minimo" | "normal";
   /** Ajuste de cada documento (los que no están, usan su papel de fábrica). */
   docs: Record<string, AjusteDocumento>;
+  /** 2 = con los papeles en cm de la piladora (2026-10-23). */
+  version?: number;
 };
 
-export const AJUSTE_DEFECTO: AjusteImpresora = { directo: false, letra: 100, margen: "normal", docs: {} };
+export const AJUSTE_DEFECTO: AjusteImpresora = { directo: false, letra: 100, margen: "normal", docs: {}, version: 2 };
 
 const CLAVE = "bascula-erp:impresora";
 
@@ -77,7 +89,15 @@ export function leerAjusteImpresora(): AjusteImpresora {
       docs.venta_detalle = de("ticket");
       for (const id of ["orden_carga", "salida_seleccion", "recibo_pago_80"]) docs[id] = de("recibo");
     }
-    return { directo: !!a.directo, letra: Number(a.letra) || 100, margen: a.margen === "minimo" ? "minimo" : "normal", docs };
+    // Antes de los papeles en cm (versión 2): cada documento pasa a su tamaño de la piladora; se conservan la
+    // impresora, la salida y las copias que ya se habían elegido.
+    if ((a.version ?? 1) < 2) {
+      for (const id of Object.keys(docs)) {
+        const doc = DOCUMENTOS.find((d) => d.id === id);
+        if (doc && docs[id].salida !== "RAWBT") docs[id] = { ...docs[id], papel: doc.papel };
+      }
+    }
+    return { directo: !!a.directo, letra: Number(a.letra) || 100, margen: a.margen === "minimo" ? "minimo" : "normal", docs, version: 2 };
   } catch {
     return AJUSTE_DEFECTO;
   }
@@ -103,11 +123,11 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
 }
 
 const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };
-const HOJA_CSS: Record<"A4" | "CARTA" | "A5", string> = { A4: "A4", CARTA: "letter", A5: "A5" };
 export const COLUMNAS: Record<"58" | "80", number> = { "58": 32, "80": 48 };
 
 /** Ajusta el HTML del documento al papel y la letra elegidos (sin tocar cómo se arma cada documento). */
 export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora): string {
+  // (papeles fijos: el contenido ocupa el ancho útil del papel; los chicos con letra algo menor)
   // Algunos documentos traían su propio «imprimir al abrir»: ahora imprime este módulo (si no, saldrían dos veces).
   const sinAuto = html.replace(/<script>\s*window\.onload\s*=\s*function\s*\(\)\s*\{\s*window\.print\(\)\s*\}\s*<\/script>/gi, "");
   let css: string;
@@ -119,8 +139,16 @@ export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora): str
        .tk,.sheet{width:${ancho}mm!important;max-width:${ancho}mm!important}
        table{width:100%!important}${papel === "58" ? "body{font-size:11px}th,td{padding:3px 1px!important}" : ""}`;
   } else {
-    const margen = a.margen === "minimo" ? 8 : 14;
-    css = `@page{size:${HOJA_CSS[papel as "A4" | "CARTA" | "A5"]};margin:${margen}mm}${papel === "A5" ? "body{font-size:11px}" : ""}`;
+    const [ancho, alto] = MEDIDA_MM[papel as Exclude<Papel, "58" | "80">];
+    const chico = ancho <= 160;
+    const margen = a.margen === "minimo" ? (chico ? 3 : 8) : (chico ? 6 : 14);
+    const util = ancho - margen * 2;
+    css = `@page{size:${ancho}mm ${alto}mm;margin:${margen}mm}` + (chico
+      ? `html,body{max-width:${util}mm!important;margin:0 auto!important}
+         .tk,.sheet{width:auto!important;max-width:${util}mm!important}
+         table{width:100%!important} img{max-width:100%}
+         body{font-size:${ancho <= 110 ? 11 : 12}px}${ancho <= 110 ? "h1{font-size:14px!important}th,td{padding:3px 2px!important}" : ""}`
+      : "");
   }
   const zoom = a.letra !== 100 ? `body{zoom:${a.letra / 100}}` : "";
   const extra = `<style data-impresora>${css}${zoom}</style>`;
@@ -288,7 +316,7 @@ export function paginaDePrueba(id: string, negocio: string): string {
   const doc = DOCUMENTOS.find((x) => x.id === id);
   const a = leerAjusteImpresora();
   const ahora = new Date().toLocaleString("es-EC", { hour12: false });
-  const papelTxt = d.papel === "CARTA" ? "Carta" : d.papel === "A5" ? "Media hoja (A5)" : d.papel === "A4" ? "A4" : `${d.papel} mm`;
+  const papelTxt = NOMBRE_PAPEL[d.papel];
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prueba de impresora</title><style>
     *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
     .tk{width:72mm;margin:0 auto} h1{font-size:16px;text-align:center;margin:0} .sub{text-align:center;font-weight:700;margin:2px 0 6px}
