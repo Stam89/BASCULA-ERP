@@ -15,7 +15,7 @@ import { PedidoCompartirModal, type PedidoCompartirData } from "./components/Ped
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
-import { imprimirDocumento, type TipoDocumento } from "./impresion";
+import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -3583,7 +3583,7 @@ export function App() {
       </tbody></table>
       <div class="net ${d.ganancia_neta >= 0 ? "favor" : "contra"}">${d.ganancia_neta >= 0 ? "🟢 GANANCIA NETA DEL MES" : "🔴 PÉRDIDA DEL MES"}: ${money(Math.abs(Number(d.ganancia_neta)))}</div>
       </body></html>`;
-    const w = window.open("", "_blank", "width=820,height=680"); if (w) { w.document.write(html); w.document.close(); w.print(); }
+    const w = ventanaDeImpresion("consolidado"); if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
   // ── Selección / envejecido por lotes (persona externa) ─────────────────────
@@ -5736,7 +5736,7 @@ export function App() {
       <div class="t" style="font-size:12px;margin-top:18px">DETALLE POR TRABAJADOR</div>
       ${detalle}
     </body></html>`;
-    const w = window.open("", "_blank", "width=820,height=700");
+    const w = ventanaDeImpresion("bajada_carro");
     if (!w) { addToast("El navegador bloqueó la ventana del recibo. Permite ventanas emergentes.", "warn"); return; }
     w.document.write(html); w.document.close(); w.focus();
     setTimeout(() => w.print(), 300);
@@ -6618,7 +6618,7 @@ export function App() {
           <td class="r">${money(cuadSummary.total_neto)}</td></tr></tfoot>
       </table>
     </body></html>`;
-    const w = window.open("", "_blank", "width=640,height=700");
+    const w = ventanaDeImpresion("cuadrilla_resumen");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
@@ -6683,7 +6683,7 @@ export function App() {
       </table>
       <div class="sig"><hr><span>Recibí conforme — ${esc(nombre)}</span></div>
     </body></html>`;
-    const w = window.open("", "_blank", "width=680,height=760");
+    const w = ventanaDeImpresion("cuadrilla_recibo");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
@@ -6785,7 +6785,7 @@ export function App() {
 
   // Comprobante formal A4.
   function printReciboA4(data: ReciboSemanal) {
-    const w = window.open("", "_blank", "width=640,height=800");
+    const w = ventanaDeImpresion("rol_pago");
     if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     const t = data.totals;
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Rol de Pago ${data.worker.name}</title><style>
@@ -6857,13 +6857,13 @@ export function App() {
       <div class="sig"><hr>Entregado por (Caja/Admin)</div>
       <div class="sig"><hr>Recibido Conforme (Trabajador)</div>
     </body></html>`;
-    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
+    if (!imprimirDocumento(html, "recibo_pago_80")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   async function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
     // La ventana se abre YA (dentro del click) para que el bloqueador de popups
     // no la mate; el contenido se escribe después de traer el detalle.
-    const w = window.open("", "_blank", "width=560,height=680");
+    const w = ventanaDeImpresion("recibo_trabajador");
     const from = periodFrom ?? nominaFrom;
     const to = periodTo ?? nominaTo;
     const earned = row.base_amount;
@@ -7219,7 +7219,7 @@ export function App() {
       <div class="range">${rango ?? `Del ${reportFrom} al ${reportTo}`}</div>
       <table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody>${tfoot}</table>
     </body></html>`;
-    const w = window.open("", "_blank", "width=820,height=640");
+    const w = ventanaDeImpresion("reporte");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
 
@@ -8416,7 +8416,7 @@ export function App() {
       </table>
       <p style="margin-top:14px;color:#555">Emitido el ${new Date().toLocaleString("es-EC")}</p>
     </body></html>`;
-    const w = window.open("", "_blank", "width=820,height=640");
+    const w = ventanaDeImpresion("estado_cuenta");
     if (w) { w.document.write(html); w.document.close(); w.print(); }
   }
   // Filas normalizadas para el modal/impresión de cuentas por cobrar.
@@ -8702,7 +8702,7 @@ export function App() {
       </div>
     </body></html>`;
     // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
-    if (!imprimirDocumento(html, "ticket")) addToast("El navegador bloqueó la ventana de impresión", "error");
+    if (!imprimirDocumento(html, "venta_detalle")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   // ── Búsqueda de clientes (autocompletado) ──
@@ -10025,7 +10025,7 @@ export function App() {
     </tfoot></table>
     ${creditosHtml}
     </body></html>`;
-    const w = window.open("", "_blank");
+    const w = ventanaDeImpresion("caja_movimientos");
     if (!w) return;
     w.document.write(html);
     w.document.close();
@@ -12235,8 +12235,7 @@ export function App() {
       const estado = v.sin_deuda ? "✓ OK" : (v.ok ? "✓ OK" : "⚠ Revisar");
       return `<tr><td>${nombre}</td><td style="text-align:right">${val}</td><td>${v.meta}</td><td>${estado}</td></tr>`;
     }).join("");
-    const win = window.open("", "_blank", "width=820,height=1000");
-    if (!win) { addToast("Habilita las ventanas emergentes para descargar el PDF", "error"); return; }
+    const win = ventanaDeImpresion("estados_financieros");
     win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estados Financieros ${f.periodo.hasta}</title>
       <style>body{font-family:system-ui,Arial,sans-serif;color:#1e293b;margin:32px;font-size:13px}
       h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;margin:22px 0 6px;border-bottom:2px solid #059669;padding-bottom:3px;color:#065f46}
@@ -13305,7 +13304,7 @@ Motivo (obligatorio):`, ""));
       </div>
     </body></html>`;
     // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
-    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
+    if (!imprimirDocumento(html, "orden_carga")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   // Ticket de Salida a Selección (guía de salida de bodega): comprobante de lo que
@@ -13365,7 +13364,7 @@ Motivo (obligatorio):`, ""));
       </div>
     </body></html>`;
     // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
-    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
+    if (!imprimirDocumento(html, "salida_seleccion")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   function printGuiaRemision(order: SalesOrder) {
@@ -13466,7 +13465,7 @@ Motivo (obligatorio):`, ""));
         </div>
       </div>
     </body></html>`;
-    const win = window.open("", "_blank", "width=820,height=900");
+    const win = ventanaDeImpresion("guia_remision");
     if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     win.document.write(html);
     win.document.close();
@@ -13812,7 +13811,7 @@ Motivo (obligatorio):`, ""));
       </div>
       ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
     </body></html>`;
-    const win = window.open("", "_blank", "width=760,height=620");
+    const win = ventanaDeImpresion("recibo_venta");
     if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     win.document.write(html);
     win.document.close();
@@ -13951,7 +13950,7 @@ Motivo (obligatorio):`, ""));
       </div>
       ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
     </body></html>`;
-    const win = window.open("", "_blank", "width=760,height=620");
+    const win = ventanaDeImpresion("liquidacion");
     if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 
@@ -14065,7 +14064,7 @@ Motivo (obligatorio):`, ""));
       </div>
       ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:24px;font-size:11px;color:#666">${esc(appSettings.receipt_footer)}</p>` : ""}
     </body></html>`;
-    const win = window.open("", "_blank", "width=800,height=680");
+    const win = ventanaDeImpresion("estado_fomento");
     if (win) { win.document.write(html); win.document.close(); win.print(); }
   }
 

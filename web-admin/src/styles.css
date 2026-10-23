@@ -6500,3 +6500,14 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .impConf__copias select { width: auto; padding: 3px 6px; }
 .impConf__fila { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
 .impConf__fila label { display: grid; gap: 3px; font-size: 12.5px; font-weight: 600; }
+
+/* 🖨️ Impresoras: documentos agrupados (2026-10-23). */
+.impConf__grupo { border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden; }
+.impConf__grupo.is-open { border-color: #99f6e4; }
+.impConf__grupoCab { width: 100%; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; text-align: left; padding: 9px 12px; background: #f8fafc; border: 0; cursor: pointer; }
+.impConf__grupoCab small { grid-column: 1; color: #64748b; font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.impConf__grupoCab span { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: #64748b; }
+.impConf__grupo .impConf__doc { border: 0; border-top: 1px solid #eef2f7; border-radius: 0; }
+.impConf__todos { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid #eef2f7; font-size: 12px; color: #64748b; }
+.impConf__todos .btnGhost { font-size: 12px; padding: 3px 9px; }
+.impConf__ops select { width: auto; padding: 4px 6px; font-size: 12.5px; }

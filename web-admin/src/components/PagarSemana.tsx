@@ -1,3 +1,4 @@
+import { ventanaDeImpresion } from "../impresion";
 import { useState } from "react";
 import { money } from "../format";
 
@@ -83,7 +84,7 @@ export function imprimirReciboSemana(
     <div class="total"><span>TOTAL · ${r.totales.personas} persona(s)</span><span>${money(r.totales.neto)}</span></div>
     <div class="nota">Ganado ${money(r.totales.ganado)}${r.totales.anticipos > 0 ? ` − anticipos ${money(r.totales.anticipos)}` : ""} = ${money(r.totales.neto)} pagados de caja.</div>
   </body></html>`;
-  const w = window.open("", "_blank", "width=860,height=720");
+  const w = ventanaDeImpresion("pago_semana");
   if (!w) { avisar("El navegador bloqueó la ventana del recibo. Permite ventanas emergentes.", "warn"); return; }
   w.document.write(html); w.document.close(); w.focus();
   setTimeout(() => w.print(), 300);

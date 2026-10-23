@@ -6,6 +6,7 @@
 //  · Gastos financieros (hipoteca, préstamos, diferidos) y TOTAL NETO DE GANANCIAS.
 // Los datos salen de lo ya registrado (Caja, liquidaciones, servicios, fomentos);
 // solo los montos que el sistema no conoce se ingresan a mano por mes.
+import { ventanaDeImpresion } from "../impresion";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiGet, apiOk, apiPatch, apiPost } from "../api";
 import { hoyLocal, money } from "../format";
@@ -221,7 +222,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
   const reporteRef = useRef<HTMLDivElement | null>(null);
   const imprimir = () => {
     if (!rep) return;
-    const w = window.open("", "_blank", "width=900,height=800");
+    const w = ventanaDeImpresion("resultado_mensual");
     if (!w) { avisar("El navegador bloqueó la ventana de impresión. Permite ventanas emergentes.", "warn"); return; }
     const esc = (t: unknown) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
     const [y, m] = rep.periodo.split("-");

@@ -1,34 +1,61 @@
-// 🖨️ IMPRESIÓN CENTRAL (pedido del dueño 2026-10-22: «ajustar impresora» en Configuración). La impresora es de cada
-// EQUIPO (la PC del cajero, la tablet de báscula, el celular), así que su ajuste se guarda en ese equipo.
-//  · NAVEGADOR: cualquier impresora que el equipo vea (Epson USB/WiFi, ticketera USB, Mopria en Android): se abre la
-//    ventana de impresión con el tamaño de papel elegido para ese documento. En la PC del cajero se puede dejar
-//    «directo» (Chrome en modo kiosko: imprime sin preguntar).
-//  · RAWBT: impresora térmica Bluetooth en Android (como la de la báscula) mediante la app gratuita RawBT: el ticket se
-//    convierte a texto de 32 (58 mm) o 48 (80 mm) columnas y se le envía.
-export type Papel = "58" | "80" | "A4";
-export type ModoImpresora = "NAVEGADOR" | "RAWBT";
-/** ticket = venta al detalle · recibo = recibos y comprobantes de bodega/pagos · documento = hojas A4. */
-export type TipoDocumento = "ticket" | "recibo" | "documento";
+// 🖨️ IMPRESIÓN CENTRAL (pedido del dueño 2026-10-22/23: «ajustar impresora» y que CADA documento tenga su ajuste).
+// La impresora es de cada EQUIPO (PC del cajero, tablet de báscula, celular): el ajuste se guarda en ese equipo, y
+// dentro de él cada documento (liquidación, estado de cuenta del fomento, guía, ticket…) tiene su propio papel, salida
+// y copias.
+//  · VENTANA: cualquier impresora que el equipo vea (Epson USB/WiFi, ticketera USB, Mopria en Android): se abre la
+//    ventana de imprimir con el papel elegido. Con «directo» (Chrome en modo kiosko) imprime sin preguntar.
+//  · RAWBT: térmica Bluetooth en Android con la app gratuita RawBT (solo papeles de 58/80 mm): el documento se
+//    convierte a texto de 32 o 48 columnas y se le envía.
+// Cada pantalla sigue armando su documento como antes; en vez de window.open usa ventanaDeImpresion(<documento>).
+export type Papel = "58" | "80" | "A4" | "CARTA" | "A5";
+export type Salida = "VENTANA" | "RAWBT";
+export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number };
+
+export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
+const PEQUENO: Papel[] = ["58", "80", "A4"];
+const HOJA: Papel[] = ["A4", "CARTA", "A5"];
+const HOJA_O_ROLLO: Papel[] = ["A4", "CARTA", "A5", "80"];
+
+/** Todos los documentos que el ERP imprime. El id se usa en ventanaDeImpresion(id). */
+export const DOCUMENTOS: DocumentoImprimible[] = [
+  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
+  { id: "recibo_venta", titulo: "Recibo de venta", grupo: "Ventas y bodega", papel: "A4", papeles: HOJA_O_ROLLO },
+  { id: "guia_remision", titulo: "Guía de remisión", grupo: "Ventas y bodega", papel: "A4", papeles: HOJA },
+  { id: "orden_carga", titulo: "Orden de carga", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
+  { id: "salida_seleccion", titulo: "Salida a selección / envejecido", grupo: "Ventas y bodega", papel: "80", papeles: PEQUENO },
+  { id: "liquidacion", titulo: "Liquidación de agricultor", grupo: "Liquidaciones y fomentos", papel: "A4", papeles: HOJA_O_ROLLO },
+  { id: "estado_fomento", titulo: "Estado de cuenta del fomento", grupo: "Liquidaciones y fomentos", papel: "A4", papeles: HOJA },
+  { id: "rol_pago", titulo: "Rol de pago (hoja)", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
+  { id: "recibo_pago_80", titulo: "Recibo de pago (rollo 80 mm)", grupo: "Nómina y cuadrilla", papel: "80", papeles: PEQUENO },
+  { id: "recibo_trabajador", titulo: "Recibo de trabajador", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
+  { id: "pago_semana", titulo: "Pago de la semana", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
+  { id: "cuadrilla_resumen", titulo: "Resumen de cuadrilla", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA },
+  { id: "cuadrilla_recibo", titulo: "Recibo de cuadrilla", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
+  { id: "bajada_carro", titulo: "Recibo de bajada de carro", grupo: "Nómina y cuadrilla", papel: "A4", papeles: HOJA_O_ROLLO },
+  { id: "estado_cuenta", titulo: "Estado de cuenta (Por Cobrar / Por Pagar)", grupo: "Cuentas y caja", papel: "A4", papeles: HOJA },
+  { id: "caja_movimientos", titulo: "Movimientos y cierre de caja", grupo: "Cuentas y caja", papel: "A4", papeles: HOJA },
+  { id: "reporte", titulo: "Reportes (tablas)", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
+  { id: "consolidado", titulo: "Consolidado", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
+  { id: "estados_financieros", titulo: "Estados financieros", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
+  { id: "resultado_mensual", titulo: "Resultado mensual", grupo: "Reportes y contabilidad", papel: "A4", papeles: HOJA },
+  { id: "transporte_caja", titulo: "Caja de Transporte", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
+  { id: "transporte_estado_cuenta", titulo: "Estado de cuenta de cliente", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
+  { id: "transporte_compensacion", titulo: "Comprobante de compensación", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA },
+  { id: "transporte_pago_cxp", titulo: "Comprobante de pago (Por Pagar)", grupo: "Transporte y Cosechadora", papel: "A4", papeles: HOJA }
+];
+export type DocumentoId = (typeof DOCUMENTOS)[number]["id"];
 
 export type AjusteImpresora = {
-  modo: ModoImpresora;
   /** Chrome en modo kiosko (--kiosk-printing): imprime sin la ventana de diálogo; se repite por cada copia. */
   directo: boolean;
-  papel: Record<TipoDocumento, Papel>;
-  copias: Record<TipoDocumento, number>;
   /** Tamaño de letra en %. */
   letra: number;
   margen: "minimo" | "normal";
+  /** Ajuste de cada documento (los que no están, usan su papel de fábrica). */
+  docs: Record<string, AjusteDocumento>;
 };
 
-export const AJUSTE_DEFECTO: AjusteImpresora = {
-  modo: "NAVEGADOR",
-  directo: false,
-  papel: { ticket: "80", recibo: "80", documento: "A4" },
-  copias: { ticket: 1, recibo: 1, documento: 1 },
-  letra: 100,
-  margen: "normal"
-};
+export const AJUSTE_DEFECTO: AjusteImpresora = { directo: false, letra: 100, margen: "normal", docs: {} };
 
 const CLAVE = "bascula-erp:impresora";
 
@@ -36,12 +63,16 @@ export function leerAjusteImpresora(): AjusteImpresora {
   try {
     const crudo = localStorage.getItem(CLAVE);
     if (!crudo) return AJUSTE_DEFECTO;
-    const a = JSON.parse(crudo) as Partial<AjusteImpresora>;
-    return {
-      ...AJUSTE_DEFECTO, ...a,
-      papel: { ...AJUSTE_DEFECTO.papel, ...(a.papel ?? {}) },
-      copias: { ...AJUSTE_DEFECTO.copias, ...(a.copias ?? {}) }
-    };
+    const a = JSON.parse(crudo) as Partial<AjusteImpresora> & { modo?: string; papel?: Record<string, Papel>; copias?: Record<string, number> };
+    const docs: Record<string, AjusteDocumento> = { ...(a.docs ?? {}) };
+    // Ajuste de la primera versión (por tipo: ticket / recibo / documento): se pasa a cada documento.
+    if (a.papel && !a.docs) {
+      const salida: Salida = a.modo === "RAWBT" ? "RAWBT" : "VENTANA";
+      const de = (tipo: string) => ({ papel: a.papel?.[tipo] ?? "80", salida, copias: a.copias?.[tipo] ?? 1 });
+      docs.venta_detalle = de("ticket");
+      for (const id of ["orden_carga", "salida_seleccion", "recibo_pago_80"]) docs[id] = de("recibo");
+    }
+    return { directo: !!a.directo, letra: Number(a.letra) || 100, margen: a.margen === "minimo" ? "minimo" : "normal", docs };
   } catch {
     return AJUSTE_DEFECTO;
   }
@@ -51,28 +82,49 @@ export function guardarAjusteImpresora(a: AjusteImpresora): void {
   try { localStorage.setItem(CLAVE, JSON.stringify(a)); } catch { /* sin almacenamiento: queda el de por defecto */ }
 }
 
-const ANCHO_MM: Record<Papel, number> = { "58": 48, "80": 72, A4: 180 };
+export const esRollo = (p: Papel) => p === "58" || p === "80";
+
+/** Ajuste de un documento en este equipo (o el de fábrica). */
+export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora()): AjusteDocumento {
+  const doc = DOCUMENTOS.find((d) => d.id === id);
+  const guardado = a.docs[id];
+  const papel = guardado && (!doc || doc.papeles.includes(guardado.papel)) ? guardado.papel : (doc?.papel ?? "A4");
+  return {
+    papel,
+    salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : "VENTANA",
+    copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1)))
+  };
+}
+
+const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };
+const HOJA_CSS: Record<"A4" | "CARTA" | "A5", string> = { A4: "A4", CARTA: "letter", A5: "A5" };
 export const COLUMNAS: Record<"58" | "80", number> = { "58": 32, "80": 48 };
 
 /** Ajusta el HTML del documento al papel y la letra elegidos (sin tocar cómo se arma cada documento). */
 export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora): string {
-  const margen = a.margen === "minimo" ? (papel === "A4" ? 8 : 2) : (papel === "A4" ? 14 : 5);
-  const ancho = ANCHO_MM[papel];
-  const css = papel === "A4"
-    ? `@page{size:A4;margin:${margen}mm}`
-    : `@page{size:${papel}mm auto;margin:${margen}mm}
+  // Algunos documentos traían su propio «imprimir al abrir»: ahora imprime este módulo (si no, saldrían dos veces).
+  const sinAuto = html.replace(/<script>\s*window\.onload\s*=\s*function\s*\(\)\s*\{\s*window\.print\(\)\s*\}\s*<\/script>/gi, "");
+  let css: string;
+  if (esRollo(papel)) {
+    const margen = a.margen === "minimo" ? 2 : 5;
+    const ancho = ANCHO_MM[papel as "58" | "80"];
+    css = `@page{size:${papel}mm auto;margin:${margen}mm}
        html,body{width:${ancho}mm!important;max-width:${ancho}mm!important;margin:0 auto!important}
-       .tk{width:${ancho}mm!important;max-width:${ancho}mm!important}
-       table{width:100%!important}`;
+       .tk,.sheet{width:${ancho}mm!important;max-width:${ancho}mm!important}
+       table{width:100%!important}${papel === "58" ? "body{font-size:11px}th,td{padding:3px 1px!important}" : ""}`;
+  } else {
+    const margen = a.margen === "minimo" ? 8 : 14;
+    css = `@page{size:${HOJA_CSS[papel as "A4" | "CARTA" | "A5"]};margin:${margen}mm}${papel === "A5" ? "body{font-size:11px}" : ""}`;
+  }
   const zoom = a.letra !== 100 ? `body{zoom:${a.letra / 100}}` : "";
-  const extra = `<style data-impresora>${css}${zoom}${papel === "58" ? "body{font-size:11px}th,td{padding:3px 1px!important}" : ""}</style>`;
-  return /<\/head>/i.test(html) ? html.replace(/<\/head>/i, `${extra}</head>`) : `${extra}${html}`;
+  const extra = `<style data-impresora>${css}${zoom}</style>`;
+  return /<\/head>/i.test(sinAuto) ? sinAuto.replace(/<\/head>/i, `${extra}</head>`) : `${extra}${sinAuto}`;
 }
 
 /** Abre el documento y su ventana de impresión. Si el navegador bloquea la ventana, imprime desde un marco oculto. */
 function imprimirEnNavegador(html: string, copias: number, directo: boolean): boolean {
   const veces = directo ? Math.max(1, copias) : 1;
-  const w = window.open("", "_blank", "width=480,height=720");
+  const w = window.open("", "_blank", "width=820,height=760");
   if (w) {
     w.document.write(html);
     w.document.close();
@@ -172,26 +224,47 @@ function enviarARawBT(texto: string): void {
 }
 
 /**
- * Imprime un documento según el ajuste de ESTE equipo. `html` es el documento completo (como lo arma cada pantalla).
+ * Imprime un documento con SU ajuste en este equipo. `html` es el documento completo (como lo arma cada pantalla).
  * Devuelve false si no se pudo abrir la impresión.
  */
-export function imprimirDocumento(html: string, tipo: TipoDocumento): boolean {
+export function imprimirDocumento(html: string, id: DocumentoId | string): boolean {
   const a = leerAjusteImpresora();
-  const papel = a.papel[tipo];
-  const copias = Math.max(1, Math.min(5, Math.round(a.copias[tipo] || 1)));
-  if (a.modo === "RAWBT" && papel !== "A4") {
-    const texto = htmlATexto(html, COLUMNAS[papel]);
-    enviarARawBT(Array.from({ length: copias }, () => texto).join("\n"));
+  const d = ajusteDe(id, a);
+  if (d.salida === "RAWBT" && esRollo(d.papel)) {
+    const texto = htmlATexto(html, COLUMNAS[d.papel as "58" | "80"]);
+    enviarARawBT(Array.from({ length: d.copias }, () => texto).join("\n"));
     return true;
   }
-  return imprimirEnNavegador(ajustarHtml(html, papel, a), copias, a.directo);
+  return imprimirEnNavegador(ajustarHtml(html, d.papel, a), d.copias, a.directo);
 }
 
-/** Hoja de prueba para el tipo de documento: muestra el ancho útil y una tabla de ejemplo. */
-export function paginaDePrueba(tipo: TipoDocumento, negocio: string): string {
+/**
+ * Reemplazo de `window.open("", "_blank")` para las pantallas que escriben su documento en una ventana: junta lo
+ * escrito y, al cerrar el documento, lo imprime con el ajuste de ESE documento. `print()`/`focus()` no hacen nada
+ * (ya imprime el módulo), así las pantallas no cambian su forma de armar el documento.
+ */
+export function ventanaDeImpresion(id: DocumentoId | string) {
+  let html = "";
+  let enviado = false;
+  const enviar = () => { if (!enviado) { enviado = true; imprimirDocumento(html, id); } };
+  return {
+    document: {
+      write: (parte: string) => { html += parte; },
+      close: () => enviar()
+    },
+    focus: () => undefined,
+    print: () => enviar(),
+    close: () => undefined
+  };
+}
+
+/** Hoja de prueba de un documento: muestra papel, salida y una tabla de ejemplo. */
+export function paginaDePrueba(id: string, negocio: string): string {
+  const d = ajusteDe(id);
+  const doc = DOCUMENTOS.find((x) => x.id === id);
   const a = leerAjusteImpresora();
-  const papel = a.papel[tipo];
   const ahora = new Date().toLocaleString("es-EC", { hour12: false });
+  const papelTxt = d.papel === "CARTA" ? "Carta" : d.papel === "A5" ? "Media hoja (A5)" : d.papel === "A4" ? "A4" : `${d.papel} mm`;
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prueba de impresora</title><style>
     *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
     .tk{width:72mm;margin:0 auto} h1{font-size:16px;text-align:center;margin:0} .sub{text-align:center;font-weight:700;margin:2px 0 6px}
@@ -199,11 +272,12 @@ export function paginaDePrueba(tipo: TipoDocumento, negocio: string): string {
     table{width:100%;border-collapse:collapse} th{border-bottom:2px solid #111;text-align:left;font-size:11px} td{padding:4px 2px;border-bottom:1px dotted #bbb}
     td.n,th.n{text-align:right} .tot{display:flex;justify-content:space-between;font-size:17px;font-weight:900;border-top:2px solid #111;padding-top:5px;margin-top:6px}
     .foot{text-align:center;font-size:11px;margin-top:10px}
-  </style></head><body><div class="tk">
+  </style></head><body><div class="tk"${esRollo(d.papel) ? "" : ' style="width:auto"'}>
     <h1>${negocio.replace(/</g, "&lt;")}</h1>
-    <div class="sub">PRUEBA DE IMPRESORA</div>
-    <div class="row"><span>Papel</span><span>${papel === "A4" ? "A4" : `${papel} mm`}</span></div>
-    <div class="row"><span>Modo</span><span>${a.modo === "RAWBT" ? "Térmica Bluetooth (RawBT)" : a.directo ? "Directo (kiosko)" : "Ventana de impresión"}</span></div>
+    <div class="sub">PRUEBA · ${(doc?.titulo ?? id).replace(/</g, "&lt;")}</div>
+    <div class="row"><span>Papel</span><span>${papelTxt}</span></div>
+    <div class="row"><span>Sale por</span><span>${d.salida === "RAWBT" ? "Térmica Bluetooth (RawBT)" : a.directo ? "Directo (kiosko)" : "Ventana de imprimir"}</span></div>
+    <div class="row"><span>Copias</span><span>${d.copias}</span></div>
     <div class="row"><span>Fecha</span><span>${ahora}</span></div>
     <hr>
     <table><thead><tr><th>Producto</th><th class="n">Libras</th><th class="n">Total</th></tr></thead>

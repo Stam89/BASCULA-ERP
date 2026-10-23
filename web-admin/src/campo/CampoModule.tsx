@@ -2,6 +2,7 @@
 // V1 = solo captura. Autocontenido: su propio estado y llamadas a /campo/*.
 // No depende de la lógica de piladora/ventas/fomentos. Se engancha en App.tsx
 // con una entrada de sidebar y un único render.
+import { ventanaDeImpresion } from "../impresion";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -525,7 +526,7 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
       <table><thead><tr><th>#</th><th>Fecha</th><th>Concepto</th><th>Categoría</th><th>Cuenta</th><th>Entrada</th><th>Salida</th></tr></thead><tbody>${filas}</tbody>
       <tfoot><tr class="tot"><td colspan="5">TOTALES</td><td style="color:green">${money(ent)}</td><td style="color:#c00">${money(sal)}</td></tr>
       <tr class="tot"><td colspan="5">DISPONIBLE (sin el cruce interno)</td><td colspan="2">${money(totalDisponible)}</td></tr></tfoot></table></body></html>`;
-      const w = window.open("", "_blank");
+      const w = ventanaDeImpresion("transporte_caja");
       if (!w) return;
       w.document.write(html); w.document.close(); w.print();
     } catch (e) { notify((e as Error).message, "err"); }
@@ -1440,7 +1441,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, c
       <td style="text-align:right">${l.debe ? l.debe.enReal() : ""}</td>
       <td style="text-align:right;color:#15803d">${l.haber ? l.haber.enReal() : ""}</td>
       <td style="text-align:right;font-weight:700">${l.saldo.enReal()}</td></tr>`).join("");
-    const w = window.open("", "_blank", "width=820,height=900");
+    const w = ventanaDeImpresion("transporte_estado_cuenta");
     if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Estado de Cuenta · ${cliente.nombre}</title>
       <style>@page{size:A4;margin:14mm} body{font-family:Arial,sans-serif;color:#111;font-size:12px}
@@ -2270,7 +2271,7 @@ function ComprobanteCompensacionModal({ comprobante, nombreOperacion, onClose }:
   const imprimir = () => {
     const cxc = comprobante.cxc.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || (x.tipo === "cosecha" ? "Servicio de cosechadora" : "Servicio de flete"))}</td><td>${esc(x.maquina)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
     const cxp = comprobante.cxp.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.detalle || "Cuenta por pagar")}</td><td>${esc(x.acreedor)}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
-    const w = window.open("", "_blank", "width=820,height=900");
+    const w = ventanaDeImpresion("transporte_compensacion");
     if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Compensación · ${esc(comprobante.nombre)}</title><style>
       @page{size:A4;margin:14mm}body{font:12px Arial;color:#111}h1{font-size:18px;margin:0}.muted{color:#555}
@@ -2630,7 +2631,7 @@ function ComprobantePagoCxPModal({ recibo, nombreOperacion, onClose }: { recibo:
   const imprimir = () => {
     const esc = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
     const filas = recibo.aplicaciones.map((x) => `<tr><td>${esc(String(x.fecha).slice(0, 10))}</td><td>${esc(x.concepto || "Cuenta por pagar")}</td><td class="num">${x.saldo_antes.enReal()}</td><td class="num">${x.aplicado.enReal()}</td></tr>`).join("");
-    const w = window.open("", "_blank", "width=760,height=860"); if (!w) return;
+    const w = ventanaDeImpresion("transporte_pago_cxp"); if (!w) return;
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Pago CxP · ${esc(recibo.acreedor)}</title><style>@page{size:A4;margin:14mm}body{font:12px Arial;color:#111}h1{font-size:18px;margin:0}.muted{color:#555}table{width:100%;border-collapse:collapse;margin-top:14px}th,td{border:1px solid #ccc;padding:6px}th{background:#f3f4f6;text-align:left}.num{text-align:right}.total{font-size:18px;font-weight:700}</style></head><body>
       <h1>${esc(nombreOperacion)} · Comprobante de pago</h1><div class="muted">${esc(recibo.fecha)} · Cuenta: ${esc(recibo.cuenta)}</div><p><strong>${esc(recibo.acreedor)}</strong></p>
       <p class="total">Pagado: $ ${recibo.monto.enReal()}</p><p>Saldo anterior: $ ${recibo.saldo_antes.enReal()} · Saldo pendiente: $ ${recibo.saldo_despues.enReal()}</p>
