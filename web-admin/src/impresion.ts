@@ -6,10 +6,15 @@
 //    ventana de imprimir con el papel elegido. Con «directo» (Chrome en modo kiosko) imprime sin preguntar.
 //  · RAWBT: térmica Bluetooth en Android con la app gratuita RawBT (solo papeles de 58/80 mm): el documento se
 //    convierte a texto de 32 o 48 columnas y se le envía.
+//  · DIRECTA (2026-10-23): a una impresora de la PC del servidor, por su nombre (EPSON L3150, EPSON L455…), sin
+//    ventana y desde cualquier equipo: el servidor lo pasa a PDF y lo manda con SumatraPDF (routes/modules/impresion.ts).
 // Cada pantalla sigue armando su documento como antes; en vez de window.open usa ventanaDeImpresion(<documento>).
 export type Papel = "58" | "80" | "A4" | "CARTA" | "A5";
-export type Salida = "VENTANA" | "RAWBT";
-export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number };
+import { apiPost } from "./api";
+
+export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
+/** `impresora`: nombre en Windows de la PC del servidor (solo con salida DIRECTA). */
+export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string };
 
 export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
 const PEQUENO: Papel[] = ["58", "80", "A4"];
@@ -91,8 +96,9 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
   const papel = guardado && (!doc || doc.papeles.includes(guardado.papel)) ? guardado.papel : (doc?.papel ?? "A4");
   return {
     papel,
-    salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : "VENTANA",
-    copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1)))
+    salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : guardado?.salida === "DIRECTA" && guardado.impresora ? "DIRECTA" : "VENTANA",
+    copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1))),
+    impresora: guardado?.salida === "DIRECTA" ? guardado.impresora : undefined
   };
 }
 
@@ -227,9 +233,27 @@ function enviarARawBT(texto: string): void {
  * Imprime un documento con SU ajuste en este equipo. `html` es el documento completo (como lo arma cada pantalla).
  * Devuelve false si no se pudo abrir la impresión.
  */
+/** Avisos de la impresión (la pantalla los muestra como toast): «erp-impresion» con { mensaje, tipo }. */
+function avisar(mensaje: string, tipo: "success" | "error" | "warn") {
+  try { window.dispatchEvent(new CustomEvent("erp-impresion", { detail: { mensaje, tipo } })); } catch { /* sin pantalla */ }
+}
+
 export function imprimirDocumento(html: string, id: DocumentoId | string): boolean {
   const a = leerAjusteImpresora();
   const d = ajusteDe(id, a);
+  if (d.salida === "DIRECTA" && d.impresora) {
+    const listo = ajustarHtml(html, d.papel, a);
+    const titulo = DOCUMENTOS.find((x) => x.id === id)?.titulo ?? "Documento";
+    avisar(`🖨️ Enviando «${titulo}» a ${d.impresora}…`, "success");
+    apiPost<{ ok: boolean; desconectada?: boolean }>("/impresion/imprimir", { impresora: d.impresora, html: listo, copias: d.copias, titulo })
+      .then((r) => avisar(r.desconectada ? `⚠️ ${d.impresora} figura desconectada: revisa que esté prendida (el trabajo quedó en su cola).` : `✓ «${titulo}» enviado a ${d.impresora}`, r.desconectada ? "warn" : "success"))
+      .catch((e: unknown) => {
+        // Sin servidor o sin impresora: se imprime por la ventana de siempre.
+        avisar(`No se pudo imprimir directo en ${d.impresora} (${e instanceof Error ? e.message : "error"}). Se abre la ventana de imprimir.`, "warn");
+        imprimirEnNavegador(listo, d.copias, a.directo);
+      });
+    return true;
+  }
   if (d.salida === "RAWBT" && esRollo(d.papel)) {
     const texto = htmlATexto(html, COLUMNAS[d.papel as "58" | "80"]);
     enviarARawBT(Array.from({ length: d.copias }, () => texto).join("\n"));

@@ -17,6 +17,7 @@ import { salesRouter } from "./modules/sales.js";
 import { ordersRouter } from "./modules/orders.js";
 import { entreSociosRouter } from "./modules/entre-socios.js";
 import { guiasRouter } from "./modules/guias.js";
+import { impresionRouter } from "./modules/impresion.js";
 import { financeRouter } from "./modules/finance.js";
 import { weighingRouter } from "./modules/weighing-tickets.js";
 import { fomentosRouter } from "./modules/fomentos.js";
@@ -104,6 +105,8 @@ routes.use("/receivable", receivableRouter);
 routes.use("/entre-socios", entreSociosRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
+// 🖨️ Impresión directa a las impresoras de la PC del servidor (cualquier usuario con sesión).
+routes.use("/impresion", impresionRouter);
 routes.use("/audit", auditRouter);
 routes.use("/reports", reportsRouter);
 routes.use("/labor", laborRouter);

@@ -8488,6 +8488,12 @@ export function App() {
   // 🕒 Ventas por asignar: se vuelven a leer después de cada venta.
   const [porAsignarKey, setPorAsignarKey] = useState(0);
   const [impresoraModal, setImpresoraModal] = useState(false);
+  // 🖨️ Avisos de la impresión directa (impresion.ts): enviado, impresora desconectada, salió por la ventana…
+  useEffect(() => {
+    const oir = (e: Event) => { const d = (e as CustomEvent<{ mensaje: string; tipo: "success" | "error" | "warn" }>).detail; if (d?.mensaje) addToast(d.mensaje, d.tipo); };
+    window.addEventListener("erp-impresion", oir);
+    return () => window.removeEventListener("erp-impresion", oir);
+  }, [addToast]);
   useEffect(() => {
     if (activeTab !== "Caja" || cajaSubTab !== "venta_detalle" || !esMatrizActiva) return;
     apiGet<{ ventas: Array<{ total: number }> }>("/sales/retail/por-asignar")
