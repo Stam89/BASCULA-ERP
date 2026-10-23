@@ -14,6 +14,8 @@ import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, Sac
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
+import { ConfigImpresoras } from "./components/ConfigImpresoras";
+import { imprimirDocumento, type TipoDocumento } from "./impresion";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -3043,6 +3045,7 @@ export function App() {
     { sub: "negocio", tarjeta: "🏢 Datos del negocio", claves: "nombre comercial ruc telefono direccion pie de comprobante encabezado ticket recibo mi negocio nombre transporte cosechadora matriz principal" },
     { sub: "planta", tarjeta: "🧺 Catálogo de productos", claves: "crear producto nuevo marca empacado terminado subproducto materia prima presentaciones pesos arroz base calidad 0.11 corriente tarifa por libra venta al detalle mostrador codigo unidad" },
     { sub: "planta", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
+    { sub: "negocio", tarjeta: "🖨️ Impresoras", claves: "impresora imprimir ticket ticketera termica bluetooth epson papel 58 80 a4 copias rawbt kiosko recibo" },
     { sub: "negocio", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
     { sub: "contabilidad", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
     { sub: "planta", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento maquinas maquina equipo compra de repuestos uso inmediato materiales consumibles hoja de vida" },
@@ -6825,8 +6828,6 @@ export function App() {
 
   // Ticket térmico 80mm.
   function printRecibo80mm(data: ReciboSemanal) {
-    const w = window.open("", "_blank", "width=380,height=680");
-    if (!w) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
     const t = data.totals;
     const filas = (data.rows.length ? data.rows : []).map((r) =>
       `<div class="it"><div class="l1"><span>${fmtFechaRecibo(r.fecha)}</span><span>${money(r.subtotal)}</span></div><div class="l2">${r.concepto} · ${cantidadReciboTxt(r)} · ${r.tarifa}</div></div>`
@@ -6856,7 +6857,7 @@ export function App() {
       <div class="sig"><hr>Entregado por (Caja/Admin)</div>
       <div class="sig"><hr>Recibido Conforme (Trabajador)</div>
     </body></html>`;
-    w.document.write(html); w.document.close(); w.focus(); w.print();
+    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   async function printWorkerReceipt(row: WorkerSummary, periodFrom?: string, periodTo?: string) {
@@ -8486,6 +8487,7 @@ export function App() {
   const [porAsignarConteo, setPorAsignarConteo] = useState<{ n: number; total: number }>({ n: 0, total: 0 });
   // 🕒 Ventas por asignar: se vuelven a leer después de cada venta.
   const [porAsignarKey, setPorAsignarKey] = useState(0);
+  const [impresoraModal, setImpresoraModal] = useState(false);
   useEffect(() => {
     if (activeTab !== "Caja" || cajaSubTab !== "venta_detalle" || !esMatrizActiva) return;
     apiGet<{ ventas: Array<{ total: number }> }>("/sales/retail/por-asignar")
@@ -8699,12 +8701,8 @@ export function App() {
         <div class="foot">${appSettings?.receipt_footer?.trim() ? esc(appSettings.receipt_footer.trim()) : "¡Gracias por su compra!<br>Vuelva pronto 🌾"}</div>
       </div>
     </body></html>`;
-    const win = window.open("", "_blank", "width=420,height=720");
-    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
+    // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
+    if (!imprimirDocumento(html, "ticket")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   // ── Búsqueda de clientes (autocompletado) ──
@@ -13306,12 +13304,8 @@ Motivo (obligatorio):`, ""));
         <div class="sig"><hr><span>Firma de Salida (Bodega / Chofer)</span></div>
       </div>
     </body></html>`;
-    const win = window.open("", "_blank", "width=420,height=720");
-    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
+    // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
+    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   // Ticket de Salida a Selección (guía de salida de bodega): comprobante de lo que
@@ -13370,12 +13364,8 @@ Motivo (obligatorio):`, ""));
         </div>
       </div>
     </body></html>`;
-    const win = window.open("", "_blank", "width=420,height=720");
-    if (!win) { addToast("El navegador bloqueó la ventana de impresión", "error"); return; }
-    win.document.write(html);
-    win.document.close();
-    win.focus();
-    win.print();
+    // 🖨️ Con el ajuste de impresora de este equipo (papel, copias, térmica Bluetooth).
+    if (!imprimirDocumento(html, "recibo")) addToast("El navegador bloqueó la ventana de impresión", "error");
   }
 
   function printGuiaRemision(order: SalesOrder) {
@@ -14338,6 +14328,7 @@ Motivo (obligatorio):`, ""));
               <strong>{authUser.name}</strong>
               <small>{(authUser.role_name ?? "usuario").toLowerCase()}</small>
             </div>
+            <button className="logoutBtn mailBtn" title="Impresora de este equipo" aria-label="Impresora de este equipo" onClick={() => setImpresoraModal(true)}>🖨️</button>
             <button className="logoutBtn mailBtn" title="Cambiar mi clave" aria-label="Cambiar mi clave" onClick={() => setClaveModal("manual")}>🔑</button>
             <button className="logoutBtn mailBtn" title="Mi correo de recuperación de clave" aria-label="Mi correo de recuperación de clave" onClick={() => setCorreoModalAbierto(true)}>✉️</button>
             <button className="logoutBtn" title="Cerrar sesión" onClick={logout}>⏻</button>
@@ -14351,6 +14342,17 @@ Motivo (obligatorio):`, ""));
       </aside>
 
       <section className="workspace">
+        {impresoraModal && (
+          <div className="modalOverlay" onClick={() => setImpresoraModal(false)}>
+            <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, width: "94vw", maxHeight: "90vh", overflow: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <h3 style={{ margin: 0 }}>🖨️ Impresora de este equipo</h3>
+                <button type="button" className="btnGhost" onClick={() => setImpresoraModal(false)}>Cerrar</button>
+              </div>
+              <ConfigImpresoras negocio={appSettings?.business_name || "BASCULA ERP"} avisar={addToast} />
+            </div>
+          </div>
+        )}
         {entreSocios && authUser && (
           <CuentasEntreSocios
             accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
@@ -25683,6 +25685,11 @@ Motivo (obligatorio):`, ""));
                     {settingsForm.receipt_footer && <em>{settingsForm.receipt_footer}</em>}
                   </div>
                 </div>
+                </details>
+                {/* 🖨️ Impresora de ESTE equipo (2026-10-22): papel por documento, copias, térmica Bluetooth (RawBT). */}
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🖨️", "Impresoras", "Papel de tickets y recibos, copias y térmica Bluetooth (de este equipo)")}</summary>
+                  <ConfigImpresoras negocio={appSettings?.business_name || "BASCULA ERP"} avisar={addToast} />
                 </details>
               </section>
             )}
