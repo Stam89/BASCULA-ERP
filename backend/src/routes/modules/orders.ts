@@ -69,6 +69,7 @@ ordersRouter.get("/", asyncRoute(async (req, res) => {
               WHERE cs.id = o.flete_servicio_id) AS flete_cobrado,
             COALESCE((
               SELECT json_agg(json_build_object(
+                       'id', i.id,
                        'product_id', i.product_id,
                        'inventory_product_id', i.inventory_product_id,
                        'presentation_name', i.presentation_name,
@@ -109,6 +110,7 @@ ordersRouter.get("/cola-global", asyncRoute(async (req, res) => {
             a.name AS accionista_name, a.tipo AS accionista_tipo,
             COALESCE((
               SELECT json_agg(json_build_object(
+                       'id', i.id,
                        'product_id', i.product_id,
                        'inventory_product_id', i.inventory_product_id,
                        'presentation_name', i.presentation_name,
@@ -707,7 +709,7 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
       let warehouseId = body.warehouse_id ?? null;
       if (!warehouseId) {
         const wh = await client.query(
-          "SELECT id FROM warehouses WHERE upper(name) LIKE '%TERMINAD%' ORDER BY created_at ASC LIMIT 1"
+          "SELECT id FROM warehouses WHERE upper(name) LIKE '%TERMINAD%' OR type = 'FINISHED_GOODS' ORDER BY (type = 'FINISHED_GOODS') DESC, name LIMIT 1"
         );
         warehouseId = wh.rows[0]?.id ?? null;
       }
@@ -744,6 +746,104 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
   res.json({ ...result, ...(sacos ? { sacos } : {}), retiros_alla: retirosAlla, traidos_alla: traidosAlla });
 }));
 
+// 🚚 DESPACHO PARCIAL (pedido del dueño 2026-10-23): el camión no se lleva todo. El pedido queda con lo cargado y lo
+// que no subió pasa a un pedido SALDO (PED-…-S1) del mismo cliente, YA PREPARADO (sigue en bodega «por despachar»):
+//  · las líneas del pedido bajan a lo cargado (las que quedan en 0 salen) y el saldo nace con el resto;
+//  · su cuenta del pedido se reparte (lo abonado antes cubre primero lo que se lleva);
+//  · el inventario y los sacos descontados al preparar se reparten entre los dos (se reponen y se vuelven a
+//    descontar por pedido, con las mismas funciones de la preparación).
+// Va DENTRO de la transacción del despacho, antes de crear la venta.
+async function separarSaldoDelPedido(
+  client: PoolClient,
+  order: { id: string; order_number: string; customer_id: string; accionista_id: string | null; delivery_date: unknown; notes: string | null;
+    payment_method: string | null; created_by: string | null; prepared_by: string | null; picking_location: string | null;
+    receivable_id: string | null; parent_order_id?: string | null },
+  cargado: Array<{ item_id: string; quantity: number }>,
+  createdBy: string | null
+): Promise<{ order_number: string; qq: number; total: number } | null> {
+  const items = (await client.query("SELECT * FROM sales_order_items WHERE order_id = $1 ORDER BY id FOR UPDATE", [order.id])).rows;
+  const porItem = new Map(cargado.map((c) => [c.item_id, round2(c.quantity)]));
+  for (const id of porItem.keys()) {
+    if (!items.some((it) => it.id === id)) throw new ApiError(400, "Una línea de lo cargado no es de este pedido. Refresca la pantalla.");
+  }
+  const lineas = items.map((it) => {
+    const pedido = round2(Number(it.quantity));
+    const lleva = porItem.has(it.id) ? porItem.get(it.id)! : pedido;
+    if (lleva < 0 || lleva > pedido + 0.0001) throw new ApiError(400, "Lo cargado no puede ser negativo ni más de lo pedido.");
+    return { it, lleva, queda: round2(pedido - lleva) };
+  });
+  if (!lineas.some((l) => l.queda > 0.0001)) return null; // se lleva todo
+  if (!lineas.some((l) => l.lleva > 0.0001)) throw new ApiError(400, "El camión no lleva nada: no despaches el pedido (sigue preparado en la Cola).");
+
+  // Bodega de la preparación (la de la piladora, no la de «allá»).
+  const bodega = (await client.query(
+    `SELECT m.warehouse_id FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id AND w.type <> 'EXTERNO'
+      WHERE m.reference_type = 'sales_order' AND m.reference_id = $1 AND m.movement = 'OUT' LIMIT 1`, [order.id]
+  )).rows[0]?.warehouse_id ?? (await client.query("SELECT id FROM warehouses WHERE type = 'FINISHED_GOODS' ORDER BY name LIMIT 1")).rows[0]?.id;
+  if (!bodega) throw new ApiError(409, "No se encontró la bodega de producto terminado.");
+  await restaurarInventarioPreparacion(client, order.id);
+
+  // El saldo: número PED-…-S1, S2… sobre el pedido original.
+  const raiz = order.parent_order_id ?? order.id;
+  const numeroRaiz = order.parent_order_id
+    ? (await client.query("SELECT order_number FROM sales_orders WHERE id = $1", [raiz])).rows[0]?.order_number ?? order.order_number
+    : order.order_number;
+  const n = Number((await client.query("SELECT count(*)::int AS n FROM sales_orders WHERE parent_order_id = $1", [raiz])).rows[0].n) + 1;
+  const totalQueda = round2(lineas.reduce((s, l) => s + l.queda * Number(l.it.unit_price), 0));
+  const totalLleva = round2(lineas.reduce((s, l) => s + l.lleva * Number(l.it.unit_price), 0));
+  const saldo = (await client.query(
+    `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by, payment_method,
+                               parent_order_id, prepared_at, prepared_by, picking_location)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11) RETURNING *`,
+    [`${numeroRaiz}-S${n}`, order.customer_id, order.accionista_id, order.delivery_date ?? null,
+     `Saldo del pedido ${order.order_number}: el camión no se lo llevó.${order.notes ? ` ${order.notes}` : ""}`.slice(0, 1000),
+     totalQueda, createdBy ?? order.created_by, order.payment_method, raiz, order.prepared_by, order.picking_location]
+  )).rows[0];
+  for (const l of lineas) {
+    if (l.queda > 0.0001) {
+      await client.query(
+        `INSERT INTO sales_order_items (order_id, product_id, presentation_id, presentation_name, inventory_product_id, quantity, unit_price, total, sobrante_saco_lb, sack_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9)`,
+        [saldo.id, l.it.product_id, l.it.presentation_id, l.it.presentation_name, l.it.inventory_product_id, l.queda, l.it.unit_price,
+         round2(l.queda * Number(l.it.unit_price)), l.it.sack_id]
+      );
+    }
+    if (l.lleva > 0.0001) {
+      await client.query("UPDATE sales_order_items SET quantity = $2, total = $3 WHERE id = $1", [l.it.id, l.lleva, round2(l.lleva * Number(l.it.unit_price))]);
+    } else {
+      await client.query("DELETE FROM sales_order_items WHERE id = $1", [l.it.id]);
+    }
+  }
+  await client.query("UPDATE sales_orders SET total_amount = $2 WHERE id = $1", [order.id, totalLleva]);
+
+  // La cuenta del pedido se reparte: lo abonado antes cubre primero lo que se lleva.
+  if (order.receivable_id) {
+    const ar = (await client.query("SELECT amount::float AS amount, balance::float AS balance, description FROM accounts_receivable WHERE id = $1 FOR UPDATE", [order.receivable_id])).rows[0];
+    const abonado = round2(Math.max(0, Number(ar.amount) - Number(ar.balance)));
+    const abono1 = round2(Math.min(abonado, totalLleva));
+    const abono2 = round2(abonado - abono1);
+    const saldo1 = round2(totalLleva - abono1);
+    await client.query("UPDATE accounts_receivable SET amount = $2, balance = $3, status = $4 WHERE id = $1",
+      [order.receivable_id, totalLleva, saldo1, saldo1 < 0.01 ? "PAID" : abono1 > 0.005 ? "PARTIAL" : "CONFIRMED"]);
+    const cliente = (await client.query("SELECT full_name FROM customers WHERE id = $1", [order.customer_id])).rows[0]?.full_name ?? "cliente";
+    const saldo2 = round2(totalQueda - abono2);
+    const nueva = (await client.query(
+      `INSERT INTO accounts_receivable (accionista_id, customer_id, reference_type, reference_id, description, amount, balance, status)
+       VALUES ($1, $2, 'sales_order', $3, $4, $5, $6, $7) RETURNING id`,
+      [order.accionista_id, order.customer_id, saldo.id, `Pedido ${saldo.order_number} — ${cliente} (pendiente de despacho)`, totalQueda, saldo2,
+       saldo2 < 0.01 ? "PAID" : abono2 > 0.005 ? "PARTIAL" : "CONFIRMED"]
+    )).rows[0];
+    await client.query("UPDATE sales_orders SET receivable_id = $2 WHERE id = $1", [saldo.id, nueva.id]);
+  }
+
+  // Inventario y sacos de la preparación, ahora repartidos entre los dos pedidos (el saldo queda preparado).
+  await descontarInventarioPreparacion(client, { orderId: order.id, accionistaId: order.accionista_id ?? undefined, warehouseId: bodega, createdBy });
+  await descontarSacosPedido(client, order.id);
+  await descontarInventarioPreparacion(client, { orderId: saldo.id, accionistaId: order.accionista_id ?? undefined, warehouseId: bodega, createdBy });
+  await descontarSacosPedido(client, saldo.id);
+  return { order_number: saldo.order_number, qq: round2(lineas.reduce((s, l) => s + l.queda, 0)), total: totalQueda };
+}
+
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
 // Si algo falla (stock, caja), el pedido sigue PENDIENTE y se puede reintentar.
 ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
@@ -754,7 +854,9 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     warehouse_id: z.string().uuid(),
     created_by: z.string().uuid().optional(),
     // Si un carro de Transporte y Cosechadora lleva el pedido: ese flete se le cobra al que vende.
-    flete: z.object({ activo_id: z.string().uuid(), monto: z.coerce.number().positive().max(100000) }).optional()
+    flete: z.object({ activo_id: z.string().uuid(), monto: z.coerce.number().positive().max(100000) }).optional(),
+    // 🚚 Despacho parcial: cuánto cargó el camión de cada línea (lo que falte queda como pedido saldo).
+    cargado: z.array(z.object({ item_id: z.string().uuid(), quantity: z.number().nonnegative() })).max(100).optional()
   }).parse(req.body);
   if (body.flete) validarFleteVenta(body.flete);
   // TRANSFERENCIA / CHEQUE: el dinero no se da por recibido al despachar. La cuenta del pedido queda «por confirmar»
@@ -782,6 +884,11 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     if (body.payment_method !== "CREDIT" && !porConfirmar && body.cash_register_id) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
     }
+    // 🚚 El camión no se lleva todo: lo que queda pasa a un pedido saldo (ya preparado) antes de vender lo cargado.
+    const saldo = body.cargado?.length
+      ? await separarSaldoDelPedido(client, order.rows[0], body.cargado, body.created_by ?? null)
+      : null;
+    if (saldo) order.rows[0].total_amount = (await client.query("SELECT total_amount FROM sales_orders WHERE id = $1", [req.params.id])).rows[0].total_amount;
 
     const items = await client.query(
       "SELECT * FROM sales_order_items WHERE order_id = $1",
@@ -900,7 +1007,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
     // solo se registra la venta y, si aplica, el CARGO financiero por empaque.
 
-    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete, por_confirmar: porConfirmar };
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete, por_confirmar: porConfirmar, saldo };
   });
 
   res.json(result);

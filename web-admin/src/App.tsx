@@ -1389,7 +1389,7 @@ type SalesOrder = {
   // qué bodega/lote se extrae el producto en picking_location.
   prepared_at?: string | null;
   picking_location?: string | null;
-  items: Array<{ product_name: string; inventory_product_id?: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
+  items: Array<{ id?: string; product_name: string; inventory_product_id?: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
   // Guía de remisión (se completan al emitirla).
   transportista_nombre?: string | null;
   transportista_cedula?: string | null;
@@ -3982,6 +3982,8 @@ export function App() {
   const [fleteModal, setFleteModal] = useState<{
     order: SalesOrder; modo: "despacho" | "editar"; conFlete: boolean; activoId: string; porQq: string; total: string;
     metodo?: string; registerId?: string; esDelActivo?: boolean; tarifaHint?: string; busy?: boolean;
+    /** 🚚 El camión no se lleva todo: cuánto cargó de cada línea (id de la línea → QQ). */
+    parcial?: boolean; cargado?: Record<string, string>;
   } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
@@ -13108,6 +13110,11 @@ Motivo (obligatorio):`, ""));
       .catch(() => undefined);
   }
   const qqDePedido = (o: SalesOrder) => round2((o.items ?? []).reduce((acc, it) => acc + (Number(it.quantity) || 0), 0));
+  // Con despacho parcial: lo que de verdad sube al camión.
+  const qqCargado = (o: SalesOrder, cargado?: Record<string, string>) => round2((o.items ?? []).reduce((acc, it) =>
+    acc + (cargado && it.id && cargado[it.id] !== undefined && cargado[it.id] !== "" ? Math.max(0, Number(cargado[it.id]) || 0) : Number(it.quantity) || 0), 0));
+  const totalCargado = (o: SalesOrder, cargado?: Record<string, string>) => round2((o.items ?? []).reduce((acc, it) =>
+    acc + (cargado && it.id && cargado[it.id] !== undefined && cargado[it.id] !== "" ? Math.max(0, Number(cargado[it.id]) || 0) : Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0));
 
   // Confirma el despacho (y el flete, si lo lleva un carro de Transporte).
   async function confirmarDespacho() {
@@ -13115,19 +13122,30 @@ Motivo (obligatorio):`, ""));
     if (!m || m.modo !== "despacho" || !finishedWarehouse?.id) return;
     const total = round2(Number(m.total));
     if (m.conFlete && (!m.activoId || !(total > 0))) { addToast("Elige el carro y el valor del flete (o marca que no lo lleva Transporte).", "error"); return; }
+    const cargado = m.parcial ? (m.order.items ?? []).filter((it) => it.id).map((it) => ({
+      item_id: it.id as string,
+      quantity: m.cargado?.[it.id as string] !== undefined && m.cargado?.[it.id as string] !== "" ? round2(Number(m.cargado?.[it.id as string]) || 0) : round2(Number(it.quantity) || 0)
+    })) : undefined;
+    if (cargado && cargado.some((c, i) => c.quantity < 0 || c.quantity > Number((m.order.items ?? []).filter((it) => it.id)[i].quantity) + 0.0001)) {
+      addToast("Lo cargado no puede ser más de lo pedido.", "error"); return;
+    }
+    if (cargado && !cargado.some((c) => c.quantity > 0)) { addToast("Si el camión no lleva nada, no despaches: el pedido sigue preparado en la Cola.", "error"); return; }
     setFleteModal({ ...m, busy: true });
     try {
-      const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null; por_confirmar?: string | null }>(`/orders/${m.order.id}/deliver`, {
+      const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null; por_confirmar?: string | null;
+        saldo?: { order_number: string; qq: number; total: number } | null }>(`/orders/${m.order.id}/deliver`, {
         payment_method: m.metodo,
         cash_register_id: m.registerId || undefined,
         warehouse_id: finishedWarehouse.id,
         created_by: authUser?.id,
-        flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined
+        flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined,
+        cargado
       }, optsPedido(m.order));
       setFleteModal(null);
       addToast(`Pedido ${m.order.order_number} despachado → venta ${result.sale.sale_number}${m.esDelActivo ? "" : ` (${m.order.accionista_name})`}`
         + (result.flete ? ` · Flete ${money(result.flete.monto)} a Transporte (${result.flete.activo_nombre})` : "")
-        + (result.por_confirmar ? ` · 📲 ${result.por_confirmar === "CHECK" ? "Cheque" : "Transferencia"} POR CONFIRMAR: entra a la caja cuando el de caja confirme que llegó` : ""), "success");
+        + (result.por_confirmar ? ` · 📲 ${result.por_confirmar === "CHECK" ? "Cheque" : "Transferencia"} POR CONFIRMAR: entra a la caja cuando el de caja confirme que llegó` : "")
+        + (result.saldo ? ` · 🚚 Quedó el saldo ${result.saldo.order_number} (${result.saldo.qq.enReal()} QQ, ${money(result.saldo.total)}) en la Cola, ya preparado` : ""), "success");
       cargarPorConfirmar();
       await refreshCustomersAndSales();
       await refresh();
@@ -18914,7 +18932,7 @@ Motivo (obligatorio):`, ""));
             {fleteModal && (() => {
               const m = fleteModal;
               const o = m.order;
-              const qq = qqDePedido(o);
+              const qq = m.modo === "despacho" && m.parcial ? qqCargado(o, m.cargado) : qqDePedido(o);
               const vendedor = o.accionista_name ?? accionistas.find((a) => a.id === (o.accionista_id || activeAccionistaId))?.name ?? "el vendedor";
               const carros = fletaActivos.filter((a) => String(a.tipo ?? "").toLowerCase() !== "cosechadora");
               const cobrado = Number(o.flete_cobrado ?? 0);
@@ -18925,11 +18943,54 @@ Motivo (obligatorio):`, ""));
                     <div className="despachoModal__resumen">
                       <span><small>Cliente</small><strong>{o.customer_name}</strong></span>
                       <span><small>Cantidad</small><strong>{qq.enReal()} QQ</strong></span>
-                      {m.modo === "despacho" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
+                      {m.modo === "despacho" && <span><small>Total</small><strong>{money(m.parcial ? totalCargado(o, m.cargado) : Number(o.total_amount))}</strong></span>}
                       {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "CREDIT" ? "📋 Crédito" : m.metodo === "CASH" ? "💵 Efectivo, a la caja" : "🏦 Por el banco"}</strong></span>}
                       {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
                     </div>
                     {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</p>}
+
+                    {/* 🚚 ¿El camión se lleva todo? Si no, lo que queda pasa a un pedido saldo ya preparado (2026-10-23). */}
+                    {m.modo === "despacho" && (o.items ?? []).every((it) => it.id) && (
+                      <div className="despachoModal__flete">
+                        <span className="despachoModal__pregunta">¿El camión se lleva todo el pedido?</span>
+                        <div className="sacxForm__seg" role="group" aria-label="Carga">
+                          <button type="button" className={!m.parcial ? "on in" : ""} onClick={() => setFleteModal({ ...m, parcial: false })}>Sí, todo</button>
+                          <button type="button" className={m.parcial ? "on in" : ""} onClick={() => setFleteModal({ ...m, parcial: true, cargado: m.cargado ?? {} })}>Solo una parte</button>
+                        </div>
+                        {m.parcial && (() => {
+                          const quedaQq = round2(qqDePedido(o) - qqCargado(o, m.cargado));
+                          return (
+                            <>
+                              <table className="despachoModal__carga">
+                                <thead><tr><th>Producto</th><th className="n">Pedido</th><th className="n">Cargó (QQ)</th><th className="n">Queda</th></tr></thead>
+                                <tbody>
+                                  {(o.items ?? []).map((it) => {
+                                    const pedido = Number(it.quantity) || 0;
+                                    const v = m.cargado?.[it.id as string];
+                                    const lleva = v !== undefined && v !== "" ? Math.max(0, Number(v) || 0) : pedido;
+                                    return (
+                                      <tr key={it.id}>
+                                        <td>{it.product_name}{it.presentation_name ? ` ${it.presentation_name}` : ""}</td>
+                                        <td className="n">{pedido.enReal()}</td>
+                                        <td className="n">
+                                          <input type="number" min="0" max={pedido} step="0.01" inputMode="decimal" value={v ?? ""} placeholder={pedido.enReal()}
+                                            onChange={(e) => setFleteModal({ ...m, cargado: { ...(m.cargado ?? {}), [it.id as string]: e.target.value } })} />
+                                        </td>
+                                        <td className={`n${lleva > pedido + 0.0001 ? " cj-neg" : ""}`}>{lleva > pedido + 0.0001 ? "más de lo pedido" : round2(pedido - lleva).enReal()}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                              <small className="despachoModal__nota">
+                                Se vende y se cobra solo lo cargado ({qqCargado(o, m.cargado).enReal()} QQ, {money(totalCargado(o, m.cargado))}).
+                                {quedaQq > 0.0001 ? <> Los <b>{quedaQq.enReal()} QQ</b> que quedan pasan a un pedido <b>saldo</b> del mismo cliente, ya preparado, en la Cola para el próximo camión.</> : " Pon cuánto cargó en cada producto."}
+                              </small>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    )}
 
                     <div className="despachoModal__flete">
                       <span className="despachoModal__pregunta">¿Lo lleva un carro de Transporte y Cosechadora?</span>
