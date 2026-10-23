@@ -1389,6 +1389,8 @@ type SalesOrder = {
   // qué bodega/lote se extrae el producto en picking_location.
   prepared_at?: string | null;
   picking_location?: string | null;
+  /** Saldo de un despacho parcial: ya se cobró con su pedido original (solo falta entregarlo). */
+  ya_cobrado?: boolean | null;
   items: Array<{ id?: string; product_name: string; inventory_product_id?: string | null; presentation_name: string | null; quantity: string | number; unit_price: string | number; total: string | number }>;
   // Guía de remisión (se completan al emitirla).
   transportista_nombre?: string | null;
@@ -13069,6 +13071,13 @@ Motivo (obligatorio):`, ""));
       addToast("Primero confirma la preparación del pedido (📦 Confirmar Preparación).", "error");
       return;
     }
+    if (order.ya_cobrado) {
+      if (!finishedWarehouse?.id) { addToast("Falta la bodega de producto terminado (Crear datos base en Dashboard)", "error"); return; }
+      // Ya cobrado con su pedido original: solo se entrega (sin forma de pago ni caja).
+      setFleteModal({ order, modo: "despacho", conFlete: false, activoId: "", porQq: "", total: "", metodo: "YA_COBRADO", esDelActivo: !order.accionista_id || order.accionista_id === activeAccionistaId });
+      sugerirTarifaFlete(order);
+      return;
+    }
     const metodo = orderPayMethod[order.id] ?? order.payment_method ?? "";
     if (!metodo) {
       addToast("Elige la forma de pago (efectivo, banco o crédito) antes de despachar.", "error");
@@ -13113,8 +13122,6 @@ Motivo (obligatorio):`, ""));
   // Con despacho parcial: lo que de verdad sube al camión.
   const qqCargado = (o: SalesOrder, cargado?: Record<string, string>) => round2((o.items ?? []).reduce((acc, it) =>
     acc + (cargado && it.id && cargado[it.id] !== undefined && cargado[it.id] !== "" ? Math.max(0, Number(cargado[it.id]) || 0) : Number(it.quantity) || 0), 0));
-  const totalCargado = (o: SalesOrder, cargado?: Record<string, string>) => round2((o.items ?? []).reduce((acc, it) =>
-    acc + (cargado && it.id && cargado[it.id] !== undefined && cargado[it.id] !== "" ? Math.max(0, Number(cargado[it.id]) || 0) : Number(it.quantity) || 0) * (Number(it.unit_price) || 0), 0));
 
   // Confirma el despacho (y el flete, si lo lleva un carro de Transporte).
   async function confirmarDespacho() {
@@ -13133,19 +13140,20 @@ Motivo (obligatorio):`, ""));
     setFleteModal({ ...m, busy: true });
     try {
       const result = await apiPost<{ sale: { sale_number: string }; flete?: { monto: number; activo_nombre: string } | null; por_confirmar?: string | null;
-        saldo?: { order_number: string; qq: number; total: number } | null }>(`/orders/${m.order.id}/deliver`, {
-        payment_method: m.metodo,
-        cash_register_id: m.registerId || undefined,
+        saldo?: { order_number: string; qq: number; total: number } | null; entrega_ya_cobrada?: boolean }>(`/orders/${m.order.id}/deliver`, {
+        payment_method: m.metodo === "YA_COBRADO" ? "CREDIT" : m.metodo,
+        cash_register_id: m.metodo === "YA_COBRADO" ? undefined : m.registerId || undefined,
         warehouse_id: finishedWarehouse.id,
         created_by: authUser?.id,
         flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined,
         cargado
       }, optsPedido(m.order));
       setFleteModal(null);
-      addToast(`Pedido ${m.order.order_number} despachado → venta ${result.sale.sale_number}${m.esDelActivo ? "" : ` (${m.order.accionista_name})`}`
+      addToast((m.metodo === "YA_COBRADO" ? `Saldo ${m.order.order_number} entregado (ya estaba cobrado en la venta ${result.sale.sale_number})` :
+        `Pedido ${m.order.order_number} despachado → venta ${result.sale.sale_number}${m.esDelActivo ? "" : ` (${m.order.accionista_name})`}`)
         + (result.flete ? ` · Flete ${money(result.flete.monto)} a Transporte (${result.flete.activo_nombre})` : "")
         + (result.por_confirmar ? ` · 📲 ${result.por_confirmar === "CHECK" ? "Cheque" : "Transferencia"} POR CONFIRMAR: entra a la caja cuando el de caja confirme que llegó` : "")
-        + (result.saldo ? ` · 🚚 Quedó el saldo ${result.saldo.order_number} (${result.saldo.qq.enReal()} QQ, ${money(result.saldo.total)}) en la Cola, ya preparado` : ""), "success");
+        + (result.saldo ? ` · 🚚 Quedó por entregar ${result.saldo.order_number} (${result.saldo.qq.enReal()} QQ, ya cobrado) en la Cola, ya preparado` : ""), "success");
       cargarPorConfirmar();
       await refreshCustomersAndSales();
       await refresh();
@@ -18656,6 +18664,9 @@ Motivo (obligatorio):`, ""));
                       ) : (
                         // PASO 2: ya está listo → elegir método de pago y despachar.
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
+                          {o.ya_cobrado ? (
+                            <span className="colaYaCobrado">✓ Ya cobrado · entrega pendiente</span>
+                          ) : (
                           <select
                             value={metodoPago}
                             onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
@@ -18668,8 +18679,9 @@ Motivo (obligatorio):`, ""));
                             <option value="CHECK">🏦 Banco · cheque</option>
                             <option value="CREDIT">📋 Crédito</option>
                           </select>
+                          )}
                           <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
-                            🚚 Despachar y entregar
+                            {o.ya_cobrado ? "🚚 Entregar saldo" : "🚚 Despachar y entregar"}
                           </button>
                         </div>
                       )}
@@ -18943,11 +18955,13 @@ Motivo (obligatorio):`, ""));
                     <div className="despachoModal__resumen">
                       <span><small>Cliente</small><strong>{o.customer_name}</strong></span>
                       <span><small>Cantidad</small><strong>{qq.enReal()} QQ</strong></span>
-                      {m.modo === "despacho" && <span><small>Total</small><strong>{money(m.parcial ? totalCargado(o, m.cargado) : Number(o.total_amount))}</strong></span>}
-                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "CREDIT" ? "📋 Crédito" : m.metodo === "CASH" ? "💵 Efectivo, a la caja" : "🏦 Por el banco"}</strong></span>}
+                      {m.modo === "despacho" && m.metodo !== "YA_COBRADO" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
+                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "YA_COBRADO" ? "✓ Ya cobrado con el pedido original" : m.metodo === "CREDIT" ? "📋 Crédito" : m.metodo === "CASH" ? "💵 Efectivo, a la caja" : "🏦 Por el banco"}</strong></span>}
                       {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
                     </div>
-                    {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</p>}
+                    {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>{m.metodo === "YA_COBRADO"
+                      ? "Es la entrega pendiente de un pedido que ya se cobró completo: no se cobra otra vez."
+                      : <>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</>}</p>}
 
                     {/* 🚚 ¿El camión se lleva todo? Si no, lo que queda pasa a un pedido saldo ya preparado (2026-10-23). */}
                     {m.modo === "despacho" && (o.items ?? []).every((it) => it.id) && (
@@ -18983,8 +18997,8 @@ Motivo (obligatorio):`, ""));
                                 </tbody>
                               </table>
                               <small className="despachoModal__nota">
-                                Se vende y se cobra solo lo cargado ({qqCargado(o, m.cargado).enReal()} QQ, {money(totalCargado(o, m.cargado))}).
-                                {quedaQq > 0.0001 ? <> Los <b>{quedaQq.enReal()} QQ</b> que quedan pasan a un pedido <b>saldo</b> del mismo cliente, ya preparado, en la Cola para el próximo camión.</> : " Pon cuánto cargó en cada producto."}
+                                {m.metodo === "YA_COBRADO" ? "Ya está cobrado." : <>El cobro no cambia: se cobra el pedido <b>completo</b> ({money(Number(o.total_amount))}), como siempre.</>}
+                                {quedaQq > 0.0001 ? <> Sube ahora {qqCargado(o, m.cargado).enReal()} QQ; los <b>{quedaQq.enReal()} QQ</b> que quedan pasan a una <b>entrega pendiente</b> (ya cobrada), preparada en la Cola para el próximo camión.</> : " Pon cuánto cargó en cada producto."}
                               </small>
                             </>
                           );

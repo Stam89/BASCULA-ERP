@@ -749,7 +749,8 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
 // 🚚 DESPACHO PARCIAL (pedido del dueño 2026-10-23): el camión no se lleva todo. El pedido queda con lo cargado y lo
 // que no subió pasa a un pedido SALDO (PED-…-S1) del mismo cliente, YA PREPARADO (sigue en bodega «por despachar»):
 //  · las líneas del pedido bajan a lo cargado (las que quedan en 0 salen) y el saldo nace con el resto;
-//  · su cuenta del pedido se reparte (lo abonado antes cubre primero lo que se lleva);
+//  · EL COBRO NO CAMBIA: el pedido se vende y cobra COMPLETO como siempre; el saldo es solo la entrega pendiente
+//    (ya_cobrado, sin cuenta por cobrar). Al despacharlo no se vende ni se cobra otra vez;
 //  · el inventario y los sacos descontados al preparar se reparten entre los dos (se reponen y se vuelven a
 //    descontar por pedido, con las mismas funciones de la preparación).
 // Va DENTRO de la transacción del despacho, antes de crear la venta.
@@ -760,7 +761,7 @@ async function separarSaldoDelPedido(
     receivable_id: string | null; parent_order_id?: string | null },
   cargado: Array<{ item_id: string; quantity: number }>,
   createdBy: string | null
-): Promise<{ order_number: string; qq: number; total: number } | null> {
+): Promise<{ order_number: string; qq: number; total: number; itemsVenta: Array<Record<string, unknown>> } | null> {
   const items = (await client.query("SELECT * FROM sales_order_items WHERE order_id = $1 ORDER BY id FOR UPDATE", [order.id])).rows;
   const porItem = new Map(cargado.map((c) => [c.item_id, round2(c.quantity)]));
   for (const id of porItem.keys()) {
@@ -790,13 +791,12 @@ async function separarSaldoDelPedido(
     : order.order_number;
   const n = Number((await client.query("SELECT count(*)::int AS n FROM sales_orders WHERE parent_order_id = $1", [raiz])).rows[0].n) + 1;
   const totalQueda = round2(lineas.reduce((s, l) => s + l.queda * Number(l.it.unit_price), 0));
-  const totalLleva = round2(lineas.reduce((s, l) => s + l.lleva * Number(l.it.unit_price), 0));
   const saldo = (await client.query(
     `INSERT INTO sales_orders (order_number, customer_id, accionista_id, delivery_date, notes, total_amount, created_by, payment_method,
-                               parent_order_id, prepared_at, prepared_by, picking_location)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11) RETURNING *`,
+                               parent_order_id, prepared_at, prepared_by, picking_location, ya_cobrado)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now(), $10, $11, true) RETURNING *`,
     [`${numeroRaiz}-S${n}`, order.customer_id, order.accionista_id, order.delivery_date ?? null,
-     `Saldo del pedido ${order.order_number}: el camión no se lo llevó.${order.notes ? ` ${order.notes}` : ""}`.slice(0, 1000),
+     `Saldo del pedido ${order.order_number} (ya cobrado): el camión no se lo llevó.${order.notes ? ` ${order.notes}` : ""}`.slice(0, 1000),
      totalQueda, createdBy ?? order.created_by, order.payment_method, raiz, order.prepared_by, order.picking_location]
   )).rows[0];
   for (const l of lineas) {
@@ -814,34 +814,18 @@ async function separarSaldoDelPedido(
       await client.query("DELETE FROM sales_order_items WHERE id = $1", [l.it.id]);
     }
   }
-  await client.query("UPDATE sales_orders SET total_amount = $2 WHERE id = $1", [order.id, totalLleva]);
-
-  // La cuenta del pedido se reparte: lo abonado antes cubre primero lo que se lleva.
-  if (order.receivable_id) {
-    const ar = (await client.query("SELECT amount::float AS amount, balance::float AS balance, description FROM accounts_receivable WHERE id = $1 FOR UPDATE", [order.receivable_id])).rows[0];
-    const abonado = round2(Math.max(0, Number(ar.amount) - Number(ar.balance)));
-    const abono1 = round2(Math.min(abonado, totalLleva));
-    const abono2 = round2(abonado - abono1);
-    const saldo1 = round2(totalLleva - abono1);
-    await client.query("UPDATE accounts_receivable SET amount = $2, balance = $3, status = $4 WHERE id = $1",
-      [order.receivable_id, totalLleva, saldo1, saldo1 < 0.01 ? "PAID" : abono1 > 0.005 ? "PARTIAL" : "CONFIRMED"]);
-    const cliente = (await client.query("SELECT full_name FROM customers WHERE id = $1", [order.customer_id])).rows[0]?.full_name ?? "cliente";
-    const saldo2 = round2(totalQueda - abono2);
-    const nueva = (await client.query(
-      `INSERT INTO accounts_receivable (accionista_id, customer_id, reference_type, reference_id, description, amount, balance, status)
-       VALUES ($1, $2, 'sales_order', $3, $4, $5, $6, $7) RETURNING id`,
-      [order.accionista_id, order.customer_id, saldo.id, `Pedido ${saldo.order_number} — ${cliente} (pendiente de despacho)`, totalQueda, saldo2,
-       saldo2 < 0.01 ? "PAID" : abono2 > 0.005 ? "PARTIAL" : "CONFIRMED"]
-    )).rows[0];
-    await client.query("UPDATE sales_orders SET receivable_id = $2 WHERE id = $1", [saldo.id, nueva.id]);
-  }
+  // El cobro no cambia (pedido completo): la cuenta del pedido y su total quedan como estaban.
 
   // Inventario y sacos de la preparación, ahora repartidos entre los dos pedidos (el saldo queda preparado).
   await descontarInventarioPreparacion(client, { orderId: order.id, accionistaId: order.accionista_id ?? undefined, warehouseId: bodega, createdBy });
   await descontarSacosPedido(client, order.id);
   await descontarInventarioPreparacion(client, { orderId: saldo.id, accionistaId: order.accionista_id ?? undefined, warehouseId: bodega, createdBy });
   await descontarSacosPedido(client, saldo.id);
-  return { order_number: saldo.order_number, qq: round2(lineas.reduce((s, l) => s + l.queda, 0)), total: totalQueda };
+  return {
+    order_number: saldo.order_number, qq: round2(lineas.reduce((s, l) => s + l.queda, 0)), total: totalQueda,
+    // Lo que se vende y cobra: el pedido COMPLETO (las líneas como estaban antes de separar el saldo).
+    itemsVenta: lineas.map((l) => l.it)
+  };
 }
 
 // Despachar y cobrar: el pedido se convierte en venta en UNA transacción.
@@ -863,7 +847,9 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
   // y entra a la caja cuando el de caja confirma que llegó (Caja › Transferencias por confirmar).
   const porConfirmar = body.payment_method === "TRANSFER" || body.payment_method === "CHECK" ? body.payment_method : null;
 
-  if (body.payment_method !== "CREDIT" && !porConfirmar && !body.cash_register_id) {
+  // Un saldo de despacho parcial ya se cobró con su pedido: no pide caja ni forma de pago.
+  const esSaldoCobrado = !!(await pool.query("SELECT ya_cobrado FROM sales_orders WHERE id = $1", [req.params.id])).rows[0]?.ya_cobrado;
+  if (!esSaldoCobrado && body.payment_method !== "CREDIT" && !porConfirmar && !body.cash_register_id) {
     throw new ApiError(400, "Abre una caja para cobrar el pedido (o despáchalo a crédito).");
   }
 
@@ -880,15 +866,15 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     if (!order.rows[0].prepared_at) {
       throw new ApiError(409, "Confirma la preparación del pedido (📦 Confirmar Preparación) antes de despacharlo.");
     }
+    const yaCobrado = !!order.rows[0].ya_cobrado;
     // El cobro entra a una caja ABIERTA del mismo socio dueño del pedido.
-    if (body.payment_method !== "CREDIT" && !porConfirmar && body.cash_register_id) {
+    if (!yaCobrado && body.payment_method !== "CREDIT" && !porConfirmar && body.cash_register_id) {
       await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
     }
     // 🚚 El camión no se lleva todo: lo que queda pasa a un pedido saldo (ya preparado) antes de vender lo cargado.
     const saldo = body.cargado?.length
       ? await separarSaldoDelPedido(client, order.rows[0], body.cargado, body.created_by ?? null)
       : null;
-    if (saldo) order.rows[0].total_amount = (await client.query("SELECT total_amount FROM sales_orders WHERE id = $1", [req.params.id])).rows[0].total_amount;
 
     const items = await client.query(
       "SELECT * FROM sales_order_items WHERE order_id = $1",
@@ -896,9 +882,17 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     );
     if (!items.rowCount) throw new ApiError(409, "El pedido no tiene líneas.");
 
+    // Saldo ya cobrado: no hay venta nueva; la entrega queda ligada a la venta del pedido original.
+    const ventaOriginal = yaCobrado
+      ? (await client.query(
+          `SELECT s.* FROM sales_orders o JOIN sales s ON s.id = o.sale_id WHERE o.id = $1 AND s.sale_status <> 'CANCELLED'`,
+          [order.rows[0].parent_order_id]
+        )).rows[0]
+      : null;
+    if (yaCobrado && !ventaOriginal) throw new ApiError(409, "La venta del pedido original de este saldo no existe o fue anulada.");
     // El pedido ya generó su cuenta por cobrar al tomarse: la venta no debe
     // crear otra, sería cobrar dos veces lo mismo.
-    const sale = await crearVenta(
+    const sale = ventaOriginal ?? await crearVenta(
       client,
       accionistaId,
       {
@@ -912,7 +906,8 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
         // pasa presentation_id para que crearVenta NO la reconvierta por peso de
         // saco (eso descontaría mal el stock). La presentación es solo metadato de
         // la Guía de Remisión. El descuento de inventario es exactamente en QQ.
-        items: items.rows.map((item) => ({
+        // Con despacho parcial se vende el pedido COMPLETO (el cobro no cambia); el saldo es solo entrega.
+        items: (saldo?.itemsVenta ?? items.rows).map((item) => ({
           product_id: item.inventory_product_id,
           warehouse_id: body.warehouse_id,
           presentation_id: undefined,
@@ -929,7 +924,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // Qué pasa con la cuenta del pedido al despachar:
     //  · cobrado ahora  -> se salda y el dinero entra a la caja.
     //  · a crédito      -> sigue viva, ahora enlazada a la venta.
-    if (order.rows[0].receivable_id) {
+    if (!yaCobrado && order.rows[0].receivable_id) {
       if (body.payment_method === "CREDIT" || porConfirmar) {
         await client.query(
           `UPDATE accounts_receivable
@@ -956,7 +951,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     }
 
     // Pedido viejo sin cuenta propia: la venta a crédito creó la suya; se marca por confirmar.
-    if (!order.rows[0].receivable_id && porConfirmar) {
+    if (!yaCobrado && !order.rows[0].receivable_id && porConfirmar) {
       await client.query(
         "UPDATE accounts_receivable SET por_confirmar = $2, por_confirmar_desde = now() WHERE sale_id = $1 AND status <> 'CANCELLED'",
         [sale.id, porConfirmar]
@@ -1007,7 +1002,8 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
     // solo se registra la venta y, si aplica, el CARGO financiero por empaque.
 
-    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete, por_confirmar: porConfirmar, saldo };
+    return { order_number: order.rows[0].order_number, sale, cargo_empaque: cargoEmpaque, flete, por_confirmar: yaCobrado ? null : porConfirmar,
+      saldo: saldo ? { order_number: saldo.order_number, qq: saldo.qq, total: saldo.total } : null, entrega_ya_cobrada: yaCobrado };
   });
 
   res.json(result);
@@ -1125,6 +1121,10 @@ ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, r
     if (!order) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
     if (order.status === "CANCELLED") throw new ApiError(409, "Este pedido ya está anulado.");
     if (order.status !== "DELIVERED" || !order.sale_id) throw new ApiError(409, "Solo se anula así un pedido ya despachado. Uno pendiente se cancela normal.");
+    if (order.ya_cobrado) {
+      const raiz = (await client.query("SELECT order_number FROM sales_orders WHERE id = $1", [order.parent_order_id])).rows[0]?.order_number ?? "original";
+      throw new ApiError(409, `Es la entrega de un saldo ya cobrado en el pedido ${raiz}: para deshacer, anula el despacho del pedido ${raiz} (se anula todo junto).`);
+    }
     const sale = (await client.query("SELECT * FROM sales WHERE id = $1 FOR UPDATE", [order.sale_id])).rows[0];
     if (!sale) throw new ApiError(404, "No se encontró la venta de este pedido.");
     const total = round2(Number(sale.total_amount));
@@ -1197,6 +1197,31 @@ ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, r
     // 5) Arroz y sacos vuelven a la bodega.
     await restaurarInventarioPreparacion(client, order.id);
 
+    // 5b) Sus saldos de despacho parcial (ya cobrados con esta venta) se anulan con ella: lo entregado y lo pendiente.
+    const saldos = (await client.query(
+      "SELECT * FROM sales_orders WHERE parent_order_id = $1 AND ya_cobrado AND status <> 'CANCELLED' FOR UPDATE", [order.id]
+    )).rows;
+    for (const s of saldos) {
+      const cargoS = (await client.query("SELECT * FROM matriz_packaging_charges WHERE order_id = $1 AND status <> 'ANULADO' FOR UPDATE", [s.id])).rows[0];
+      if (cargoS) {
+        const pagos = (await client.query(
+          `SELECT 1 FROM accounts_receivable WHERE id = $1 AND status <> 'CANCELLED' AND balance + 0.005 < amount
+           UNION ALL SELECT 1 FROM accounts_payable WHERE id = $2 AND status <> 'CANCELLED' AND balance + 0.005 < amount`, [cargoS.receivable_id, cargoS.payable_id]
+        )).rowCount;
+        if (pagos) throw new ApiError(409, `El cargo de empaque del saldo ${s.order_number} ya tiene pagos: anúlalos primero en Caja.`);
+        await client.query("UPDATE accounts_receivable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [cargoS.receivable_id]);
+        await client.query("UPDATE accounts_payable SET balance = 0, status = 'CANCELLED' WHERE id = $1", [cargoS.payable_id]);
+        await client.query("UPDATE matriz_packaging_charges SET status = 'ANULADO' WHERE id = $1", [cargoS.id]);
+      }
+      await quitarFleteVenta(client, s.id);
+      await revertCuadrillaDespachoVentaEntry(client, s.id);
+      await restaurarInventarioPreparacion(client, s.id);
+      await client.query(
+        `UPDATE sales_orders SET status = 'CANCELLED', anulado_at = now(), anulado_motivo = $2, anulado_by = $3 WHERE id = $1`,
+        [s.id, `Se anuló el pedido ${order.order_number}: ${body.motivo}`, user?.id ?? null]
+      );
+    }
+
     // 6) Estados finales (nada se borra).
     await client.query("UPDATE sales SET sale_status = 'CANCELLED' WHERE id = $1", [sale.id]);
     await client.query(
@@ -1220,6 +1245,9 @@ ordersRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
     );
     if (!order.rowCount) throw new ApiError(404, "Pedido no encontrado para el accionista seleccionado");
     if (order.rows[0].status === "DELIVERED") throw new ApiError(409, "Ya fue despachado: cancela desde ventas si hace falta.");
+    if (order.rows[0].ya_cobrado) {
+      throw new ApiError(409, "Este saldo ya está cobrado con su pedido original: no se cancela solo. Entrégalo, o anula el despacho del pedido original (devuelve todo).");
+    }
 
     // Si ya se cobró algo del pedido, cancelarlo dejaría plata sin respaldo.
     if (order.rows[0].receivable_id) {
