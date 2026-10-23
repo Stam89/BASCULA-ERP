@@ -1876,6 +1876,33 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
+// 🚜 Transporte y Cosechadora en el editor de permisos: columna propia (pedido del dueño 2026-10-22). Por dentro sigue
+// siendo el permiso «Transporte / Cosechadora» de la Matriz: al abrir se separa y al guardar se vuelve a juntar.
+const COL_TRANSPORTE = "__TRANSPORTE__";
+const MOD_TRANSPORTE = "Transporte / Cosechadora";
+const esPermisoTransporte = (x: string) => x === MOD_TRANSPORTE || x === `EDIT:${MOD_TRANSPORTE}` || x.startsWith(`SUB:${MOD_TRANSPORTE}:`) || x.startsWith(`RO:SUB:${MOD_TRANSPORTE}:`);
+type ItemPermisos = { accionista_id: string; access: boolean; modules: string[] };
+function separarTransporte(items: ItemPermisos[], matrizId: string | null): ItemPermisos[] {
+  if (!matrizId) return items;
+  const out: ItemPermisos[] = [];
+  for (const it of items) {
+    if (it.accionista_id !== matrizId) { out.push(it); continue; }
+    const tr = it.modules.filter(esPermisoTransporte);
+    const resto = it.modules.filter((x) => !esPermisoTransporte(x));
+    out.push({ ...it, modules: resto, access: it.access && (resto.length > 0 || tr.length === 0) });
+    out.push({ accionista_id: COL_TRANSPORTE, access: it.access && tr.includes(MOD_TRANSPORTE), modules: tr });
+  }
+  return out;
+}
+function juntarTransporte(items: ItemPermisos[], matrizId: string | null): ItemPermisos[] {
+  const tr = items.find((x) => x.accionista_id === COL_TRANSPORTE);
+  const conTr = !!tr && tr.access && tr.modules.includes(MOD_TRANSPORTE);
+  return items.filter((x) => x.accionista_id !== COL_TRANSPORTE).map((it) => it.accionista_id !== matrizId ? it : {
+    ...it,
+    access: it.access || conTr,
+    modules: [...it.modules.filter((x) => !esPermisoTransporte(x)), ...(conTr ? tr!.modules.filter(esPermisoTransporte) : [])]
+  });
+}
 // «Solo ver» de UNA sub-pestaña: quita la edición de esa sub-pestaña aunque el
 // usuario tenga EDIT:<Módulo>. Sin ninguna clave RO:SUB: todo queda como antes
 // (cada sub-pestaña visible se edita si el módulo se edita). El backend la respeta
@@ -5566,7 +5593,7 @@ export function App() {
 
   async function saveUserAccionistas() {
     if (!accionistaEditor) return;
-    const accionistas = accionistaEditor.items
+    const accionistas = juntarTransporte(accionistaEditor.items, matrizAccionista?.id ?? null)
       .filter((it) => it.access)
       .map((it) => ({ accionista_id: it.accionista_id, modules: it.modules }));
     await apiPut(`/auth/users/${accionistaEditor.user.id}/accionistas`, { accionistas });
@@ -26025,11 +26052,11 @@ Motivo (obligatorio):`, ""));
                                     const byAcc = new Map((u.accionista_modules ?? []).map((x) => [x.accionista_id, x.modules ?? []]));
                                     setAccionistaEditor({
                                       user: u,
-                                      items: adminAccionistas.map((a) => ({
+                                      items: separarTransporte(adminAccionistas.map((a) => ({
                                         accionista_id: a.id,
                                         access: byAcc.has(a.id),
                                         modules: byAcc.get(a.id) ?? []
-                                      }))
+                                      })), matrizAccionista?.id ?? null)
                                     });
                                   }}
                                 >
@@ -26148,14 +26175,11 @@ Motivo (obligatorio):`, ""));
 
                 {accionistaEditor && (() => {
                   const items = accionistaEditor.items;
-                  const nombreAcc = (id: string) => adminAccionistas.find((a) => a.id === id)?.name ?? id;
-                  // Transporte y Cosechadora es una operación de la MATRIZ: en las columnas de los socios no aplica.
-                  const noAplicaEn = (moduleKey: string, accionistaId: string) => {
-                    if (moduleKey !== "Transporte / Cosechadora") return false;
-                    const tipo = accionistas.find((a) => a.id === accionistaId)?.tipo;
-                    return tipo !== undefined && tipo !== "MATRIZ";
-                  };
-                  const noAplica = <span className="muted" title="Transporte y Cosechadora se maneja desde la Matriz: dale el permiso en la columna de la Matriz." style={{ fontSize: 12 }}>—</span>;
+                  const nombreAcc = (id: string) => id === COL_TRANSPORTE ? "🚜 TRANSPORTE Y COSECHADORA" : adminAccionistas.find((a) => a.id === id)?.name ?? id;
+                  // Transporte y Cosechadora tiene su propia columna: ahí solo aplica su fila; en las demás, esa fila no.
+                  const noAplicaEn = (moduleKey: string, accionistaId: string) =>
+                    accionistaId === COL_TRANSPORTE ? moduleKey !== MOD_TRANSPORTE : moduleKey === MOD_TRANSPORTE;
+                  const noAplica = <span className="muted" title="No aplica en esta columna (Transporte y Cosechadora tiene la suya)." style={{ fontSize: 12 }}>—</span>;
                   const setItem = (idx: number, patch: Partial<{ access: boolean; modules: string[] }>) =>
                     setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x, i) => (i === idx ? { ...x, ...patch } : x)) }));
                   // Alterna un permiso simple (fila PERM:* de acción). Activa el acceso.
@@ -26200,13 +26224,16 @@ Motivo (obligatorio):`, ""));
                   };
                   // Marcar todo = VER + EDITAR de cada módulo + permisos especiales.
                   const allKeysConEdit = [...PERM_ALL_KEYS, ...PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:")).map((k) => `EDIT:${k}`)];
-                  const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: [...new Set(allKeysConEdit)] });
+                  const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: items[idx].accionista_id === COL_TRANSPORTE
+                    ? [MOD_TRANSPORTE, `EDIT:${MOD_TRANSPORTE}`]
+                    : [...new Set(allKeysConEdit.filter((k) => !esPermisoTransporte(k)))] });
                   const colLimpiar = (idx: number) => setItem(idx, { access: false, modules: [] });
                   // Copia los permisos del PRIMER accionista (plantilla) al resto.
                   const duplicarATodos = () => {
                     const src = items[0];
                     if (!src) return;
-                    setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x) => ({ ...x, access: src.access, modules: [...src.modules] })) }));
+                    setAccionistaEditor((ed) => ed && ({ ...ed, items: ed.items.map((x) => x.accionista_id === COL_TRANSPORTE || x === src ? x
+                      : ({ ...x, access: src.access, modules: src.modules.filter((k) => !esPermisoTransporte(k)) })) }));
                     addToast(`Permisos de ${nombreAcc(src.accionista_id)} duplicados a todos`, "success");
                   };
                   const cellStyle = { padding: "4px 8px", textAlign: "center" as const, borderBottom: "1px solid var(--c-border)" };
