@@ -1,8 +1,20 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-22
+Actualizado: 2026-10-23
 
-## Último cambio: Pedidos sin conexión (apagón o PC hibernando)
+## Último cambio: Proceso guardado cuenta en inventario (Producción)
+
+- «Guardar Proceso» (PUT /processing-batches/drafts/:id) ya suma al inventario de producto terminado lo pilado
+  (blanco 0.11/corriente según el túnel + arrocillo 3/4, fino y polvillo del reporte), del socio dueño del lote.
+- Movimientos PROCESS_OUTPUT con reference_type `milling_draft` (reference_id = túnel); cada guardado inserta solo
+  la diferencia (`services/borrador-pilado-inventario.ts`, `sincronizarInventarioBorrador`). Lotes de servicio
+  (maquila) no mueven nada.
+- Descartar el borrador retira lo sumado; finalizar (finish-production y /finish) lo retira y entran las salidas
+  reales. Un túnel ya cerrado no se puede volver a guardar (409). Kardex: «Proceso guardado (pilado en curso)».
+- Simulacro `proceso_guardado_inventario`. Nota: en la base real ROVINSON ya tenía blanco negativo (-29.05 0.11,
+  -6.83 corriente) antes de este cambio (hace fallar D4 de `produccion`).
+
+## Cambio anterior: Pedidos sin conexión (apagón o PC hibernando)
 
 - El personal toma pedidos en el celular aunque erp.ceyroerp.com no responda (Cloudflare 520–530 o sin red =
   `SIN_CONEXION`). El pedido queda en IndexedDB (`web-admin/src/offline/`, base `bascula-erp-offline`, stores

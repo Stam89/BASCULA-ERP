@@ -9,6 +9,7 @@ export function nombreMovimiento(movement: string, referencia: string | null, ca
     case "weighing_tickets": return "Ingreso de báscula";
     case "processing_batches":
     case "processing_batch": return movement === "PROCESS_INPUT" || cantidad < 0 ? "Pilado · consumo" : "Pilado · producción";
+    case "milling_draft": return cantidad < 0 ? "Proceso guardado · ajuste / cierre" : "Proceso guardado (pilado en curso)";
     case "sales_order": return "Despacho de pedido";
     case "sales": return "Venta";
     case "saldo_inicial": return "Saldo inicial (arranque)";

@@ -12092,7 +12092,9 @@ export function App() {
     if (!effEntries) return;
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
       report: { ...millingReport, juntos: productionDryingExtras },
-      pilado_entries: effEntries
+      pilado_entries: effEntries,
+      // Lo guardado ya cuenta en el inventario de producto terminado.
+      warehouse_id: finishedWarehouse?.id
     });
     await loadMillingDrafts();
     // Al guardar, el formulario SE LIMPIA: el proceso queda a salvo en el
@@ -12103,7 +12105,7 @@ export function App() {
     setMillingYields(null);
     setMillingDraftSavedAt(null);
     setProductionDryingId(""); setProductionDryingExtras([]);
-    addToast("Proceso guardado. El formulario quedó limpio: retómalo desde «Procesos guardados» con Continuar / Finalizar lote.", "success");
+    addToast(`Proceso guardado: lo pilado ya cuenta en el inventario${millingEsServicio ? " (salvo servicio de pilada: el arroz es del cliente)" : ""}. Retómalo desde «Procesos guardados» con Continuar / Finalizar lote.`, "success");
   }
 
   async function loadMillingDrafts() {
@@ -12115,7 +12117,7 @@ export function App() {
   // borrador, el lote se LIBERA y vuelve a aparecer en el selector de producción
   // (se recargan los borradores y los reportes → has_draft se recalcula).
   async function descartarBorradorProduccion(d: MillingDraft) {
-    if (!(await confirmar(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra solo el borrador; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`))) return;
+    if (!(await confirmar(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra el borrador y lo que había sumado al inventario se retira; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`))) return;
     try {
       const r = await apiFetch(`/processing-batches/drafts/${d.drying_report_id}`, { method: "DELETE" });
       if (!r.ok) throw new Error("No se pudo descartar el proceso guardado");

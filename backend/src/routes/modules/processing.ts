@@ -16,6 +16,7 @@ import { createProductionWorkerPayments } from "./labor.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
+import { sincronizarInventarioBorrador } from "../../services/borrador-pilado-inventario.js";
 
 export const processingRouter = Router();
 
@@ -33,8 +34,21 @@ const draftSchema = z.object({
     destino: z.enum(["TULA", "SACO"]).optional(),
     tulas: z.number().nonnegative().optional()
   })).default([]),
-  saved_by: z.string().uuid().optional()
+  saved_by: z.string().uuid().optional(),
+  // Bodega de producto terminado donde ya cuenta lo guardado (si no llega, la de producto terminado).
+  warehouse_id: z.string().uuid().optional()
 });
+
+/** Al cerrar un proceso, lo que su borrador había puesto en inventario se retira (entran las salidas reales). */
+async function retirarInventarioDeBorradores(client: PoolClient, processingBatchId: string, dryingReportId: string | null, createdBy?: string | null) {
+  const ids = new Set<string>(dryingReportId ? [dryingReportId] : []);
+  const r = await client.query(
+    "SELECT DISTINCT drying_report_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NOT NULL",
+    [processingBatchId]
+  );
+  for (const x of r.rows) ids.add(String(x.drying_report_id));
+  for (const id of ids) await sincronizarInventarioBorrador(client, id, null, createdBy);
+}
 
 // Procesos de pilado guardados (en curso) del accionista activo. Se sigue
 // mostrando aunque exista un processing_batch ABIERTO (sin finished_at), así
@@ -234,22 +248,38 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   const drying = await pool.query("SELECT 1 FROM drying_tunnel_reports WHERE id = $1", [req.params.dryingId]);
   if (!drying.rowCount) throw new ApiError(404, "Secado no encontrado");
 
-  const result = await pool.query(
-    `INSERT INTO milling_drafts (drying_report_id, accionista_id, report, pilado_entries, saved_by)
-     VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
-     ON CONFLICT (drying_report_id) DO UPDATE SET
-       report = EXCLUDED.report,
-       pilado_entries = EXCLUDED.pilado_entries,
-       saved_by = EXCLUDED.saved_by,
-       saved_at = now()
-     RETURNING drying_report_id, report, pilado_entries, saved_at`,
-    [req.params.dryingId, accionistaId, JSON.stringify(body.report), JSON.stringify(body.pilado_entries), body.saved_by ?? null]
+  const dryingId = String(req.params.dryingId);
+  const cerrado = await pool.query(
+    "SELECT 1 FROM processing_batches WHERE drying_report_id = $1 AND finished_at IS NOT NULL AND status <> 'CANCELLED' LIMIT 1",
+    [dryingId]
   );
-  res.json(result.rows[0]);
+  if (cerrado.rowCount) throw new ApiError(409, "Este túnel ya se piló y se cerró: no se puede guardar otra vez su proceso.");
+
+  const result = await inTransaction(async (client) => {
+    const r = await client.query(
+      `INSERT INTO milling_drafts (drying_report_id, accionista_id, report, pilado_entries, saved_by)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
+       ON CONFLICT (drying_report_id) DO UPDATE SET
+         report = EXCLUDED.report,
+         pilado_entries = EXCLUDED.pilado_entries,
+         saved_by = EXCLUDED.saved_by,
+         saved_at = now()
+       RETURNING drying_report_id, report, pilado_entries, saved_at`,
+      [dryingId, accionistaId, JSON.stringify(body.report), JSON.stringify(body.pilado_entries), body.saved_by ?? null]
+    );
+    // Lo ya pilado y guardado cuenta en inventario desde ahora.
+    await sincronizarInventarioBorrador(client, dryingId, { entradas: body.pilado_entries, reporte: body.report, warehouseId: body.warehouse_id }, body.saved_by);
+    return r.rows[0];
+  });
+  res.json(result);
 }));
 
 processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
-  await pool.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
+  await inTransaction(async (client) => {
+    await client.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
+    // Descartado: lo que había puesto en inventario se retira.
+    await sincronizarInventarioBorrador(client, String(req.params.dryingId), null);
+  });
   res.status(204).end();
 }));
 
@@ -503,6 +533,8 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const batch = batchResult.rows[0];
     if (batch.finished_at) throw new ApiError(409, "El proceso ya fue cerrado");
     await exigirLoteDelProceso(client, processingBatchId, String(batch.lot_id), body.lot_id);
+    // Lo que el «Proceso guardado» ya tenía en inventario se retira: ahora entran las salidas reales del lote.
+    await retirarInventarioDeBorradores(client, processingBatchId, batch.drying_report_id ?? null, body.created_by);
 
     // El arroz procesado pertenece al accionista dueño del lote, sin importar
     // qué accionista tenga seleccionado el usuario que cierra la pilada.
@@ -1414,11 +1446,12 @@ processingRouter.post("/:id/finish", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     // Candado y comprobaciones: un proceso se cierra UNA sola vez y con su propio lote (sin esto, un doble clic
     // duplicaba las salidas del inventario).
-    const proceso = (await client.query("SELECT id, lot_id, finished_at, status FROM processing_batches WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    const proceso = (await client.query("SELECT id, lot_id, drying_report_id, finished_at, status FROM processing_batches WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!proceso) throw new ApiError(404, "Proceso no encontrado");
     if (proceso.finished_at) throw new ApiError(409, "El proceso ya fue cerrado");
     if (proceso.status === "CANCELLED") throw new ApiError(409, "El proceso de este lote fue anulado");
     await exigirLoteDelProceso(client, String(req.params.id), String(proceso.lot_id), body.lot_id);
+    await retirarInventarioDeBorradores(client, String(req.params.id), proceso.drying_report_id ?? null, body.created_by);
     // El inventario producido se atribuye al accionista dueño del lote.
     const lotOwner = await client.query("SELECT accionista_id FROM lots WHERE id = $1", [body.lot_id]);
     if (!lotOwner.rowCount) throw new ApiError(404, "Lote no encontrado");
