@@ -16,6 +16,9 @@ export const APP_MODULES = [
   "Ventas",
   "Compras",
   "Caja",
+  // 🛒 Mostrador (pedido del dueño 2026-10-22): la tablet de báscula solo registra ventas al detalle (POST
+  // /sales/retail) en la caja abierta de la Matriz. Nada más del ERP.
+  "Mostrador",
   "Por Cobrar",
   "Por Pagar",
   "Liquidaciones",
@@ -49,7 +52,7 @@ const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   // por pagar: mismo permiso que el inventario.
   "selection": ["Inventario", "Produccion", "Caja", "Seleccion"],
   // Caja registra Venta al detalle mediante la misma transacción segura de Ventas.
-  "sales": ["Ventas", "Caja"],
+  "sales": ["Ventas", "Caja", "Mostrador"],
   "orders": ["Ventas"],
   "guias-remision": ["Ventas"],
   "customers": ["Ventas"],
@@ -118,7 +121,7 @@ const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
   "sales": { modules: ["Ventas", "Caja", "Por Cobrar"] },
   "orders": { modules: ["Ventas", "Caja", "Por Cobrar", "Inventario"] },
   "guias-remision": { modules: ["Ventas"] },
-  "customers": { modules: ["Ventas", "Caja", "Por Cobrar", "Servicio Pilado"] },
+  "customers": { modules: ["Ventas", "Caja", "Por Cobrar", "Servicio Pilado", "Mostrador"] },
   "documents": { modules: ["Bascula", "Liquidaciones", "Ventas", "Caja", "Por Cobrar"] },
   "finance": { modules: ["Estados Financieros", "Caja", "Costos Operativos", "Por Pagar", "Por Cobrar"], abiertas: [/^\/bank\/accounts\/?$/] },
   "costos": { modules: ["Costos Operativos", "Caja", "Produccion", "Estados Financieros"] },
@@ -362,7 +365,13 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
     // Sub-pestañas: RO:SUB:<módulo>:<sub> = «Solo ver» en esa sub-pestaña.
     const allowed: string[] = fresh.rows[0].allowed_modules ?? [];
     const rest = forzado ? req.path : req.path.slice(prefix.length + 1);
-    if (requiredModules.some((module) => moduloPermiteEscritura(allowed, module, prefix, req.method, rest))) {
+    const permiten = requiredModules.filter((module) => moduloPermiteEscritura(allowed, module, prefix, req.method, rest));
+    if (permiten.length > 0) {
+      // Mostrador: solo la venta al detalle.
+      if (permiten.every((m) => m === "Mostrador") && !(prefix === "sales" && req.method === "POST" && /^\/retail\/?$/.test(rest))) {
+        next(new ApiError(403, "Desde el Mostrador solo se registran ventas al detalle."));
+        return;
+      }
       next();
       return;
     }

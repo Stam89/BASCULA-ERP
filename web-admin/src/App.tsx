@@ -1778,7 +1778,8 @@ const TAB_LABELS: Record<string, string> = {
   "Servicio Pilado": "Servicio de Secado",
   // Solo el texto visible (pedido del dueño 2026-10-20): las claves internas, permisos y efectos no cambian.
   Dashboard: "Inicio", Bascula: "Báscula", Produccion: "Producción", Seleccion: "Selección",
-  Nomina: "Nómina", Configuracion: "Configuración"
+  Nomina: "Nómina", Configuracion: "Configuración",
+  Mostrador: "Venta al detalle"
 };
 function tabLabel(tab: string): string { return TAB_LABELS[tab] ?? tab; }
 // Modulos asignables a un operador = TODAS las pestanas del Sidebar excepto
@@ -1786,7 +1787,8 @@ function tabLabel(tab: string): string { return TAB_LABELS[tab] ?? tab; }
 // seccion nueva al Sidebar, aparece SOLA como permiso, sin tocar esta lista.
 // «Transporte / Cosechadora» (Caja de Campo) no es una pestaña del menú (se entra desde el selector de
 // operación) pero sí un permiso asignable.
-const APP_MODULES: string[] = [...tabs.filter((t) => t !== "Configuracion"), "Transporte / Cosechadora"];
+// «Mostrador» (2026-10-22): la tablet de báscula solo para ventas al detalle (pantalla propia, sin el resto del ERP).
+const APP_MODULES: string[] = [...tabs.filter((t) => t !== "Configuracion"), "Transporte / Cosechadora", "Mostrador"];
 
 // Matriz de permisos (modal "Accionistas y permisos"): filas agrupadas por sección
 // del menú + módulos especiales + permisos de acción críticos. Las claves se guardan
@@ -1802,7 +1804,8 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
     // «Gestión de Cuadrilla» y «Bancos» se quitaron (2026-10-08): no abrían ninguna pantalla ni
     // permitían nada. La cuadrilla se gobierna con Nómina › Cuadrilla / Bajada de carro.
   ] },
-  { label: "COMERCIAL", rows: [{ key: "Ventas", label: "Ventas" }, { key: "Compras", label: "Compras" }, { key: "Caja", label: "Caja" }] },
+  { label: "COMERCIAL", rows: [{ key: "Ventas", label: "Ventas" }, { key: "Compras", label: "Compras" }, { key: "Caja", label: "Caja" },
+    { key: "Mostrador", label: "🛒 Mostrador (tablet: solo venta al detalle)" }] },
   { label: "CUENTAS", rows: [{ key: "Por Cobrar", label: "Por Cobrar" }, { key: "Por Pagar", label: "Por Pagar" }] },
   { label: "FINANZAS", rows: [
     { key: "Liquidaciones", label: "Liquidaciones" }, { key: "Fomentos", label: "Fomentos" },
@@ -5345,6 +5348,8 @@ export function App() {
           // secciones nuevas del Sidebar entran solas por allowed.has(tab).
           return allowed.has(tab);
         });
+    // 🛒 Solo «Mostrador»: la tablet ve únicamente la venta al detalle (ni Inicio ni el menú).
+    if (!isAdmin && allowed.has("Mostrador") && base.every((t) => t === "Dashboard") && !allowed.has("Transporte / Cosechadora")) return ["Mostrador"];
     const vis = base.filter((tab) => !soloMatriz.has(tab) || esMatrizActiva);
     // "Caja de Campo" es una operación de la matriz: se entra desde el selector de
     // accionista (arriba), no desde el sidebar. Se admite en el guard de
@@ -5390,7 +5395,7 @@ export function App() {
 
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
-      setActiveTab("Dashboard");
+      setActiveTab(visibleTabs.includes("Dashboard") || visibleTabs.length === 0 ? "Dashboard" : visibleTabs[0]);
     }
   }, [authUser, visibleTabs, activeTab]);
 
@@ -9098,12 +9103,12 @@ export function App() {
     }
     if (activeTab === "Inventario") { refreshSacks().catch(() => undefined); refreshInvMovs().catch(() => undefined); }
     // Caja → Venta Detalle: clientes (con su descuento por QQ) y el descuento por defecto; también Configuración → Tarifas por libra.
-    if (activeTab === "Caja" || activeTab === "Configuracion") {
+    if (activeTab === "Caja" || activeTab === "Configuracion" || activeTab === "Mostrador") {
       apiGet<Customer[]>("/customers").then(setCustomers).catch(() => undefined);
       apiGet<{ descuento_qq_defecto: number }>("/products/venta-detalle-config")
         .then((c) => setDescuentoQqDefecto(Number(c.descuento_qq_defecto))).catch(() => undefined);
     }
-    if (activeTab === "Caja") {
+    if (activeTab === "Caja" || activeTab === "Mostrador") {
       apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle")
         .then(setPersonasVentaDetalle).catch(() => undefined);
     }
@@ -14402,6 +14407,45 @@ Motivo (obligatorio):`, ""));
         </header>
         <div className="content">
         <BannerConexion conexion={conexionServidor} pendientes={pedidosEnCelular} onEnviarAhora={enviarPedidosAhora} />
+
+        {/* 🛒 MOSTRADOR (pedido del dueño 2026-10-22): la tablet de báscula solo vende al detalle. La plata entra a la caja
+            abierta de la Matriz como «Decidir después»; el cajero la asigna al cierre. */}
+        {activeTab === "Mostrador" && authUser && (
+          <section className="mostrador">
+            {!dashboard.current_cash_register?.id ? (
+              <div className="alertBox" style={{ fontSize: 15 }}>
+                🔒 La caja de {matrizName || "la Matriz"} no está abierta. Pide al cajero que la abra para poder vender.
+                <button type="button" className="btnSecondary" style={{ marginLeft: 8 }} onClick={() => { refresh().catch(() => undefined); }}>↻ Revisar otra vez</button>
+              </div>
+            ) : (
+              <>
+                <div className="mostrador__cab">
+                  <span>🛒 Venta al detalle · caja de <b>{matrizName || "la Matriz"}</b></span>
+                  <small>La plata entra a la caja abierta. Entrégala al cajero.</small>
+                </div>
+                {dashboard.current_cash_register?.tipo === "MIXTO" && (
+                  <div className="cj-card" style={{ padding: "10px 14px", marginBottom: 10 }}>
+                    <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
+                  </div>
+                )}
+                <VentaDetalleCard
+                  productos={productosVentaDetalle()}
+                  personas={personasVentaDetalle.length > 0 ? personasVentaDetalle : customers.map((c) => ({
+                    key: `CUSTOMER:${c.id}`, full_name: c.full_name, phone: c.phone, customer_id: c.id, descuento_qq: c.descuento_qq ?? null, roles: ["Cliente"]
+                  }))}
+                  descuentoQqDefecto={descuentoQqDefecto}
+                  onRegistrar={registrarVentaDetalle}
+                  duenos={esMatrizActiva ? sociosDelGasto.map((a) => ({ id: a.id, name: a.name })) : []}
+                  dueno={ventaDetalleDueno}
+                  onDueno={setVentaDetalleDueno}
+                  duenoPropio={matrizName || "la Matriz"}
+                  permitirDespues={esMatrizActiva && sociosDelGasto.length > 0}
+                  onAviso={(m) => addToast(m, "error")}
+                  enlaceTarifas={(texto) => <span>{texto}</span>} />
+              </>
+            )}
+          </section>
+        )}
 
         {/* 📂 Cambio rápido de accionista dentro del módulo (como «Vendiendo como» de Ventas): solo los
             accionistas en los que el usuario tiene ESTE módulo. Ventas ya tiene el suyo; Transporte es de la Matriz. */}
