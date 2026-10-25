@@ -94,7 +94,31 @@ export const WIPE_TABLES = [
   // Cifras manuales del Resultado mensual (hipoteca, ganancias de envejecido/
   // selectado…): las de la marcha blanca eran de ensayo. Los rubros (costo_rubros)
   // y su enlace con las categorías de Caja se conservan.
-  "resultado_mensual_manual"
+  "resultado_mensual_manual",
+  // Guardianías del secador: Nómina arma SOLA el pago de cada turno; si quedaban, tras el borrado reaparecía un saldo
+  // pendiente en Nómina (caso real 2026-10-25). Y el resto de movimientos que hoy solo caían por el CASCADE: se nombran
+  // para que se borren aunque cambie una FK.
+  "secador_guardias",
+  "drying_tunnel_cuadrilla",
+  "motor_fuel_partes",
+  "costo_operativo",
+  "cierres_mes",
+  "cash_movement_cuentas",
+  "dinero_entre_socios",
+  "cruces_entre_socios",
+  "cruces_cuentas_socios",
+  "matriz_packaging_charges",
+  "matriz_service_charges",
+  "guias_remision",
+  "liquidation_harvest_details",
+  "selection_traidas",
+  "selection_batch_reaperturas",
+  "ventas_detalle_por_asignar",
+  "prestamos_bancarios",
+  "prestamo_cuotas",
+  "campo_compensaciones",
+  "campo_mantenimientos",
+  "campo_nomina_pagos"
 ];
 
 /**
