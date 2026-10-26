@@ -1,8 +1,20 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-23
+Actualizado: 2026-10-26
 
-## Último cambio: Proceso guardado cuenta en inventario (Producción)
+## Último cambio: Nota del taller con varios renglones (Transporte) y Configuración de Transporte con menú
+
+- Transporte › Caja › Salió dinero › REPARACION_MANT › «🧾 Nota con varios renglones»: Cant, Descripción, Tipo
+  (Repuesto / Mano de obra) y Valor por renglón; Contado (cuenta) o A crédito (CxP EGRESO_CREDITO al taller).
+- POST /campo/mantenimientos/nota: un renglón = un campo_mantenimientos (+ equipment_maintenance) con `nota_id` y
+  `clase`; de la cuenta sale UN movimiento por el total (varios mantenimientos comparten movimiento_id: migración
+  20261120 quita el UNIQUE) o UNA CxP (`cxp_id`). Reversar el egreso anula todos; eliminar la CxP borra sus renglones;
+  una CxP GASTO_PAGADO_MATRIZ no se elimina desde Transporte (409). Simulacro `nota_taller_transporte`.
+- Configuración de Transporte con el mismo menú de secciones que la de la piladora (`CFG_CAMPO`, `configLayout--campo`).
+- Borrado de fábrica: ahora vacía también `secador_guardias` y otras tablas de movimientos (simulacro `borrado_fabrica`).
+- Simulacro `campo` falla en la copia porque la CAJA real de Transporte ya tiene saldo (supone que arranca en 0).
+
+## Cambio anterior: Proceso guardado cuenta en inventario (Producción)
 
 - «Guardar Proceso» (PUT /processing-batches/drafts/:id) ya suma al inventario de producto terminado lo pilado
   (blanco 0.11/corriente según el túnel + arrocillo 3/4, fino y polvillo del reporte), del socio dueño del lote.

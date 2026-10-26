@@ -947,6 +947,109 @@ campoRouter.post("/mantenimientos", asyncRoute(async (req, res) => {
   res.status(201).json(row);
 }));
 
+// 🧾 Nota del taller con varios renglones (2026-10-26): repuestos y mano de obra de una misma nota de venta. Cada
+// renglón entra a la hoja de vida de la máquina; de la caja sale UN solo egreso por el total (contado) o queda UNA
+// Cuenta por Pagar al taller (crédito). Todo en una transacción.
+campoRouter.post("/mantenimientos/nota", asyncRoute(async (req, res) => {
+  const body = z.object({
+    fecha: fechaSchema.optional(),
+    activo_id: z.string().uuid(),
+    tipo: z.enum(["PREVENTIVO", "CORRECTIVO"]).default("CORRECTIVO"),
+    proveedor: z.string().trim().max(160).optional(),
+    factura: z.string().trim().max(80).optional(),
+    lectura: z.number().nonnegative().max(100_000_000).nullable().optional(),
+    unidad_lectura: z.enum(["KM", "HORAS"]).nullable().optional(),
+    modalidad_pago: z.enum(["CONTADO", "CREDITO"]).default("CONTADO"),
+    cuenta_id: z.string().uuid().optional(),
+    vence: fechaSchema.optional(),
+    observaciones: z.string().trim().max(600).optional(),
+    lineas: z.array(z.object({
+      cantidad: z.number().positive().max(100_000),
+      descripcion: z.string().trim().min(2).max(180),
+      clase: z.enum(["REPUESTO", "MANO_OBRA"]),
+      valor: z.number().positive().max(10_000_000).transform((n) => Math.round(n * 100) / 100)
+    })).min(1).max(40)
+  }).superRefine((v, ctx) => {
+    if (v.lectura != null && !v.unidad_lectura) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["unidad_lectura"], message: "Indica si la lectura está en KM u HORAS" });
+    if (v.modalidad_pago === "CONTADO" && !v.cuenta_id) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["cuenta_id"], message: "Elige la cuenta de la que sale el pago" });
+    if (v.modalidad_pago === "CREDITO" && (v.proveedor ?? "").trim().length < 2) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["proveedor"], message: "Para una nota a crédito indica el taller / proveedor" });
+  }).parse(req.body);
+
+  const total = Math.round(body.lineas.reduce((s, l) => s + l.valor, 0) * 100) / 100;
+  const proveedor = (body.proveedor ?? "").trim().toUpperCase() || null;
+  const lectura = body.lectura ?? null;
+  const unidad = lectura != null ? body.unidad_lectura ?? null : null;
+  const cant = (n: number) => (Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100));
+  const resumen = body.lineas.map((l) => `${cant(l.cantidad)} ${l.descripcion}`).join(", ");
+  const encabezado = `Nota${body.factura ? ` N° ${body.factura}` : ""}${proveedor ? ` de ${proveedor}` : ""}`;
+
+  const result = await inTransaction(async (client) => {
+    const activo = (await client.query("SELECT id, nombre, tipo FROM campo_activos WHERE id = $1", [body.activo_id])).rows[0];
+    if (!activo) throw new ApiError(404, "Máquina o vehículo no encontrado");
+    const categoria = (await client.query(
+      `INSERT INTO campo_categorias_gasto (nombre) VALUES ('REPARACION_MANT')
+       ON CONFLICT (nombre) DO UPDATE SET nombre = EXCLUDED.nombre RETURNING id`
+    )).rows[0];
+    const concepto = `${encabezado} · ${activo.nombre}: ${resumen}`.slice(0, 400);
+
+    let movimientoId: string | null = null;
+    let cxpId: string | null = null;
+    let cuentaId: string | null = null;
+    if (body.modalidad_pago === "CONTADO") {
+      const cuenta = (await client.query("SELECT id, nombre FROM campo_cuentas WHERE id = $1", [body.cuenta_id])).rows[0];
+      if (!cuenta) throw new ApiError(404, "Cuenta no encontrada");
+      if (cuenta.nombre === CUENTA_INTERNA_CRUCE) throw new ApiError(400, MSG_CUENTA_INTERNA);
+      await requireCajaAbierta([cuenta.id], client);
+      await requireSaldoCajaDisponible(client, cuenta.id, total);
+      cuentaId = cuenta.id;
+      movimientoId = (await client.query(
+        `INSERT INTO campo_movimientos
+           (fecha, cuenta_id, signo, monto, concepto, categoria_id, activo_id, naturaleza, created_by, proveedor, lectura, unidad_lectura)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, 'salida', $3, $4, $5, $6, 'mantenimiento_flota', $7, $8, $9, $10)
+         RETURNING id`,
+        [body.fecha ?? null, cuenta.id, total, concepto, categoria.id, activo.id, userId(req), proveedor, lectura, unidad]
+      )).rows[0].id;
+    } else {
+      cxpId = (await client.query(
+        `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, vence, origen, lectura, unidad_lectura, cliente_id)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2::text, $3, $4, $5, $6, $7, $8, 'EGRESO_CREDITO', $9, $10,
+                 (SELECT id FROM campo_clientes WHERE lower(trim(nombre)) = lower(trim($2::text)) LIMIT 1)) RETURNING id`,
+        [body.fecha ?? null, proveedor, `REPARACION_MANT · ${concepto}`.slice(0, 400), total, userId(req), categoria.id, activo.id,
+         body.vence ?? null, lectura, unidad]
+      )).rows[0].id;
+    }
+
+    const notaId = (await client.query("SELECT gen_random_uuid() AS id")).rows[0].id as string;
+    const observaciones = [`${encabezado} · total $${total.toFixed(2)}${body.modalidad_pago === "CREDITO" ? " (a crédito)" : ""}`, body.observaciones?.trim()]
+      .filter(Boolean).join(" · ").slice(0, 1000);
+    const renglones = [];
+    for (const l of body.lineas) {
+      const detalle = `${cant(l.cantidad)} × ${l.descripcion} (${l.clase === "MANO_OBRA" ? "mano de obra" : "repuesto"})`.slice(0, 1000);
+      const mt = (await client.query(
+        `INSERT INTO campo_mantenimientos
+           (fecha, activo_id, tipo, componente, detalle, lectura, unidad_lectura, proveedor, factura, costo, cuenta_id,
+            movimiento_id, cxp_id, observaciones, created_by, nota_id, clase)
+         VALUES (COALESCE($1::date, CURRENT_DATE), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+         RETURNING id, componente, detalle, costo::float AS costo, clase`,
+        [body.fecha ?? null, activo.id, body.tipo, l.descripcion, detalle, lectura, unidad, proveedor, body.factura || null,
+         l.valor, cuentaId, movimientoId, cxpId, observaciones, userId(req), notaId, l.clase]
+      )).rows[0];
+      await client.query(
+        `INSERT INTO equipment_maintenance
+           (equipment_id, area, section, maquina, maintenance_type, description, provider, invoice_number, amount, created_by,
+            created_at, work_done, status, campo_mantenimiento_id)
+         VALUES (NULL, 'TRANSPORTE Y COSECHADORA', $1, $2, $3, $4, $5, $6, $7, $8,
+                 ((COALESCE($9::date, CURRENT_DATE) + TIME '12:00') AT TIME ZONE 'America/Guayaquil'), $4, 'COMPLETADO', $10)
+         ON CONFLICT (campo_mantenimiento_id) WHERE campo_mantenimiento_id IS NOT NULL DO NOTHING`,
+        [activo.tipo, activo.nombre, body.tipo, detalle, proveedor, body.factura || null, l.valor, userId(req), body.fecha ?? null, mt.id]
+      );
+      renglones.push(mt);
+    }
+    return { nota_id: notaId, total, renglones, movimiento_id: movimientoId, cxp_id: cxpId, credito: body.modalidad_pago === "CREDITO" };
+  });
+  res.status(201).json(result);
+}));
+
 // Reversion contable: conserva el original y crea un movimiento opuesto. Solo
 // aplica a movimientos manuales y mantenimientos. Los registros ligados a
 // servicios, nomina, CxP, vales, transferencias o cierres tienen flujos propios
@@ -2540,12 +2643,19 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
 
 campoRouter.delete("/cxp/:id", requireAdmin, asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
-    const cxp = (await client.query("SELECT 1 FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
+    const cxp = (await client.query("SELECT origen FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
+    if (cxp.origen === "GASTO_PAGADO_MATRIZ") throw new ApiError(409, "Este gasto lo pagó la caja de la piladora: se anula desde esa Caja.");
     const pagos = Number((await client.query(
       "SELECT COUNT(*)::int AS n FROM campo_movimientos WHERE cxp_id = $1", [req.params.id]
     )).rows[0].n);
     if (pagos > 0) throw new ApiError(409, "No se puede eliminar: la cuenta ya tiene pagos registrados. Reversa los pagos primero.");
+    // Una nota del taller a crédito dejó sus renglones en la hoja de vida: se van con la cuenta.
+    await client.query(
+      `DELETE FROM equipment_maintenance WHERE campo_mantenimiento_id IN (SELECT id FROM campo_mantenimientos WHERE cxp_id = $1)`,
+      [req.params.id]
+    );
+    await client.query("DELETE FROM campo_mantenimientos WHERE cxp_id = $1", [req.params.id]);
     await client.query("DELETE FROM campo_cxp WHERE id = $1", [req.params.id]);
   });
   res.json({ ok: true });

@@ -61,6 +61,20 @@ type Servicio = {
 };
 
 const hoy = () => hoyLocal();
+
+// ⚙️ Secciones de la Configuración de Transporte (menú a la izquierda, como la de la piladora).
+type CfgCampoSub = "estado" | "operacion" | "flota" | "operadores" | "tarifasOperador" | "tarifasCliente" | "documentos" | "categorias" | "saldos";
+const CFG_CAMPO: Array<{ id: CfgCampoSub; icono: string; titulo: string; desc: string; color: string }> = [
+  { id: "estado", icono: "✅", titulo: "Estado de la configuración", desc: "Qué falta configurar", color: "#0d9488" },
+  { id: "operacion", icono: "⚙️", titulo: "Operación", desc: "Nombre de la operación", color: "#2563eb" },
+  { id: "flota", icono: "🚛", titulo: "Flota y maquinaria", desc: "Cosechadoras, camiones y vehículos", color: "#d97706" },
+  { id: "operadores", icono: "👷", titulo: "Operadores", desc: "Choferes y operadores, sueldo", color: "#7c3aed" },
+  { id: "tarifasOperador", icono: "💵", titulo: "Tarifas de operadores", desc: "Pago por QQ o viaje a cada operador", color: "#db2777" },
+  { id: "tarifasCliente", icono: "🧾", titulo: "Tarifas a clientes", desc: "Cosecha y flete: general y por cliente", color: "#be185d" },
+  { id: "documentos", icono: "📄", titulo: "Documentos de la flota", desc: "Matrícula, SOAT, revisión y vencimientos", color: "#0891b2" },
+  { id: "categorias", icono: "🏷️", titulo: "Categorías de gasto", desc: "Rubros de los egresos", color: "#16a34a" },
+  { id: "saldos", icono: "📥", titulo: "Saldos de arranque", desc: "Lo que se debía al empezar", color: "#4f46e5" }
+];
 // Secciones del menú propio de Campo (contexto aislado). Se amplía agregando
 // entradas aquí y en CAMPO_SECCIONES (ver CampoWorkspace).
 export type CampoSeccion = "caja" | "servicios" | "clientes" | "cxc" | "cxp" | "vales" | "partes" | "mantenimiento" | "nomina" | "historial" | "reportes" | "resultados" | "config";
@@ -301,6 +315,9 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
   const [servTab, setServTab] = useState<"servicio" | "abono" | "lista">("servicio");
   const [libroVersion, setLibroVersion] = useState(0); // fuerza recarga del libro tras cada movimiento
   const [cfgVersion, setCfgVersion] = useState(0); // recarga el «Estado de la configuración» tras cada cambio
+  // Configuración con menú de secciones a la izquierda, igual que la de la piladora (2026-10-26).
+  const [cfgSub, setCfgSub] = useState<CfgCampoSub>("estado");
+  const [cfgMenuMovil, setCfgMenuMovil] = useState(true);
 
   const refreshCatalogos = useCallback(async () => {
     const [a, cat, ct, op] = await Promise.all([
@@ -375,26 +392,47 @@ export default function CampoModule({ section = "caja", nombre, matrizName = "Ma
 
   if (section === "config") {
     const cambio = async (msg: string) => { await refreshCatalogos(); setCfgVersion((v) => v + 1); notify(msg); };
+    const actual = CFG_CAMPO.find((x) => x.id === cfgSub) ?? CFG_CAMPO[0];
+    const subir = () => document.querySelector(".configLayout")?.scrollIntoView({ block: "start" });
     return (
       <section className="panelGrid">
         {flashEl}
-        <EstadoConfigCampo version={cfgVersion} onIr={onIrSeccion} />
-        <ConfigSection nombreActual={nombre ?? "Campo"}
-          onSaved={(n) => { onNombreChange?.(n); setCfgVersion((v) => v + 1); notify(`Nombre de la operación actualizado a “${n}”`); }}
-          onError={(m) => notify(m, "err")} />
-        <FlotaMaquinaria activos={activos}
-          onChanged={cambio}
-          onError={(m) => notify(m, "err")} />
-        <OperadoresCatalogo operadores={operadores}
-          onChanged={cambio}
-          onError={(m) => notify(m, "err")} />
-        <TarifasOperadorCatalogo activos={activos} operadores={operadores}
-          onChanged={(msg) => { setCfgVersion((v) => v + 1); notify(msg); }}
-          onError={(m) => notify(m, "err")} />
-        <TarifasClientesCampo onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />
-        <DocumentosFlotaCampo activos={activos} onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />
-        <CategoriasGastoCampo categorias={categorias} onChanged={cambio} onError={(m) => notify(m, "err")} />
-        <SaldosArranqueCampo onChanged={async (msg) => { setCfgVersion((v) => v + 1); notify(msg); }} onError={(m) => notify(m, "err")} />
+        <div className={`configLayout configLayout--campo ${cfgMenuMovil ? "configLayout--menu" : "configLayout--seccion"}`}>
+          <nav className="configVTabs" aria-label="Secciones de Configuración de Transporte">
+            {CFG_CAMPO.map((x) => (
+              <button key={x.id} type="button" className={cfgSub === x.id ? "active" : ""} style={{ ["--cs" as string]: x.color }}
+                aria-current={cfgSub === x.id ? "page" : undefined}
+                onClick={() => { setCfgSub(x.id); setCfgMenuMovil(false); subir(); }}>
+                <span className="cfgNav__ico" aria-hidden="true">{x.icono}</span>
+                <span className="cfgNav__txt"><b>{x.titulo}</b><small>{x.desc}</small></span>
+              </button>
+            ))}
+          </nav>
+          <div className="configVContent" style={{ ["--cs" as string]: actual.color }}>
+            <div className="cfgSeccion">
+              <button type="button" className="cfgSeccion__volver" onClick={() => { setCfgMenuMovil(true); subir(); }}>← Secciones</button>
+              <span className="cfgSeccion__ico" aria-hidden="true">{actual.icono}</span>
+              <span className="cfgSeccion__txt"><b>{actual.titulo}</b><small>{actual.desc}</small></span>
+            </div>
+            {cfgSub === "estado" && <EstadoConfigCampo version={cfgVersion} onIr={onIrSeccion} />}
+            {cfgSub === "operacion" && (
+              <ConfigSection nombreActual={nombre ?? "Campo"}
+                onSaved={(n) => { onNombreChange?.(n); setCfgVersion((v) => v + 1); notify(`Nombre de la operación actualizado a “${n}”`); }}
+                onError={(m) => notify(m, "err")} />
+            )}
+            {cfgSub === "flota" && <FlotaMaquinaria activos={activos} onChanged={cambio} onError={(m) => notify(m, "err")} />}
+            {cfgSub === "operadores" && <OperadoresCatalogo operadores={operadores} onChanged={cambio} onError={(m) => notify(m, "err")} />}
+            {cfgSub === "tarifasOperador" && (
+              <TarifasOperadorCatalogo activos={activos} operadores={operadores}
+                onChanged={(msg) => { setCfgVersion((v) => v + 1); notify(msg); }}
+                onError={(m) => notify(m, "err")} />
+            )}
+            {cfgSub === "tarifasCliente" && <TarifasClientesCampo onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />}
+            {cfgSub === "documentos" && <DocumentosFlotaCampo activos={activos} onChanged={(msg) => notify(msg)} onError={(m) => notify(m, "err")} />}
+            {cfgSub === "categorias" && <CategoriasGastoCampo categorias={categorias} onChanged={cambio} onError={(m) => notify(m, "err")} />}
+            {cfgSub === "saldos" && <SaldosArranqueCampo onChanged={async (msg) => { setCfgVersion((v) => v + 1); notify(msg); }} onError={(m) => notify(m, "err")} />}
+          </div>
+        </div>
       </section>
     );
   }
@@ -1684,9 +1722,18 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
     // Solo REPARACION_MANT: tipo de mantenimiento, repuesto/trabajo y descripción.
     tipo_mant: "CORRECTIVO" as "PREVENTIVO" | "CORRECTIVO", repuesto: "", descripcion: "",
     // Proveedor y modalidad: Contado (sale de la cuenta) / A crédito (CxP de Transporte).
-    proveedor: "", modalidad: "CONTADO" as "CONTADO" | "CREDITO", vence: ""
+    proveedor: "", modalidad: "CONTADO" as "CONTADO" | "CREDITO", vence: "",
+    // 🧾 Nota del taller con varios renglones (solo REPARACION_MANT): N° de la nota.
+    factura: ""
   });
   const [busy, setBusy] = useState(false);
+  // 🧾 Nota del taller (2026-10-26): repuestos y mano de obra de una misma nota; un solo pago por el total.
+  type LineaNota = { cantidad: string; descripcion: string; clase: "REPUESTO" | "MANO_OBRA"; valor: string };
+  const lineaVacia = (): LineaNota => ({ cantidad: "1", descripcion: "", clase: "REPUESTO", valor: "" });
+  const [modoNota, setModoNota] = useState(false);
+  const [lineas, setLineas] = useState<LineaNota[]>([lineaVacia()]);
+  const totalNota = Math.round(lineas.reduce((s, l) => s + (Number(l.valor) > 0 ? Number(l.valor) : 0), 0) * 100) / 100;
+  const cambiarLinea = (i: number, cambio: Partial<LineaNota>) => setLineas((ls) => ls.map((l, j) => (j === i ? { ...l, ...cambio } : l)));
   // Sugerencias de proveedor: catálogo de Proveedores + acreedores ya usados en CxP.
   const [proveedores, setProveedores] = useState<string[]>([]);
   useEffect(() => {
@@ -1710,7 +1757,8 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   const mostrarLectura = pideLectura && !!activoSel;
   const unidad: "KM" | "HORAS" = f.unidad || info.unidad;
   const opcionesRep = useMemo(() => opcionesRepuesto(familia), [familia]);
-  const aCredito = f.modalidad === "CREDITO" && !f.es_anticipo && !esReparacion;
+  const notaActiva = esReparacion && modoNota;
+  const aCredito = f.modalidad === "CREDITO" && !f.es_anticipo && (!esReparacion || notaActiva);
 
   // Última lectura conocida de la máquina (referencia y aviso si la nueva es menor).
   const [ultima, setUltima] = useState<{ lectura: number; unidad_lectura: "KM" | "HORAS"; fecha: string } | null>(null);
@@ -1732,6 +1780,30 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       if (!f.categoria_id) throw new Error("La categoría del gasto es obligatoria");
       if (aCredito && f.proveedor.trim().length < 2) throw new Error("Para un egreso a crédito indica el proveedor");
       if (!aCredito && !f.cuenta_id) throw new Error("Elige la cuenta");
+      if (notaActiva) {
+        if (!activoSel) throw new Error("Selecciona la máquina o vehículo que recibió el arreglo");
+        if (f.es_anticipo) throw new Error("Registra el anticipo primero y la nota cuando se rinda el gasto real");
+        const usadas = lineas.filter((l) => l.descripcion.trim() || l.valor.trim());
+        if (!usadas.length) throw new Error("Agrega al menos un renglón de la nota");
+        usadas.forEach((l, i) => {
+          if (l.descripcion.trim().length < 2) throw new Error(`Renglón ${i + 1}: escribe la descripción`);
+          if (!(Number(l.cantidad) > 0)) throw new Error(`Renglón ${i + 1}: la cantidad debe ser mayor a 0`);
+          if (!(Number(l.valor) > 0)) throw new Error(`Renglón ${i + 1}: escribe el valor`);
+        });
+        const lecturaNota = mostrarLectura && lecturaN != null ? lecturaN : null;
+        await apiPost("/campo/mantenimientos/nota", {
+          fecha: f.fecha, activo_id: activoSel.id, tipo: f.tipo_mant,
+          proveedor: f.proveedor.trim() || undefined, factura: f.factura.trim() || undefined,
+          lectura: lecturaNota ?? undefined, unidad_lectura: lecturaNota != null ? unidad : undefined,
+          modalidad_pago: aCredito ? "CREDITO" : "CONTADO", cuenta_id: aCredito ? undefined : f.cuenta_id,
+          vence: aCredito && f.vence ? f.vence : undefined, observaciones: f.descripcion.trim() || undefined,
+          lineas: usadas.map((l) => ({ cantidad: Number(l.cantidad), descripcion: l.descripcion.trim(), clase: l.clase, valor: Number(l.valor) }))
+        });
+        setF({ ...f, categoria_id: "", lectura: "", unidad: "", tipo_mant: "CORRECTIVO", descripcion: "", proveedor: "", modalidad: "CONTADO", vence: "", factura: "" });
+        setLineas([lineaVacia()]); setModoNota(false);
+        await onSaved();
+        return;
+      }
       const monto = Number(f.monto);
       if (!(monto > 0)) throw new Error("Ingresa un monto válido");
       // Lectura: solo con las categorías que la piden y una máquina elegida.
@@ -1773,7 +1845,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
   const iconoTipo = (a: Activo) => FAMILIA_INFO[familiaDe(a)].icono;
   const num = (n: number) => n.toLocaleString("en-US", { maximumFractionDigits: 2 });
   return (
-    <form className="formPanel egresoCampo" onSubmit={(e) => { e.preventDefault(); submit(); }}>
+    <form className={`formPanel egresoCampo${notaActiva ? " egresoCampo--nota" : ""}`} onSubmit={(e) => { e.preventDefault(); submit(); }}>
       <h2>－ Nuevo egreso (gasto)</h2>
       {/* 1 · Máquina / Vehículo (primera fila; default = Gastos Generales) */}
       <label><span>Asignar a Máquina / Vehículo {req}</span>
@@ -1816,12 +1888,42 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       {esReparacion ? (
         <fieldset className="egresoCampo__intervencion">
           <legend>🔧 Detalle de Intervención</legend>
+          <div className="notaTaller__modo" role="radiogroup" aria-label="Cómo registrar">
+            <button type="button" className={!modoNota ? "activo" : ""} onClick={() => setModoNota(false)}>🔩 Un solo trabajo</button>
+            <button type="button" className={modoNota ? "activo" : ""} onClick={() => setModoNota(true)}>🧾 Nota con varios renglones</button>
+          </div>
           <label><span>Tipo de Mantenimiento</span>
             <select value={f.tipo_mant} onChange={(e) => setF({ ...f, tipo_mant: e.target.value as "PREVENTIVO" | "CORRECTIVO" })}>
               <option value="PREVENTIVO">Preventivo</option>
               <option value="CORRECTIVO">Correctivo</option>
             </select>
           </label>
+          {modoNota ? (
+            <div className="notaTaller">
+              <label style={{ margin: 0 }}><span>N° de la nota <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                <input value={f.factura} maxLength={80} onChange={(e) => setF({ ...f, factura: e.target.value })} placeholder="Ej: 001234" />
+              </label>
+              <div className="notaTaller__tabla">
+                <div className="notaTaller__cab"><span>Cant.</span><span>Descripción</span><span>Tipo</span><span>Valor $</span><span /></div>
+                {lineas.map((l, i) => (
+                  <div className="notaTaller__fila" key={i}>
+                    <input type="number" min="0" step="0.01" value={l.cantidad} aria-label={`Cantidad renglón ${i + 1}`} onChange={(e) => cambiarLinea(i, { cantidad: e.target.value })} />
+                    <input value={l.descripcion} maxLength={180} aria-label={`Descripción renglón ${i + 1}`} placeholder={i === 0 ? "Ej: Chicote batería 1/0" : ""} onChange={(e) => cambiarLinea(i, { descripcion: e.target.value })} />
+                    <select value={l.clase} aria-label={`Tipo renglón ${i + 1}`} onChange={(e) => cambiarLinea(i, { clase: e.target.value as LineaNota["clase"] })}>
+                      <option value="REPUESTO">Repuesto</option>
+                      <option value="MANO_OBRA">Mano de obra</option>
+                    </select>
+                    <input type="number" min="0" step="0.01" value={l.valor} aria-label={`Valor renglón ${i + 1}`} placeholder="0.00" onChange={(e) => cambiarLinea(i, { valor: e.target.value })} />
+                    <button type="button" className="notaTaller__quitar" title="Quitar renglón" disabled={lineas.length === 1}
+                      onClick={() => setLineas((ls) => ls.filter((_, j) => j !== i))}>✕</button>
+                  </div>
+                ))}
+                <button type="button" className="notaTaller__mas" onClick={() => setLineas((ls) => [...ls, lineaVacia()])}>＋ Agregar renglón</button>
+                <div className="notaTaller__total"><span>TOTAL DE LA NOTA</span><strong>${totalNota.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong></div>
+              </div>
+              <p className="muted" style={{ margin: 0, fontSize: 12 }}>El <b>Valor</b> es el total de cada renglón (como en la nota). Cada renglón queda en la hoja de vida de la máquina; de la caja sale <b>un solo</b> pago por el total.</p>
+            </div>
+          ) : (
           <label><span>Repuesto / Trabajo Realizado {req}{activoSel && familia !== "general" && <span className="muted" style={{ fontWeight: 400 }}> · primero los afines a {familia === "cosechadora" ? "cosechadora" : `vehículo ${familia}`}</span>}</span>
             {f.repuesto ? (
               <span className="egresoCampo__elegido">
@@ -1837,6 +1939,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
                 vacio="Sin coincidencias: escríbelo y elige «Usar…»" />
             )}
           </label>
+          )}
           <label><span>Descripción adicional <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
             <textarea rows={2} value={f.descripcion} maxLength={600} onChange={(e) => setF({ ...f, descripcion: e.target.value })}
               placeholder="Ej: se cambiaron 2 bandas del ventilador, venían cuarteadas" />
@@ -1851,9 +1954,11 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       {/* 5 · Detalles de Pago (monto, proveedor, contado/crédito, cuenta y rendir cuentas) */}
       <section className="egresoCampo__pago" aria-label="Detalles de Pago">
         <div className="egresoCampo__pagoTitulo">💳 Detalles de Pago</div>
-        <label><span>Monto $ {req}</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>
+        {notaActiva
+          ? <div className="notaTaller__monto"><span>Monto $</span><strong>${totalNota.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong><small className="muted">suma de la nota</small></div>
+          : <label><span>Monto $ {req}</span><input type="number" step="0.01" min="0" value={f.monto} onChange={(e) => setF({ ...f, monto: e.target.value })} placeholder="0.00" /></label>}
         {(() => {
-          const creditoPosible = !f.es_anticipo && !esReparacion;
+          const creditoPosible = !f.es_anticipo && (!esReparacion || notaActiva);
           const opt = (valor: "CONTADO" | "CREDITO", titulo: string, sub: string) => (
             <label style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", borderRadius: 8, margin: 0,
               cursor: valor === "CREDITO" && !creditoPosible ? "not-allowed" : "pointer", opacity: valor === "CREDITO" && !creditoPosible ? 0.5 : 1,
@@ -1873,7 +1978,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
               </label>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                 {opt("CONTADO", "💵 Contado", "Sale de la cuenta ahora")}
-                {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Cuentas por Pagar" : f.es_anticipo ? "No aplica a un anticipo" : "No aplica a reparación")}
+                {opt("CREDITO", "💳 A crédito", creditoPosible ? "Queda en Cuentas por Pagar" : f.es_anticipo ? "No aplica a un anticipo" : "Usa «Nota con varios renglones»")}
               </div>
               {aCredito && (
                 <>
@@ -1902,7 +2007,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
         </label>
         {f.es_anticipo && <p className="muted" style={{ margin: 0, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
       </section>
-      <button className="primary" disabled={busy}>{busy ? "Guardando…" : f.es_anticipo ? "Registrar anticipo" : aCredito ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
+      <button className="primary" disabled={busy}>{busy ? "Guardando…" : notaActiva ? `Registrar nota $${totalNota.toFixed(2)}${aCredito ? " a crédito" : ""}` : f.es_anticipo ? "Registrar anticipo" : aCredito ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
     </form>
   );
 }

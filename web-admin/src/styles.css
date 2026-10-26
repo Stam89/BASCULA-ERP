@@ -6519,3 +6519,37 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .despachoModal__carga .n { text-align: right; }
 .despachoModal__carga input { width: 90px; text-align: right; padding: 5px 7px; }
 .colaYaCobrado { font-size: 12.5px; font-weight: 700; color: #166534; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 6px 10px; }
+
+/* 🧾 Nota del taller con varios renglones (Transporte › egreso › Reparación) */
+.panelGrid > .egresoCampo--nota { grid-column: 1 / -1; max-width: 920px; width: 100%; }
+.notaTaller__modo { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }
+.notaTaller__modo button { padding: 8px 10px; border-radius: 8px; border: 1.5px solid #e5e7eb; background: #fff; font-weight: 700; font-size: 13px; cursor: pointer; color: #374151; }
+.notaTaller__modo button.activo { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
+.notaTaller { display: flex; flex-direction: column; gap: 8px; }
+.notaTaller__tabla { border: 1px solid #e5e7eb; border-radius: 10px; padding: 8px; background: #fafafa; display: flex; flex-direction: column; gap: 6px; }
+.notaTaller__cab, .notaTaller__fila { display: grid; grid-template-columns: 64px minmax(0, 1fr) 118px 92px 30px; gap: 6px; align-items: center; }
+.notaTaller__cab span { font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; }
+.notaTaller__fila input, .notaTaller__fila select { width: 100%; min-width: 0; padding: 6px 8px; font-size: 13px; }
+.notaTaller__fila input[type="number"] { text-align: right; }
+.notaTaller__quitar { border: none; background: transparent; color: #b91c1c; font-size: 15px; cursor: pointer; padding: 0; }
+.notaTaller__quitar:disabled { color: #d1d5db; cursor: default; }
+.notaTaller__mas { align-self: flex-start; border: 1px dashed #0f766e; background: #fff; color: #0f766e; font-weight: 700; border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+.notaTaller__total { display: flex; justify-content: space-between; align-items: center; border-top: 2px solid #111827; padding-top: 6px; font-weight: 700; font-size: 13px; }
+.notaTaller__total strong { font-size: 17px; color: #0f766e; }
+.notaTaller__monto { display: flex; align-items: baseline; gap: 10px; }
+.notaTaller__monto strong { font-size: 18px; color: #0f766e; }
+@media (max-width: 560px) {
+  .notaTaller__cab { display: none; }
+  .notaTaller__fila { grid-template-columns: 56px minmax(0, 1fr) 96px 26px; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+  .notaTaller__fila input[aria-label^="Descripción"] { grid-column: 2 / 4; }
+  .notaTaller__fila .notaTaller__quitar { grid-column: 4; grid-row: 1; }
+  .notaTaller__fila select { grid-column: 1 / 3; grid-row: 2; }
+  .notaTaller__fila input[aria-label^="Valor"] { grid-column: 3 / 5; grid-row: 2; }
+}
+
+/* ⚙️ Configuración de Transporte con el mismo menú que la de la piladora (sin buscador arriba). */
+.configLayout.configLayout--campo { grid-template-areas: "nav content"; grid-column: 1 / -1; width: 100%; }
+.configLayout--campo .configVContent > section, .configLayout--campo .configVContent > form, .configLayout--campo .configVContent > div:not(.cfgSeccion) { margin: 0; }
+@media (max-width: 780px) {
+  .configLayout.configLayout--campo { grid-template-areas: "nav" "content"; }
+}
