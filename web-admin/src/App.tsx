@@ -5703,20 +5703,17 @@ export function App() {
       addToast(`No se pudo pagar: ${e instanceof Error ? e.message : "error"}`, "error");
     }
   }
-  // Recibo de la bajada de carro: resumen por trabajador (con firma) y, por nombre, TODOS los pesos que bajó cada
-  // uno con su total (como lo llevaban a mano). Compacto y a dos columnas para que salga en pocas hojas (2026-10-23).
+  // Recibo de la bajada de carro: resumen por trabajador y el detalle de sus tickets (como era al inicio, sin la
+  // columna de firma: pedido del dueño 2026-10-25). Sirve para lo pendiente (antes de pagar) y para lo pagado.
   function imprimirReciboBajada(r: BajadaResumen, pagado: boolean) {
     const esc = (t: unknown) => String(t ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
     const f = (iso: string | null | undefined) => iso ? new Date(`${String(iso).slice(0, 10)}T12:00:00`).toLocaleDateString("es-EC") : "—";
-    const porNombre = [...r.por_trabajador].sort((a, b) => a.trabajador.localeCompare(b.trabajador, "es"));
-    const pesos = porNombre.map((t) => {
-      const filas = r.detalle.filter((d) => d.trabajador === t.trabajador)
-        .sort((a, b) => String(a.fecha ?? "").localeCompare(String(b.fecha ?? "")) || Number(a.numero ?? 0) - Number(b.numero ?? 0))
-        .map((d) => `<tr><td>${f(d.fecha).slice(0, 5)}</td><td>${esc(d.numero ?? "—")}</td><td class="cli">${esc(d.cliente ?? "—")}</td><td class="n">${d.qq.enReal()}</td><td class="n">${money(d.monto)}</td></tr>`).join("");
-      return `<div class="caja"><div class="quien">${esc(t.trabajador)}</div><table class="mini"><thead><tr><th>Fecha</th><th>#</th><th>Cliente</th><th class="n">QQ</th><th class="n">$</th></tr></thead>
-        <tbody>${filas}</tbody><tfoot><tr><td colspan="3">TOTAL · ${t.tickets} ticket(s)</td><td class="n">${t.qq.enReal()}</td><td class="n">${money(t.monto)}</td></tr></tfoot></table></div>`;
+    const resumen = r.por_trabajador.map((t) => `<tr><td><b>${esc(t.trabajador)}</b></td><td class="n">${t.tickets}</td><td class="n">${t.qq.enReal()}</td><td class="n"><b>${money(t.monto)}</b></td></tr>`).join("");
+    const detalle = r.por_trabajador.map((t) => {
+      const filas = r.detalle.filter((d) => d.trabajador === t.trabajador).map((d) =>
+        `<tr><td>${f(d.fecha)}</td><td>#${esc(d.numero ?? "—")}</td><td>${esc(d.cliente ?? "—")}</td><td>${esc(d.placa ?? "—")}</td><td class="n">${d.qq.enReal()}</td><td class="n">${money(d.tarifa)}</td><td class="n">${money(d.monto)}</td></tr>`).join("");
+      return `<h3>${esc(t.trabajador)} · ${money(t.monto)}</h3><table><thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th class="n">QQ</th><th class="n">Tarifa</th><th class="n">Monto</th></tr></thead><tbody>${filas}</tbody></table>`;
     }).join("");
-    const resumen = porNombre.map((t) => `<tr><td><b>${esc(t.trabajador)}</b></td><td class="n">${t.tickets}</td><td class="n">${t.qq.enReal()}</td><td class="n"><b>${money(t.monto)}</b></td><td class="firma"></td></tr>`).join("");
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Recibo bajada de carro</title><style>
       body{font-family:Arial,sans-serif;font-size:12px;margin:14mm;color:#111}
       h1{font-size:17px;margin:0;text-align:center} h2{font-size:12px;font-weight:normal;margin:2px 0 0;text-align:center;color:#555}
@@ -5725,29 +5722,22 @@ export function App() {
       .est{display:inline-block;padding:3px 10px;border-radius:999px;font-weight:bold;font-size:11px;background:${pagado ? "#dcfce7;color:#166534" : "#fef3c7;color:#92400e"}}
       table{width:100%;border-collapse:collapse;margin-top:6px}
       th{background:#0f766e;color:#fff;padding:5px 7px;text-align:left;font-size:10.5px;text-transform:uppercase}
-      td{padding:7px;border-bottom:1px solid #ddd;font-size:12.5px}
+      td{padding:5px 7px;border-bottom:1px solid #ddd}
       .n{text-align:right;font-variant-numeric:tabular-nums}
-      .firma{width:34%;border-bottom:1px solid #999}
-      tbody tr{page-break-inside:avoid}
       tfoot td{font-weight:bold;border-top:2px solid #111;background:#f3f4f6}
-      .cols{column-count:2;column-gap:8mm;margin-top:4px}
-      .caja{break-inside:avoid;margin:0 0 9px}
-      .quien{font-weight:bold;font-size:12px;color:#fff;background:#0f766e;padding:3px 6px}
-      table.mini{margin-top:0} table.mini th{background:#e6f2f1;color:#0f4c47;padding:2px 4px;font-size:9px}
-      table.mini td{padding:2px 4px;font-size:10px} table.mini tfoot td{font-size:10.5px}
-      table.mini .cli{max-width:38mm;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+      h3{font-size:12.5px;margin:14px 0 2px;color:#0f766e}
       @media print{body{margin:9mm}}
     </style></head><body>
       <h1>${esc(appSettings.business_name)}</h1>
       <h2>${esc([appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · "))}</h2>
       <div class="t">RECIBO · BAJADA DE CARRO</div>
       <div class="p">Tickets del ${f(r.desde)} al ${f(r.hasta)} · <span class="est">${pagado ? `PAGADO ${r.paid_at ? new Date(r.paid_at).toLocaleString("es-EC") : ""}` : "PENDIENTE DE PAGO"}</span></div>
-      <table><thead><tr><th>Trabajador</th><th class="n">Tickets</th><th class="n">QQ</th><th class="n">Le toca</th><th>Firma (recibí conforme)</th></tr></thead>
+      <table><thead><tr><th>Trabajador</th><th class="n">Tickets</th><th class="n">QQ</th><th class="n">Le toca</th></tr></thead>
         <tbody>${resumen}</tbody>
-        <tfoot><tr><td>TOTAL · ${r.por_trabajador.length} persona(s)</td><td class="n">${r.tickets}</td><td class="n">${r.por_trabajador.reduce((a, t) => a + t.qq, 0).enReal()}</td><td class="n">${money(r.total)}</td><td></td></tr></tfoot>
+        <tfoot><tr><td>TOTAL · ${r.por_trabajador.length} persona(s)</td><td class="n">${r.tickets}</td><td class="n">${r.por_trabajador.reduce((a, t) => a + t.qq, 0).enReal()}</td><td class="n">${money(r.total)}</td></tr></tfoot>
       </table>
-      <div class="t" style="font-size:12px;margin-top:14px">PESOS QUE BAJÓ CADA UNO</div>
-      <div class="cols">${pesos}</div>
+      <div class="t" style="font-size:12px;margin-top:18px">DETALLE POR TRABAJADOR</div>
+      ${detalle}
     </body></html>`;
     const w = ventanaDeImpresion("bajada_carro");
     if (!w) { addToast("El navegador bloqueó la ventana del recibo. Permite ventanas emergentes.", "warn"); return; }
