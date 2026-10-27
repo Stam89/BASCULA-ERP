@@ -24,16 +24,18 @@ import { apiPost } from "./api";
 
 export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
 /** `impresora`: nombre en Windows de la PC del servidor (solo con salida DIRECTA). */
-export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string };
+/** Qué hacer con un documento que sale SOLO al registrar (p. ej. el ticket de venta al detalle). */
+export type AlRegistrar = "IMPRIMIR" | "PREGUNTAR" | "NO";
+export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string; alRegistrar?: AlRegistrar };
 
-export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
+export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[]; seImprimeAlRegistrar?: boolean };
 const PEQUENO: Papel[] = ["10x10", "10.5x15", "15x21", "58", "80", "A4"];
 const HOJA: Papel[] = ["15x21", "10.5x15", "A4", "CARTA", "A5"];
 const HOJA_O_ROLLO: Papel[] = ["15x21", "10.5x15", "10x10", "A4", "CARTA", "A5", "80"];
 
 /** Todos los documentos que el ERP imprime. El id se usa en ventanaDeImpresion(id). */
 export const DOCUMENTOS: DocumentoImprimible[] = [
-  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "10x10", papeles: PEQUENO },
+  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "10x10", papeles: PEQUENO, seImprimeAlRegistrar: true },
   { id: "recibo_venta", titulo: "Recibo de venta", grupo: "Ventas y bodega", papel: "10.5x15", papeles: HOJA_O_ROLLO },
   { id: "guia_remision", titulo: "Guía de remisión", grupo: "Ventas y bodega", papel: "15x21", papeles: HOJA },
   { id: "orden_carga", titulo: "Orden de carga", grupo: "Ventas y bodega", papel: "15x21", papeles: PEQUENO },
@@ -118,8 +120,14 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
     papel,
     salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : guardado?.salida === "DIRECTA" && guardado.impresora ? "DIRECTA" : "VENTANA",
     copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1))),
-    impresora: guardado?.salida === "DIRECTA" ? guardado.impresora : undefined
+    impresora: guardado?.salida === "DIRECTA" ? guardado.impresora : undefined,
+    alRegistrar: guardado?.alRegistrar === "PREGUNTAR" || guardado?.alRegistrar === "NO" ? guardado.alRegistrar : "IMPRIMIR"
   };
+}
+
+/** Lo que se eligió en este equipo para un documento que sale solo al registrar (por defecto, imprimir). */
+export function cuandoImprimir(id: string): AlRegistrar {
+  return ajusteDe(id).alRegistrar ?? "IMPRIMIR";
 }
 
 const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };

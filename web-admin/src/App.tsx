@@ -15,7 +15,7 @@ import { PedidoCompartirModal, type PedidoCompartirData } from "./components/Ped
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
-import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
+import { cuandoImprimir, imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -8569,7 +8569,9 @@ export function App() {
     // Ticket térmico 80mm (comprobante de mostrador). Libras: por dólares se entregan libras enteras (10.63 → 10, pedido
     // del dueño 2026-10-22); por libras, lo que se digitó (sin ceros de más).
     const lbTicket = (n: number, modo: string) => modo === "DOLARES" ? String(Math.floor(n + 1e-9)) : String(Math.round(n * 100) / 100);
-    printTicketVentaDetalle({
+    // 🖨️ Configuración › Impresoras › Ticket de venta al detalle › «Al registrar»: imprimir directo, preguntar o no.
+    const alRegistrar = cuandoImprimir("venta_detalle");
+    if (alRegistrar === "IMPRIMIR" || (alRegistrar === "PREGUNTAR" && await confirmar(`¿Imprimir el ticket de ${venta.customer_name} (${money(v.total)})?`))) printTicketVentaDetalle({
       producto: v.producto,
       cliente: venta.customer_name,
       libras: lbTicket(v.libras, v.modo),

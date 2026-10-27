@@ -102,6 +102,14 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                               {esRollo(aj.papel) && <option value="RAWBT">📲 Térmica Bluetooth (RawBT)</option>}
                             </select>
                           )}
+                          {d.seImprimeAlRegistrar && (
+                            <select aria-label="Al registrar" value={aj.alRegistrar ?? "IMPRIMIR"}
+                              onChange={(e) => cambiarDoc(d.id, { alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] })}>
+                              <option value="IMPRIMIR">Al registrar: 🖨️ imprimir directo</option>
+                              <option value="PREGUNTAR">Al registrar: ❓ preguntar antes</option>
+                              <option value="NO">Al registrar: 🚫 no imprimir</option>
+                            </select>
+                          )}
                           <label className="impConf__copias">Copias
                             <select value={aj.copias} onChange={(e) => cambiarDoc(d.id, { copias: Number(e.target.value) })}>
                               {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
