@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../api";
 import {
-  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_PAPEL, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora, paginaDePrueba,
+  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_PAPEL, PAPELES, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora, paginaDePrueba,
   type AjusteDocumento, type AjusteImpresora, type Papel
 } from "../impresion";
 
@@ -71,9 +71,16 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                   {docs.length > 1 && (
                     <div className="impConf__todos">
                       <small>Todos los de este grupo:</small>
-                      {(["15x21", "10.5x15", "A4"] as Papel[]).map((p) => (
-                        <button key={p} type="button" className="btnGhost" onClick={() => aplicarATodos({ papel: p }, g)}>{NOMBRE_PAPEL[p]}</button>
-                      ))}
+                      <select aria-label="Todos al papel" value="" onChange={(e) => { if (e.target.value) aplicarATodos({ papel: e.target.value as Papel }, g); }}>
+                        <option value="">📄 Todos al papel…</option>
+                        {PAPELES.map((p) => <option key={p} value={p}>{NOMBRE_PAPEL[p]}</option>)}
+                      </select>
+                      <select aria-label="Todos al imprimir" value="" onChange={(e) => { if (e.target.value) aplicarATodos({ alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] }, g); }}>
+                        <option value="">Todos al imprimir…</option>
+                        <option value="IMPRIMIR">✅ Imprimir sin preguntar</option>
+                        <option value="PREGUNTAR">❓ Preguntar antes de imprimir</option>
+                        <option value="NO">🚫 No imprimir</option>
+                      </select>
                       {directas.length > 0 && (
                         <select aria-label="Todos a la impresora" value="" onChange={(e) => { if (e.target.value) aplicarATodos(leerSalida(e.target.value), g); }}>
                           <option value="">Todos a…</option>
@@ -89,9 +96,9 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                       <div key={d.id} className="impConf__doc">
                         <div><b>{d.titulo}</b></div>
                         <div className="impConf__ops">
-                          {d.papeles.map((p) => (
-                            <button key={p} type="button" className={aj.papel === p ? "is-on" : ""} onClick={() => cambiarDoc(d.id, { papel: p })}>{NOMBRE_PAPEL[p]}</button>
-                          ))}
+                          <select aria-label="Papel" value={aj.papel} onChange={(e) => cambiarDoc(d.id, { papel: e.target.value as Papel })}>
+                            {PAPELES.map((p) => <option key={p} value={p}>📄 {NOMBRE_PAPEL[p]}</option>)}
+                          </select>
                           {(esRollo(aj.papel) || directas.length > 0 || aj.salida === "DIRECTA") && (
                             <select aria-label="Sale por" value={valorSalida(aj)} onChange={(e) => cambiarDoc(d.id, leerSalida(e.target.value))}>
                               <option value="VENTANA">🖨️ Ventana de imprimir (eliges la impresora)</option>
@@ -102,21 +109,19 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                               {esRollo(aj.papel) && <option value="RAWBT">📲 Térmica Bluetooth (RawBT)</option>}
                             </select>
                           )}
-                          {d.seImprimeAlRegistrar && (
-                            <select aria-label="Al registrar" value={aj.alRegistrar ?? "IMPRIMIR"}
-                              onChange={(e) => cambiarDoc(d.id, { alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] })}>
-                              <option value="IMPRIMIR">Al registrar: 🖨️ imprimir directo</option>
-                              <option value="PREGUNTAR">Al registrar: ❓ preguntar antes</option>
-                              <option value="NO">Al registrar: 🚫 no imprimir</option>
-                            </select>
-                          )}
+                          <select aria-label="Al imprimir" value={aj.alRegistrar ?? "IMPRIMIR"}
+                            onChange={(e) => cambiarDoc(d.id, { alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] })}>
+                            <option value="IMPRIMIR">✅ Imprimir sin preguntar</option>
+                            <option value="PREGUNTAR">❓ Preguntar antes de imprimir</option>
+                            <option value="NO">🚫 No imprimir</option>
+                          </select>
                           <label className="impConf__copias">Copias
                             <select value={aj.copias} onChange={(e) => cambiarDoc(d.id, { copias: Number(e.target.value) })}>
                               {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
                             </select>
                           </label>
                           <button type="button" className="btnGhost" onClick={() => {
-                            if (!imprimirDocumento(paginaDePrueba(d.id, negocio), d.id)) avisar("No se pudo abrir la impresión: permite ventanas emergentes.", "error");
+                            if (!imprimirDocumento(paginaDePrueba(d.id, negocio), d.id, true)) avisar("No se pudo abrir la impresión: permite ventanas emergentes.", "error");
                           }}>🧪 Prueba</button>
                         </div>
                       </div>
@@ -139,7 +144,7 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
       <div>
         <label className="impConf__check">
           <input type="checkbox" checked={a.directo} onChange={(e) => guardar({ ...a, directo: e.target.checked })} />
-          Imprimir directo, sin preguntar (solo si este equipo tiene Chrome en modo kiosko)
+          Sin la ventana de impresión de Chrome (solo si este equipo tiene Chrome en modo kiosko)
         </label>
         {a.directo && (
           <small className="impConf__ayuda">

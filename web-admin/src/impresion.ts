@@ -21,21 +21,23 @@ export const NOMBRE_PAPEL: Record<Papel, string> = {
   A4: "A4", CARTA: "Carta", A5: "Media hoja (A5)"
 };
 import { apiPost } from "./api";
+import { confirmar } from "./components/Dialogo";
 
 export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
 /** `impresora`: nombre en Windows de la PC del servidor (solo con salida DIRECTA). */
-/** Qué hacer con un documento que sale SOLO al registrar (p. ej. el ticket de venta al detalle). */
+/** Qué hacer cuando un documento se manda a imprimir (al registrar o con su botón): imprimir directo, preguntar antes
+ *  o no imprimir. Igual para todos los documentos (pedido del dueño 2026-10-27). */
 export type AlRegistrar = "IMPRIMIR" | "PREGUNTAR" | "NO";
 export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string; alRegistrar?: AlRegistrar };
 
-export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[]; seImprimeAlRegistrar?: boolean };
-const PEQUENO: Papel[] = ["10x10", "10.5x15", "15x21", "58", "80", "A4"];
-const HOJA: Papel[] = ["15x21", "10.5x15", "A4", "CARTA", "A5"];
-const HOJA_O_ROLLO: Papel[] = ["15x21", "10.5x15", "10x10", "A4", "CARTA", "A5", "80"];
+export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
+/** Todas las medidas, iguales para todos los documentos (pedido del dueño 2026-10-27). */
+export const PAPELES: Papel[] = ["10x10", "10.5x15", "15x21", "A5", "A4", "CARTA", "58", "80"];
+const PEQUENO = PAPELES, HOJA = PAPELES, HOJA_O_ROLLO = PAPELES;
 
 /** Todos los documentos que el ERP imprime. El id se usa en ventanaDeImpresion(id). */
 export const DOCUMENTOS: DocumentoImprimible[] = [
-  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "10x10", papeles: PEQUENO, seImprimeAlRegistrar: true },
+  { id: "venta_detalle", titulo: "Ticket de venta al detalle", grupo: "Ventas y bodega", papel: "10x10", papeles: PEQUENO },
   { id: "recibo_venta", titulo: "Recibo de venta", grupo: "Ventas y bodega", papel: "10.5x15", papeles: HOJA_O_ROLLO },
   { id: "guia_remision", titulo: "Guía de remisión", grupo: "Ventas y bodega", papel: "15x21", papeles: HOJA },
   { id: "orden_carga", titulo: "Orden de carga", grupo: "Ventas y bodega", papel: "15x21", papeles: PEQUENO },
@@ -125,10 +127,7 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
   };
 }
 
-/** Lo que se eligió en este equipo para un documento que sale solo al registrar (por defecto, imprimir). */
-export function cuandoImprimir(id: string): AlRegistrar {
-  return ajusteDe(id).alRegistrar ?? "IMPRIMIR";
-}
+
 
 const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };
 export const COLUMNAS: Record<"58" | "80", number> = { "58": 32, "80": 48 };
@@ -274,7 +273,27 @@ function avisar(mensaje: string, tipo: "success" | "error" | "warn") {
   try { window.dispatchEvent(new CustomEvent("erp-impresion", { detail: { mensaje, tipo } })); } catch { /* sin pantalla */ }
 }
 
-export function imprimirDocumento(html: string, id: DocumentoId | string): boolean {
+/**
+ * Imprime un documento con el ajuste de este equipo. «Al imprimir» decide: directo, preguntar antes o no imprimir
+ * (`forzar` lo salta: la hoja de prueba siempre sale).
+ */
+export function imprimirDocumento(html: string, id: DocumentoId | string, forzar = false): boolean {
+  const d = ajusteDe(id);
+  const titulo = DOCUMENTOS.find((x) => x.id === id)?.titulo ?? "Documento";
+  if (!forzar && d.alRegistrar === "NO") {
+    avisar(`«${titulo}» no se imprimió: en 🖨️ Impresoras está en «no imprimir».`, "warn");
+    return true;
+  }
+  if (!forzar && d.alRegistrar === "PREGUNTAR") {
+    confirmar({ titulo: "🖨️ ¿Imprimir?", mensaje: `¿Imprimir «${titulo}»?`, confirmar: "Sí, imprimir" })
+      .then((si) => { if (si) imprimirYa(html, id); })
+      .catch(() => undefined);
+    return true;
+  }
+  return imprimirYa(html, id);
+}
+
+function imprimirYa(html: string, id: DocumentoId | string): boolean {
   const a = leerAjusteImpresora();
   const d = ajusteDe(id, a);
   if (d.salida === "DIRECTA" && d.impresora) {
