@@ -404,7 +404,7 @@ export async function autoGenerarPagosCuadrillaDeSecado(
               d.recepcion_empaque, d.recepcion_sacos::float AS recepcion_sacos,
               d.botada_empaque, d.botada_sacos::float AS botada_sacos,
               COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date,
-              l.accionista_id
+              l.accionista_id, d.cuadrilla_pagada_fuera
        FROM drying_tunnel_reports d
        LEFT JOIN lots l ON l.id = d.lot_id
        WHERE d.id = $1`,
@@ -415,6 +415,11 @@ export async function autoGenerarPagosCuadrillaDeSecado(
     if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") {
       await client.query(`RELEASE SAVEPOINT ${savepoint}`);
       return; // el tendal ya se paga aparte
+    }
+    // 🧺 La cuadrilla de este secado ya se pagó fuera del sistema: no se genera nada.
+    if (rep.cuadrilla_pagada_fuera) {
+      await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+      return;
     }
     const tunnel = Number(rep.tunnel_number) || 0;
     const qq = Number(rep.quintals) || 0;

@@ -1022,6 +1022,8 @@ type DryingTunnelReport = {
   es_maquila?: boolean;
   /** La secadora mezcla lotes propios y de servicio (dato antiguo): solo aviso. */
   es_maquila_mixto?: boolean;
+  /** La cuadrilla de este secado ya se pagó fuera del sistema (no genera pagos en Nómina). */
+  cuadrilla_pagada_fuera?: boolean;
   tunnel_number: number;
   rice_type: string;
   input_weight_kg: string | number;
@@ -11020,6 +11022,17 @@ export function App() {
   // ↩ Reabrir un túnel finalizado por error (solo administrador). El backend
   // deshace botada, cobro del servicio y, si estaba cerrado, el combustible del
   // motor; tiene frenos si algo ya se pagó o el arroz entró a Producción.
+  // 🧺 La cuadrilla de un secado ya se pagó por fuera (Excel): se quitan sus pagos pendientes y no se vuelven a crear.
+  async function cuadrillaPagadaFuera(report: DryingTunnelReport, fuera: boolean) {
+    const ok = await confirmar(fuera
+      ? `🧺 La cuadrilla del Túnel ${report.tunnel_number} ya se pagó por fuera\n\nSe quitan sus pagos pendientes de llenado y botada en Nómina y no se vuelven a generar.`
+      : `🧺 Volver a pagar la cuadrilla del Túnel ${report.tunnel_number} en el sistema\n\nSe generan otra vez sus pagos de llenado y botada en Nómina.`);
+    if (!ok) return;
+    const r = await apiPost<{ fuera: boolean; quitados: number }>(`/process-flow/drying/${report.id}/cuadrilla-fuera`, { fuera });
+    addToast(r.fuera ? `Cuadrilla marcada como pagada por fuera${r.quitados ? ` · se quitaron ${r.quitados} pago(s) pendiente(s)` : ""}` : "La cuadrilla vuelve a pagarse en Nómina", "success");
+    await refresh();
+  }
+
   async function reabrirTunel(report: DryingTunnelReport) {
     const motivo = (await pedirTexto(`↩ Reabrir el Túnel ${report.tunnel_number} (vuelve a «en proceso»).\n\n` +
       "Se quitan su hora final, la botada de la cuadrilla y el cobro del servicio de secado; " +
@@ -15987,7 +16000,8 @@ Motivo (obligatorio):`, ""));
             })()}
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId}
-              onReabrir={isAdmin ? (r) => { reabrirTunel(r).catch((error) => addToast(error.message, "error")); } : undefined} />
+              onReabrir={isAdmin ? (r) => { reabrirTunel(r).catch((error) => addToast(error.message, "error")); } : undefined}
+              onCuadrillaFuera={isAdmin ? (r, fuera) => { cuadrillaPagadaFuera(r, fuera).catch((error) => addToast(error.message, "error")); } : undefined} />
 
             {/* Recibo de Secado OCULTO (fuera de pantalla): se renderiza para el
                 secado elegido en la lista y html2canvas lo captura como imagen para
@@ -28972,11 +28986,14 @@ function DryingReportsPanel({
   onEdit,
   onShare,
   sharingId,
-  onReabrir
+  onReabrir,
+  onCuadrillaFuera
 }: {
   reports: DryingTunnelReport[];
   /** Solo administrador: reabre un túnel finalizado por error. */
   onReabrir?: (report: DryingTunnelReport) => void;
+  /** Solo administrador: la cuadrilla de ese secado ya se pagó por fuera (o volver a pagarla en el sistema). */
+  onCuadrillaFuera?: (report: DryingTunnelReport, fuera: boolean) => void;
   onEdit: (report: DryingTunnelReport) => void;
   // Compartir por WhatsApp desde la lista (antes vivía dentro del editor).
   onShare?: (report: DryingTunnelReport) => void;
@@ -29017,6 +29034,12 @@ function DryingReportsPanel({
               {done && !esTendal && onReabrir && (
                 <button type="button" title="Solo administrador: vuelve el túnel a «en proceso» para corregir una finalización equivocada"
                   style={{ color: "#b45309", borderColor: "#f59e0b" }} onClick={() => onReabrir(report)}>↩ Reabrir</button>
+              )}
+              {!esTendal && onCuadrillaFuera && (
+                <button type="button" onClick={() => onCuadrillaFuera(report, !report.cuadrilla_pagada_fuera)}
+                  title={report.cuadrilla_pagada_fuera ? "Volver a pagar la cuadrilla de este secado en Nómina" : "La cuadrilla de este secado ya se pagó fuera del sistema"}>
+                  {report.cuadrilla_pagada_fuera ? "🧺 Cuadrilla pagada por fuera ✓" : "🧺 Cuadrilla ya pagada"}
+                </button>
               )}
             </div>
           </div>

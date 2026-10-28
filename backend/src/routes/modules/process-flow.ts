@@ -883,6 +883,34 @@ processFlowRouter.post("/drying/motor-fuel/:id/completar", asyncRoute(async (req
 // ya tiene abonos (hay que anular eso primero). Si el combustible del motor ya se
 // había cerrado, se deshace ese cierre completo (se vuelve a pedir al finalizar).
 // Queda en Observación del secado y en la auditoría (quién, cuándo y por qué).
+// 🧺 «La cuadrilla ya se pagó por fuera» (solo administrador, pedido del dueño 2026-10-28): un secado registrado
+// después cuya cuadrilla se pagó en el Excel. Quita sus pagos de cuadrilla pendientes (llenado y botada) y el pago
+// automático no los vuelve a crear. Desmarcarlo los vuelve a generar. Lo ya pagado en el sistema no se toca (409).
+processFlowRouter.post("/drying/:dryingId/cuadrilla-fuera", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ fuera: z.boolean() }).parse(req.body);
+  const dryingId = String(req.params.dryingId);
+  const result = await inTransaction(async (client) => {
+    const rep = (await client.query("SELECT id, tunnel_number FROM drying_tunnel_reports WHERE id = $1 FOR UPDATE", [dryingId])).rows[0];
+    if (!rep) throw new ApiError(404, "Secado no encontrado");
+    if (body.fuera) {
+      const pagados = await client.query(
+        "SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND paid_at IS NOT NULL LIMIT 1", [dryingId]
+      );
+      if (pagados.rowCount) throw new ApiError(409, "La cuadrilla de este secado ya se pagó en el sistema: no se puede marcar como pagada por fuera.");
+      const borrados = await client.query(
+        "DELETE FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND paid_at IS NULL", [dryingId]
+      );
+      await client.query("DELETE FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1", [dryingId]);
+      await client.query("UPDATE drying_tunnel_reports SET cuadrilla_pagada_fuera = true WHERE id = $1", [dryingId]);
+      return { fuera: true, quitados: borrados.rowCount ?? 0 };
+    }
+    await client.query("UPDATE drying_tunnel_reports SET cuadrilla_pagada_fuera = false WHERE id = $1", [dryingId]);
+    await autoGenerarPagosCuadrillaDeSecado(client, dryingId, (req as AuthenticatedRequest).user?.id ?? null);
+    return { fuera: false, quitados: 0 };
+  });
+  res.json(result);
+}));
+
 processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras).").max(400) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;

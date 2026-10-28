@@ -2,7 +2,18 @@
 
 Actualizado: 2026-10-28
 
-## Último cambio: Caja «Salió dinero» con atajos y «No es efectivo» (mejoras 1 y 2 de la caja)
+## Último cambio: Secado con la cuadrilla pagada por fuera
+
+- Caso 2026-10-28: la cáscara de ROVINSON (7 tickets, 87.62 QQ) se secó el sábado 24/10 y se registra después. Su
+  cuadrilla ya se pagó en el Excel.
+- Migración 20261121: `drying_tunnel_reports.cuadrilla_pagada_fuera`. `autoGenerarPagosCuadrillaDeSecado` la respeta
+  (no genera llenado ni botada, ni siquiera al completar el combustible o editar).
+- POST /process-flow/drying/:id/cuadrilla-fuera {fuera} (solo administrador): quita los pagos pendientes de esa
+  cuadrilla (409 si ya se pagó en el sistema); desmarcarlo los regenera. Botón «🧺 Cuadrilla ya pagada» en Secados
+  guardados. Simulacro `secado_cuadrilla_fuera`.
+- La guardia del secador solo cuenta corridas de lunes a viernes: un secado de sábado no la genera.
+
+## Cambio anterior: Caja «Salió dinero» con atajos y «No es efectivo» (mejoras 1 y 2 de la caja)
 
 - Del Excel PILADORA (memoria `cuadre-caja-adaptacion`): la cajera dejó de poner categoría y usa la columna FOMENTO
   para lo que no es efectivo. Mejoras 3 a 5 (cáscara al agricultor, nómina del viernes, conteo al cerrar) EN ESPERA.
