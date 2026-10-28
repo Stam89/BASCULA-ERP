@@ -41,7 +41,7 @@ import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
 import { BuscadorGlobal, type Filtro } from "./components/BuscadorGlobal";
-import { PagarSemana, imprimirReciboSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
+import { PagarSemana, imprimirReciboSemana, type EleccionSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
 import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
@@ -721,7 +721,10 @@ type CuadrillaSummaryRow = { worker_name: string; entradas: number; total: numbe
 // Personal administrativo (sueldo fijo quincenal), por accionista.
 // base_salary = sueldo de la QUINCENA (en los pendientes: el sueldo de ESE corte); salario_fin_mes = el de fin de mes
 // (null = igual a la quincena); sueldo_mes = los dos juntos.
-type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; salario_fin_mes?: number | null; sueldo_mes?: number; is_active?: boolean; periodo?: string | null; corte?: string | null };
+type AdminStaff = { id: string; cargo: string; worker_name: string; base_salary: number; salario_fin_mes?: number | null; sueldo_mes?: number; is_active?: boolean; periodo?: string | null; corte?: string | null;
+  /** SEMANAL: base_salary es el pago por día y dias_semana los días (se paga el viernes en «Pagar la semana»). */
+  periodicidad?: "QUINCENA" | "SEMANAL"; dias_semana?: number };
+const esSemanal = (st: AdminStaff) => st.periodicidad === "SEMANAL";
 const sueldoFinDeMes = (st: AdminStaff) => st.salario_fin_mes ?? st.base_salary;
 const sueldoDelMes = (st: AdminStaff) => st.sueldo_mes ?? round2((st.base_salary ?? 0) + sueldoFinDeMes(st));
 type AdminSalaryPayment = { id: string; worker_name: string; cargo: string; base_salary: number; incentivo: number; descuentos: number; net_amount: number; periodo: string | null; paid_at: string };
@@ -3427,7 +3430,7 @@ export function App() {
   const [adminStaff, setAdminStaff] = useState<AdminStaff[]>([]);
   // Dados de baja (ocultos, con su historial): se pueden reactivar.
   const [adminBajas, setAdminBajas] = useState<Array<AdminStaff & { pagos: number }>>([]);
-  const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" });
+  const [adminStaffForm, setAdminStaffForm] = useState({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "", periodicidad: "QUINCENA" as "QUINCENA" | "SEMANAL", dias_semana: "6" });
   const [adminEditId, setAdminEditId] = useState<string | null>(null);
   const [adminHistory, setAdminHistory] = useState<AdminSalaryPayment[]>([]);
   const [adminPay, setAdminPay] = useState<null | { staff: AdminStaff; incentivo: string; descuentos: string }>(null);
@@ -5126,15 +5129,17 @@ export function App() {
     } catch { setSemanaVista(null); }
     finally { setSemanaBusy(false); }
   }
-  async function pagarSemana() {
+  async function pagarSemana(eleccion: EleccionSemana) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("Abre una caja para pagar.");
     if (!semanaVista) throw new Error("Aún se está calculando la semana.");
-    // confirmar_neto = lo que se revisó en pantalla: si al pagar es otro, el servidor no paga nada.
+    // confirmar_neto = lo que se revisó en pantalla (solo lo marcado): si al pagar es otro, el servidor no paga nada.
     const r = await apiPost<SemanaPagada>("/nomina-semanal/pagar", {
       hasta: semanaVista.hasta,
       cash_register_id: registerId,
-      confirmar_neto: semanaVista.totales.neto
+      confirmar_neto: eleccion.neto,
+      excluir: eleccion.excluir,
+      dias: eleccion.dias
     });
     addToast(`Semana pagada: ${money(r.totales.neto)} a ${r.totales.personas} persona(s)`, "success");
     imprimirReciboSemana(r, { nombre: appSettings.business_name, subtitulo: [appSettings.business_subtitle, appSettings.ruc && `RUC: ${appSettings.ruc}`].filter(Boolean).join(" · ") }, addToast);
@@ -7059,13 +7064,17 @@ export function App() {
     // Fin de mes vacío = igual a la quincena.
     const finMes = adminStaffForm.salario_fin_mes.trim() === "" ? null : Number(adminStaffForm.salario_fin_mes);
     if (adminStaffForm.worker_name.trim().length < 2) { addToast("Escribe el nombre del empleado", "error"); return; }
-    if (adminStaffForm.base_salary.trim() === "" || !(base >= 0)) { addToast("Sueldo de la quincena inválido", "error"); return; }
+    const semanal = adminStaffForm.periodicidad === "SEMANAL";
+    const diasSemana = Math.round(Number(adminStaffForm.dias_semana));
+    if (adminStaffForm.base_salary.trim() === "" || !(base >= 0)) { addToast(semanal ? "Pago por día inválido" : "Sueldo de la quincena inválido", "error"); return; }
+    if (semanal && !(diasSemana >= 1 && diasSemana <= 7)) { addToast("Días por semana: de 1 a 7", "error"); return; }
     if (finMes !== null && !(finMes >= 0)) { addToast("Sueldo de fin de mes inválido", "error"); return; }
     try {
-      const payload = { cargo: adminStaffForm.cargo.trim(), worker_name: adminStaffForm.worker_name.trim(), base_salary: base, salario_fin_mes: finMes };
+      const payload = { cargo: adminStaffForm.cargo.trim(), worker_name: adminStaffForm.worker_name.trim(), base_salary: base,
+        salario_fin_mes: semanal ? null : finMes, periodicidad: adminStaffForm.periodicidad, dias_semana: semanal ? diasSemana : 6 };
       if (adminEditId) await apiPut(`/admin-payroll/staff/${adminEditId}`, payload);
       else await apiPost("/admin-payroll/staff", payload);
-      setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" });
+      setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "", periodicidad: "QUINCENA", dias_semana: "6" });
       setAdminEditId(null);
       addToast(adminEditId ? "Empleado actualizado" : "Empleado agregado", "success");
       await loadAdminStaff();
@@ -7074,7 +7083,8 @@ export function App() {
   function editAdminStaff(st: AdminStaff) {
     setAdminEditId(st.id);
     setAdminStaffForm({ cargo: st.cargo ?? "", worker_name: st.worker_name, base_salary: String(st.base_salary ?? ""),
-      salario_fin_mes: st.salario_fin_mes == null ? "" : String(st.salario_fin_mes) });
+      salario_fin_mes: st.salario_fin_mes == null ? "" : String(st.salario_fin_mes),
+      periodicidad: esSemanal(st) ? "SEMANAL" : "QUINCENA", dias_semana: String(st.dias_semana ?? 6) });
   }
   async function removeAdminStaff(st: AdminStaff) {
     if (!(await confirmar(`¿Dar de baja a ${st.worker_name}?\n\nDeja de aparecer en la nómina administrativa y en los pagos pendientes. Su historial de sueldos ya pagados se CONSERVA.`))) return;
@@ -19830,6 +19840,9 @@ Motivo (obligatorio):`, ""));
                           {accionistas.length > 1 && (
                             <button type="button" title="Quién le debe a quién entre la Matriz y los socios; dinero que se dan y pagos por su cuenta" onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios</button>
                           )}
+                          {esMatrizActiva && visibleTabs.includes("Nomina") && (
+                            <button type="button" title="Pagar de una vez a la planta, cuadrilla, bajada de carro y sueldos semanales" onClick={() => irADestino("Nomina", "pagos")}>🗓️ Pagar nómina del viernes</button>
+                          )}
                           {cajaSubTab !== "resumen" && (
                             <button type="button" onClick={() => abrir("resumen")}>📋 Movimientos</button>
                           )}
@@ -24870,9 +24883,9 @@ Motivo (obligatorio):`, ""));
                                 <tr key={st.id}>
                                   <td>{st.cargo || "—"}</td>
                                   <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{ult ? `último pago: ${new Date(ult).toLocaleDateString("es-EC")}` : "aún sin pagar"}</div></td>
-                                  <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                                  <td className="num" style={{ fontWeight: 700 }}>{money(sueldoFinDeMes(st))}</td>
-                                  <td className="num">{money(sueldoDelMes(st))}</td>
+                                  <td className="num" style={{ fontWeight: 700 }}>{esSemanal(st) ? `${money(st.base_salary)}/día` : money(st.base_salary)}</td>
+                                  <td className="num" style={{ fontWeight: 700 }}>{esSemanal(st) ? `${st.dias_semana ?? 6} días/sem.` : money(sueldoFinDeMes(st))}</td>
+                                  <td className="num">{esSemanal(st) ? `${money(round2(st.base_salary * (st.dias_semana ?? 6)))}/sem.` : money(sueldoDelMes(st))}</td>
                                 </tr>
                               );
                             })}
@@ -27265,14 +27278,32 @@ Motivo (obligatorio):`, ""));
                       <strong style={{ fontSize: 13.5 }}>{adminEditId ? "✏️ Editar empleado" : "➕ Agregar empleado"}</strong>
                       <label><span>Cargo</span><input value={adminStaffForm.cargo} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, cargo: e.target.value })} placeholder="Ej. Contadora, Oficina" /></label>
                       <label><span>Trabajador</span><input value={adminStaffForm.worker_name} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, worker_name: e.target.value })} placeholder="Nombre y apellido" /></label>
+                      <label><span>¿Cómo cobra?</span>
+                        <select value={adminStaffForm.periodicidad} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, periodicidad: e.target.value as "QUINCENA" | "SEMANAL" })}>
+                          <option value="QUINCENA">Cada quincena (día 15 y fin de mes)</option>
+                          <option value="SEMANAL">Cada semana, por día (se paga el viernes)</option>
+                        </select>
+                      </label>
+                      {adminStaffForm.periodicidad === "SEMANAL" ? (
+                        <>
+                          <label><span>Pago por día</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
+                          <label><span>Días por semana <small className="muted">(lunes a sábado)</small></span><input type="number" step="1" min="1" max="7" value={adminStaffForm.dias_semana} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, dias_semana: e.target.value })} /></label>
+                          {Number(adminStaffForm.base_salary) > 0 && (
+                            <small className="muted">A la semana: {money(round2(Number(adminStaffForm.base_salary) * (Number(adminStaffForm.dias_semana) || 0)))} · el viernes se pueden cambiar los días</small>
+                          )}
+                        </>
+                      ) : (
+                        <>
                       <label><span>Sueldo de la quincena (día 15)</span><input type="number" step="0.01" min="0" value={adminStaffForm.base_salary} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, base_salary: e.target.value })} placeholder="0.00" /></label>
                       <label><span>Sueldo de fin de mes</span><input type="number" step="0.01" min="0" value={adminStaffForm.salario_fin_mes} onChange={(e) => setAdminStaffForm({ ...adminStaffForm, salario_fin_mes: e.target.value })} placeholder={adminStaffForm.base_salary ? `Igual a la quincena (${money(Number(adminStaffForm.base_salary) || 0)})` : "Igual a la quincena"} /></label>
                       {Number(adminStaffForm.base_salary) > 0 && (
                         <small className="muted">Al mes: {money(round2(Number(adminStaffForm.base_salary) + (adminStaffForm.salario_fin_mes.trim() === "" ? Number(adminStaffForm.base_salary) : Number(adminStaffForm.salario_fin_mes) || 0)))}</small>
                       )}
+                        </>
+                      )}
                       <div className="buttonRow">
                         <button type="submit" className="primary">{adminEditId ? "Guardar" : "+ Agregar"}</button>
-                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "" }); }}>Cancelar</button>}
+                        {adminEditId && <button type="button" onClick={() => { setAdminEditId(null); setAdminStaffForm({ cargo: "", worker_name: "", base_salary: "", salario_fin_mes: "", periodicidad: "QUINCENA", dias_semana: "6" }); }}>Cancelar</button>}
                       </div>
                     </form>
                     {adminStaff.length === 0 ? (
@@ -27285,9 +27316,9 @@ Motivo (obligatorio):`, ""));
                             {adminStaff.map((st) => (
                               <tr key={st.id}>
                                 <td>{st.cargo || "—"}</td>
-                                <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>al mes {money(sueldoDelMes(st))}</div></td>
-                                <td className="num" style={{ fontWeight: 700 }}>{money(st.base_salary)}</td>
-                                <td className="num" style={{ fontWeight: 700 }}>{money(sueldoFinDeMes(st))}</td>
+                                <td style={{ fontWeight: 600 }}>{st.worker_name}<div style={{ fontWeight: 400, fontSize: 11, color: "#6b7280" }}>{esSemanal(st) ? `cada semana · ${money(round2(st.base_salary * (st.dias_semana ?? 6)))}` : `al mes ${money(sueldoDelMes(st))}`}</div></td>
+                                <td className="num" style={{ fontWeight: 700 }}>{esSemanal(st) ? `${money(st.base_salary)}/día` : money(st.base_salary)}</td>
+                                <td className="num" style={{ fontWeight: 700 }}>{esSemanal(st) ? `${st.dias_semana ?? 6} días/sem.` : money(sueldoFinDeMes(st))}</td>
                                 <td className="num" style={{ whiteSpace: "nowrap" }}>
                                   <button type="button" className="btnGhost" title="Editar" onClick={() => editAdminStaff(st)}>✏️</button>
                                   <button type="button" className="btnGhost" title="Dar de baja" style={{ marginLeft: 6 }} onClick={() => removeAdminStaff(st)}>🗑</button>

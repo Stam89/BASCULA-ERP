@@ -6,12 +6,16 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { avisarSobregiro } from "../../services/caja.js";
+import type { PoolClient } from "pg";
+import type { Request as ExpressRequest } from "express";
 
 // Nómina administrativa (personal de oficina) POR ACCIONISTA. Cada accionista
 // (matriz y socios) administra su propio personal y le paga de su propia caja.
 // Sueldo fijo QUINCENAL + incentivo opcional − descuentos. Lo de la quincena (día 15) es `base_salary`;
 // lo de FIN DE MES es `salario_fin_mes` (vacío = igual a la quincena). Todo lo scope el
 // accionista activo (req.accionistaId, que deja resolveAccionista).
+// 🗓️ SEMANAL (2026-10-28, la cocinera): `base_salary` es el PAGO POR DÍA y `dias_semana` los días de lunes a sábado;
+// se paga cada viernes (POST /nomina-semanal/pagar) o aquí, con período «Semana AAAA-MM-DD» (el lunes).
 export const adminPayrollRouter = Router();
 
 const round2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
@@ -26,7 +30,7 @@ function accId(req: unknown): string {
 adminPayrollRouter.get("/staff", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
-            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active, periodicidad, dias_semana
      FROM admin_staff
      WHERE accionista_id = $1 AND is_active = true
      ORDER BY worker_name`,
@@ -44,14 +48,17 @@ adminPayrollRouter.post("/staff", requireAdmin, asyncRoute(async (req, res) => {
     cargo: z.string().max(80).optional().default(""),
     worker_name: z.string().min(2),
     base_salary: z.coerce.number().min(0),
-    salario_fin_mes: salarioFinMes
+    salario_fin_mes: salarioFinMes,
+    periodicidad: z.enum(["QUINCENA", "SEMANAL"]).optional().default("QUINCENA"),
+    dias_semana: z.coerce.number().int().min(1).max(7).optional().default(6)
   }).parse(req.body);
   const result = await pool.query(
-    `INSERT INTO admin_staff (accionista_id, cargo, worker_name, base_salary, salario_fin_mes)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO admin_staff (accionista_id, cargo, worker_name, base_salary, salario_fin_mes, periodicidad, dias_semana)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
-            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active`,
-    [accId(req), body.cargo.trim(), body.worker_name.trim(), body.base_salary, body.salario_fin_mes ?? null]
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active, periodicidad, dias_semana`,
+    [accId(req), body.cargo.trim(), body.worker_name.trim(), body.base_salary,
+     body.periodicidad === "SEMANAL" ? null : body.salario_fin_mes ?? null, body.periodicidad, body.dias_semana]
   );
   res.status(201).json(result.rows[0]);
 }));
@@ -96,19 +103,23 @@ adminPayrollRouter.put("/staff/:id", requireAdmin, asyncRoute(async (req, res) =
     cargo: z.string().max(80).optional(),
     worker_name: z.string().min(2).optional(),
     base_salary: z.coerce.number().min(0).optional(),
-    salario_fin_mes: salarioFinMes
+    salario_fin_mes: salarioFinMes,
+    periodicidad: z.enum(["QUINCENA", "SEMANAL"]).optional(),
+    dias_semana: z.coerce.number().int().min(1).max(7).optional()
   }).parse(req.body);
   const result = await pool.query(
     `UPDATE admin_staff SET
         cargo = COALESCE($3, cargo),
         worker_name = COALESCE($4, worker_name),
         base_salary = COALESCE($5, base_salary),
-        salario_fin_mes = CASE WHEN $6 THEN $7::numeric ELSE salario_fin_mes END
+        salario_fin_mes = CASE WHEN $8 = 'SEMANAL' THEN NULL WHEN $6 THEN $7::numeric ELSE salario_fin_mes END,
+        periodicidad = COALESCE($8, periodicidad),
+        dias_semana = COALESCE($9, dias_semana)
      WHERE id = $1 AND accionista_id = $2
      RETURNING id, cargo, worker_name, base_salary::float AS base_salary, salario_fin_mes::float AS salario_fin_mes,
-            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active`,
+            (base_salary + COALESCE(salario_fin_mes, base_salary))::float AS sueldo_mes, is_active, periodicidad, dias_semana`,
     [req.params.id, accId(req), body.cargo?.trim() ?? null, body.worker_name?.trim() ?? null, body.base_salary ?? null,
-     body.salario_fin_mes !== undefined, body.salario_fin_mes ?? null]
+     body.salario_fin_mes !== undefined, body.salario_fin_mes ?? null, body.periodicidad ?? null, body.dias_semana ?? null]
   );
   if (!result.rows[0]) throw new ApiError(404, "Empleado no encontrado");
   res.json(result.rows[0]);
@@ -192,7 +203,7 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
               (CASE WHEN $2 THEN s.base_salary ELSE COALESCE(s.salario_fin_mes, s.base_salary) END)::float AS base_salary,
               s.base_salary::float AS sueldo_quincena, COALESCE(s.salario_fin_mes, s.base_salary)::float AS sueldo_fin_mes
        FROM admin_staff s, v
-       WHERE s.accionista_id = $1 AND s.is_active = true
+       WHERE s.accionista_id = $1 AND s.is_active = true AND s.periodicidad <> 'SEMANAL'
          AND NOT EXISTS (
            SELECT 1 FROM admin_salary_payments pp
            WHERE pp.staff_id = s.id AND pp.anulado_at IS NULL
@@ -212,19 +223,29 @@ adminPayrollRouter.get("/pending", asyncRoute(async (req, res) => {
   });
 }));
 
-// ── Pago de sueldo (sale de la caja del accionista activo) ───────────────────
-adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
-  const body = z.object({
-    staff_id: z.string().uuid(),
-    incentivo: z.coerce.number().min(0).optional().default(0),
-    descuentos: z.coerce.number().min(0).optional().default(0),
-    periodo: z.string().max(40).optional(),
-    cash_register_id: z.string().uuid()
-  }).parse(req.body);
-  const accionista = accId(req);
-  const user = (req as AuthenticatedRequest).user;
+/** Lunes (AAAA-MM-DD) de la semana de `iso`: el período de un sueldo semanal es «Semana <lunes>». Lógica pura. */
+export function lunesDeSemana(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
 
-  const result = await inTransaction(async (client) => {
+export type PagoSueldo = {
+  staff_id: string; incentivo: number; descuentos: number; periodo?: string | null; cash_register_id: string;
+  /** Solo sueldo SEMANAL: días trabajados (por defecto los de su ficha). */
+  dias?: number | null;
+};
+
+/**
+ * Paga un sueldo (quincena, fin de mes o semana) desde la caja del accionista. La usan «Pagar» de Personal y el pago de
+ * la nómina del viernes. Va DENTRO de una transacción; `req` (opcional) avisa si la caja queda en negativo.
+ */
+export async function pagarSueldo(client: PoolClient, o: PagoSueldo & { accionista: string; userId: string | null; req?: Pick<ExpressRequest, "headers"> }) {
+  const body = o;
+  const accionista = o.accionista;
+  const user = { id: o.userId };
+  const req = o.req;
+  {
     // La caja debe ser del accionista activo y estar abierta.
     const reg = await client.query(
       "SELECT id, status FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
@@ -234,15 +255,23 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no está abierta");
 
     const staff = await client.query(
-      `SELECT id, cargo, worker_name, base_salary::float AS base_salary, COALESCE(salario_fin_mes, base_salary)::float AS sueldo_fin_mes
+      `SELECT id, cargo, worker_name, base_salary::float AS base_salary, COALESCE(salario_fin_mes, base_salary)::float AS sueldo_fin_mes,
+              periodicidad, dias_semana
          FROM admin_staff WHERE id = $1 AND accionista_id = $2 FOR UPDATE`,
       [body.staff_id, accionista]
     );
     if (!staff.rows[0]) throw new ApiError(404, "Empleado no encontrado");
+    const semanal = staff.rows[0].periodicidad === "SEMANAL";
+    const dias = semanal ? Number(body.dias ?? staff.rows[0].dias_semana) : null;
+    if (semanal && !(dias! > 0 && dias! <= 7)) throw new ApiError(400, "Los días trabajados van de 1 a 7.");
 
-    // Período de corte legible (Quincena / Fin de mes del mes en curso) si no se
+    // Período de corte legible (Quincena / Fin de mes del mes en curso; la semana por su lunes) si no se
     // indicó uno. paid_at (fecha_pago) lo pone la BD por defecto (now()).
     let periodo = body.periodo ?? null;
+    if (!periodo && semanal) {
+      const hoy = (await client.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d as string;
+      periodo = `Semana ${lunesDeSemana(hoy)}`;
+    }
     if (!periodo) {
       const m = await client.query(
         `SELECT to_char(CURRENT_DATE, 'YYYY-MM') AS ym, EXTRACT(DAY FROM CURRENT_DATE)::int AS dom,
@@ -254,7 +283,9 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
 
     // El sueldo depende del corte: lo de la quincena o lo de fin de mes.
     const esFinDeMes = /fin de mes/i.test(periodo);
-    const base = round2(Number(esFinDeMes ? staff.rows[0].sueldo_fin_mes : staff.rows[0].base_salary));
+    // Semanal: pago por día × días trabajados.
+    const base = semanal ? round2(Number(staff.rows[0].base_salary) * dias!)
+      : round2(Number(esFinDeMes ? staff.rows[0].sueldo_fin_mes : staff.rows[0].base_salary));
     const incentivo = round2(body.incentivo);
     const descuentos = round2(body.descuentos);
     const net = round2(Math.max(0, base + incentivo - descuentos));
@@ -269,26 +300,41 @@ adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
     if (yaPagado.rowCount) {
       throw new ApiError(409, `${staff.rows[0].worker_name} ya cobró «${periodo}». Si fue un error, anula ese pago en Caja y luego vuelve a pagarlo.`);
     }
-    await avisarSobregiro(client, body.cash_register_id, net, req);
-
-    await client.query(
-      `INSERT INTO cash_movements
-         (cash_register_id, movement, category, reference_type, amount, description, created_by)
-       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'admin_salary_payments', $2, $3, $4)`,
-      [body.cash_register_id, net,
-       `Sueldo ${staff.rows[0].cargo ? staff.rows[0].cargo + " " : ""}${staff.rows[0].worker_name}`, user?.id ?? null]
-    );
+    if (req) await avisarSobregiro(client, body.cash_register_id, net, req);
 
     const pay = await client.query(
       `INSERT INTO admin_salary_payments
-         (accionista_id, staff_id, worker_name, cargo, base_salary, incentivo, descuentos, net_amount, periodo, cash_register_id, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         (accionista_id, staff_id, worker_name, cargo, base_salary, incentivo, descuentos, net_amount, periodo, cash_register_id, created_by, dias)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING id, worker_name, cargo, net_amount::float AS net_amount, paid_at`,
-      [accionista, body.staff_id, staff.rows[0].worker_name, staff.rows[0].cargo, base, incentivo, descuentos, net, periodo, body.cash_register_id, user?.id ?? null]
+      [accionista, body.staff_id, staff.rows[0].worker_name, staff.rows[0].cargo, base, incentivo, descuentos, net, periodo, body.cash_register_id, user?.id ?? null, dias]
     );
-    return { base, incentivo, descuentos, paid: net, payment: pay.rows[0] };
-  });
+    // El egreso queda ENLAZADO a su pago (reference_id): al anularlo en Caja vuelve a pendiente ESE sueldo y no otro
+    // pagado en la misma operación (el viernes se pagan varios a la vez, con la misma hora).
+    await client.query(
+      `INSERT INTO cash_movements
+         (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'admin_salary_payments', $2, $3, $4, $5)`,
+      [body.cash_register_id, pay.rows[0].id, net,
+       `Sueldo ${staff.rows[0].cargo ? staff.rows[0].cargo + " " : ""}${staff.rows[0].worker_name}${semanal ? ` · ${periodo} · ${dias} día(s)` : ""}`, user?.id ?? null]
+    );
+    return { base, incentivo, descuentos, paid: net, payment: pay.rows[0], periodo, dias };
+  }
+}
 
+// ── Pago de sueldo (sale de la caja del accionista activo) ───────────────────
+adminPayrollRouter.post("/pay", asyncRoute(async (req, res) => {
+  const body = z.object({
+    staff_id: z.string().uuid(),
+    incentivo: z.coerce.number().min(0).optional().default(0),
+    descuentos: z.coerce.number().min(0).optional().default(0),
+    periodo: z.string().max(40).optional(),
+    cash_register_id: z.string().uuid(),
+    dias: z.coerce.number().min(0.5).max(7).optional()
+  }).parse(req.body);
+  const result = await inTransaction((client) => pagarSueldo(client, {
+    ...body, accionista: accId(req), userId: (req as AuthenticatedRequest).user?.id ?? null, req
+  }));
   res.json(result);
 }));
 

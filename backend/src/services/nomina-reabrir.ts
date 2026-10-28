@@ -94,7 +94,9 @@ export async function reabrirPagoNomina(
       `UPDATE admin_salary_payments sp SET anulado_at = now()
          FROM cash_movements cm
         WHERE cm.id = $1 AND sp.anulado_at IS NULL
-          AND sp.cash_register_id = cm.cash_register_id AND sp.paid_at = cm.created_at
+          AND (sp.id = cm.reference_id
+               -- Pagos viejos sin enlace: misma caja y misma hora.
+               OR (cm.reference_id IS NULL AND sp.cash_register_id = cm.cash_register_id AND sp.paid_at = cm.created_at))
         RETURNING sp.worker_name, sp.periodo`,
       [m.id]
     );

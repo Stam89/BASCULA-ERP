@@ -2,7 +2,21 @@
 
 Actualizado: 2026-10-28
 
-## Último cambio: Caja › 🌾 Arroz en cáscara (mejora 3 de la caja)
+## Último cambio: Nómina del viernes con casillas y sueldo semanal por día (mejora 4 de la caja)
+
+- «Pagar la semana» (Nómina › Pagos y botón «🗓️ Pagar nómina del viernes» en Caja › Otros registros) ahora tiene
+  casillas: lo desmarcado queda pendiente. La bajada de carro va toda junta (`bajada`). POST /nomina-semanal/pagar
+  acepta `excluir` (claves grupo|rol|nombre), `dias` {staff_id: n} y `confirmar_neto` = total de lo marcado.
+- Migración 20261122: `admin_staff.periodicidad` (QUINCENA | SEMANAL) y `dias_semana`, y `admin_salary_payments.dias`.
+  En un SEMANAL `base_salary` = PAGO POR DÍA. Sale en el viernes como grupo «sueldo» (pago por día × días, editable),
+  período «Semana <lunes>» (`lunesDeSemana`, con prueba). No sale entre las quincenas de /admin-payroll/pending.
+- `pagarSueldo()` (admin-payroll) la usan /admin-payroll/pay y el viernes. El egreso ahora lleva reference_id = su pago
+  de sueldo; anular uno ya no anula los otros pagados en la misma operación (nomina-reabrir usa reference_id y deja la
+  hora exacta solo para los pagos viejos). Simulacro `nomina_viernes`.
+- Tras el borrado de fábrica no hay personal: hay que registrar a DANIELA (cocinera, semanal por día), LENIN, CECILIA…
+  en Configuración › 💼 Personal administrativo.
+
+## Cambio anterior: Caja › 🌾 Arroz en cáscara (mejora 3 de la caja)
 
 - La pestaña Anticipos de Caja ahora se llama «🌾 Arroz en cáscara». Antes solo listaba agricultores con
   liquidación pendiente. Ahora busca en TODOS y crea uno nuevo desde el buscador (POST /farmers).

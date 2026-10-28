@@ -5090,6 +5090,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .semana-grupo-head { display: flex; justify-content: space-between; padding: 7px 12px; background: var(--c-surface-2); font-size: 13px; font-weight: 700; position: sticky; top: 0; }
 .semana-fila { display: flex; justify-content: space-between; gap: 10px; padding: 6px 12px; font-size: 13.5px; border-top: 1px solid var(--c-surface-3); }
 .semana-fila small { color: var(--c-text-muted); }
+/* Mejora 4 (2026-10-28): casillas para dejar a alguien sin pagar hoy y días del sueldo semanal. */
+.semana-check { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.semana-check input[type="checkbox"] { width: 17px; height: 17px; flex: 0 0 auto; margin: 0; }
+.semana-fila--fuera { opacity: 0.55; }
+.semana-fila--fuera b { text-decoration: line-through; }
+.semana-dias { width: 54px; padding: 2px 4px; font-size: 12.5px; text-align: center; }
 .semana-total { display: flex; justify-content: space-between; align-items: baseline; margin-top: 10px; padding-top: 8px; border-top: 2px solid var(--c-text); font-size: 16px; font-weight: 800; }
 .semana-total b { color: #047857; font-size: 20px; }
 @media (max-width: 640px) { .semana-pagar { width: 100%; } .semana-fecha { width: 100%; } }
