@@ -20128,7 +20128,7 @@ Motivo (obligatorio):`, ""));
                             ) : (
                               <BuscadorCombo id="anticipoAgricultor" placeholder="🔍 Escribe el nombre del agricultor…" opciones={opciones} max={12}
                                 vacio="No está registrado: escribe su nombre completo para crearlo."
-                                crear={(t) => (t.trim().length >= 3 && !farmers.some((f) => sinTilde(f.full_name) === sinTilde(t)) ? `➕ Crear agricultor «${t.trim().toUpperCase()}»` : null)}
+                                crear={(t) => (t.trim().length >= 3 && !farmers.some((f) => sinTilde(f.full_name).includes(sinTilde(t))) ? `Crear agricultor «${t.trim().toUpperCase()}»` : null)}
                                 onCrear={(t) => { void crearAgricultor(t); }}
                                 onElegir={setAnticipoFarmerId} />
                             )}
