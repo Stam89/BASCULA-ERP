@@ -1100,6 +1100,9 @@ type MotorActiveReport = {
 type TunnelStatusRow = {
   tunnel_number: number;
   accionista_name: string;
+  total_quintals?: number;
+  es_servicio?: boolean;
+  dry_end_at?: string | null;
 };
 
 type ProcessFlow = {
@@ -2599,6 +2602,10 @@ export function App() {
   // Túneles ocupados por OTROS accionistas (secado en curso): túnel → nombre del
   // accionista que lo usa. El formulario de llenado bloquea esas secciones.
   const [occupiedTunnels, setOccupiedTunnels] = useState<Record<number, string>>({});
+  // 🤝 Secadora compartida (2026-10-28): túneles en uso que YA tienen hora final (no se les puede sumar arroz) y las
+  // secadoras donde el usuario indicó que su arroz se echó junto con el que ya está secando.
+  const [tunelesConHoraFinal, setTunelesConHoraFinal] = useState<Record<number, boolean>>({});
+  const [secadoraCompartida, setSecadoraCompartida] = useState<Record<string, boolean>>({});
   // Combustible DEL MOTOR: bombona y diesel por medidor (inicio - fin), y
   // cilindros por unidad. Se registra una vez y se reparte.
   const [gasForm, setGasForm] = useState({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
@@ -11068,12 +11075,18 @@ export function App() {
     ]);
     setMotorActiveReports(rows);
     apiGet<typeof combustiblePendiente>("/process-flow/drying/combustible-pendiente").then(setCombustiblePendiente).catch(() => undefined);
-    // Un túnel ocupado por otro accionista no se puede llenar: se bloquea en el formulario.
+    // Un túnel ocupado se bloquea en el formulario (salvo que se elija compartirlo). Se listan TODOS sus registros:
+    // una secadora compartida tiene uno por dueño/servicio.
     const occupied: Record<number, string> = {};
+    const conHoraFinal: Record<number, boolean> = {};
     for (const r of tunnelRows) {
-      if (!(r.tunnel_number in occupied)) occupied[r.tunnel_number] = r.accionista_name;
+      const qq = Number(r.total_quintals ?? 0);
+      const parte = `${r.accionista_name}${r.es_servicio ? " · servicio" : ""}${qq > 0 ? ` (${qq.enReal()} QQ)` : ""}`;
+      occupied[r.tunnel_number] = occupied[r.tunnel_number] ? `${occupied[r.tunnel_number]} + ${parte}` : parte;
+      if (r.dry_end_at) conHoraFinal[r.tunnel_number] = true;
     }
     setOccupiedTunnels(occupied);
+    setTunelesConHoraFinal(conHoraFinal);
   }
 
   // Guarda TODO el informe del motor junto: crea el lote de cada secadora que
@@ -11113,7 +11126,7 @@ export function App() {
 
     // Candado: no se puede guardar nada en un túnel que está secando a otro
     // accionista (además del bloqueo visual del formulario).
-    const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)]);
+    const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)] && !secadoraCompartida[s]);
     if (bloqueada) {
       const t = tunelDeSecadora(bloqueada);
       addToast(`El túnel ${t} está en uso por ${occupiedTunnels[t]}. Quita esos ingresos y usa otro túnel.`, "error");
@@ -11156,12 +11169,18 @@ export function App() {
         operator_name: operatorName || undefined,
         notes: form.get(`notes_${t}`) || undefined,
         botada_empaque: (form.get(`botada_empaque_${t}`) as string) || "TULAS",
-        botada_sacos: numberOrUndefined(form.get(`botada_sacos_${t}`))
+        botada_sacos: numberOrUndefined(form.get(`botada_sacos_${t}`)),
+        compartir_secadora: Boolean(occupiedTunnels[t] && secadoraCompartida[secadora])
       });
       creados++;
       sublotesCreados += saved.reports.length;
     }
     if (conIngresos.length > 0) {
+      setSecadoraCompartida((cur) => {
+        const next = { ...cur };
+        conIngresos.forEach((s) => { delete next[s]; });
+        return next;
+      });
       setDryingSelections((cur) => {
         const next = { ...cur };
         conIngresos.forEach((s) => { next[s] = []; });
@@ -15638,21 +15657,42 @@ Motivo (obligatorio):`, ""));
                   {MOTOR_SECADORAS[motorActivo].map((secadora) => {
                     const t = tunelDeSecadora(secadora);
                     const ocupadoPor = occupiedTunnels[t];
-                    // El túnel ya lo está secando OTRO accionista: se bloquea la
-                    // sección para que no se le carguen datos por equivocación.
-                    if (ocupadoPor) {
+                    const compartida = Boolean(ocupadoPor && secadoraCompartida[secadora]);
+                    // El túnel ya está secando: se bloquea la sección para que no se le carguen datos por
+                    // equivocación. Si de verdad se echó más arroz (de otro dueño o un servicio) en la misma
+                    // secadora, se puede COMPARTIR: queda como su propio registro en el mismo túnel.
+                    if (ocupadoPor && !compartida) {
                       return (
-                        <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-danger)", borderRadius: "var(--r-lg)", padding: 14, background: "#fef2f2", opacity: 0.85 }}>
+                        <div key={secadora} className="dryingForm" style={{ border: "1px solid var(--c-danger)", borderRadius: "var(--r-lg)", padding: 14, background: "#fef2f2", opacity: 0.95 }}>
                           <h3 style={{ marginTop: 0 }}>🌀 {secadora} · Túnel {t} <span className="chip danger">✗ En uso</span></h3>
                           <p style={{ fontSize: 13, margin: "4px 0" }}><strong>OCUPADO POR:</strong> {ocupadoPor}</p>
-                          <p className="muted" style={{ fontSize: 13, margin: "4px 0" }}>Finaliza ese secado antes de usar este túnel.</p>
+                          {tunelesConHoraFinal[t] ? (
+                            <p className="muted" style={{ fontSize: 13, margin: "4px 0" }}>Ya terminó de secar: finaliza ese secado antes de usar este túnel.</p>
+                          ) : (
+                            <>
+                              <p className="muted" style={{ fontSize: 13, margin: "4px 0 8px" }}>Finaliza ese secado antes de usar este túnel, o si tu arroz se echó en esta misma secadora:</p>
+                              <button type="button" className="btnSecondary" style={{ fontWeight: 700 }}
+                                onClick={() => setSecadoraCompartida((cur) => ({ ...cur, [secadora]: true }))}>
+                                🤝 Mi arroz se echó en esta misma secadora
+                              </button>
+                            </>
+                          )}
                         </div>
                       );
                     }
                     const lotes = lotesDe(secadora);
                     return (
-                      <div key={secadora} className="dryingForm" style={{ border: "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#f8fafc", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
-                        <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}</h3>
+                      <div key={secadora} className="dryingForm" style={{ border: compartida ? "2px solid #f59e0b" : "1px solid #e2e8f0", borderRadius: 16, padding: 20, background: "#f8fafc", boxShadow: "0 1px 3px rgba(0,0,0,0.08)" }}>
+                        <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}{compartida ? <> <span className="chip warn">🤝 Compartida</span></> : null}</h3>
+                        {compartida && (
+                          <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "8px 12px", margin: "0 0 12px", fontSize: 13 }}>
+                            Ya está secando: <strong>{ocupadoPor}</strong>. Lo que agregues aquí queda como <strong>otro registro en la misma secadora</strong>: las mismas horas, el combustible se reparte por QQ y al pilar cada uno va por su lado.{" "}
+                            <button type="button" className="btnGhost" style={{ padding: "2px 8px" }}
+                              onClick={() => setSecadoraCompartida((cur) => { const next = { ...cur }; delete next[secadora]; return next; })}>
+                              Cancelar
+                            </button>
+                          </div>
+                        )}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
                           <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => {
                             setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }));

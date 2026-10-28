@@ -73,6 +73,10 @@ const dryingBodySchema = z.object({
   // paga por este llenado. Si ambos vienen, se genera la entrada en Nómina.
   cuadrilla_worker: z.string().optional(),
   cuadrilla_labor_id: z.string().uuid().optional(),
+  // 🤝 Secadora COMPARTIDA (pedido del dueño 2026-10-28): el arroz de otro dueño (o un servicio) se echó en una
+  // secadora que ya está secando. Se suma como su propio registro en el mismo túnel (mismas horas y combustible
+  // repartido por QQ); al pilar cada registro va por su lado.
+  compartir_secadora: z.boolean().default(false),
   created_by: z.string().uuid().optional()
 });
 
@@ -413,7 +417,9 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
 processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT d.tunnel_number,
-            COALESCE(a.name, 'servicio de pilado/maquila') AS accionista_name
+            COALESCE(a.name, 'servicio de pilado/maquila') AS accionista_name,
+            l.accionista_id, d.total_quintals::float AS total_quintals, d.dry_end_at,
+            (COALESCE(l.operation_type, CASE WHEN l.is_maquila THEN 'SECADO_PILADO' ELSE 'COMPRA' END) <> 'COMPRA') AS es_servicio
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
      LEFT JOIN accionistas a ON a.id = l.accionista_id
@@ -1686,9 +1692,10 @@ async function registrarPagoCuadrillaTendal(
 }
 
 export async function createDryingBatch(client: PoolClient, body: z.infer<typeof dryingBodySchema>) {
+  const compartir = body.dry_method !== "TENDAL" && Boolean(body.tunnel_number) && body.compartir_secadora;
   if (body.dry_method !== "TENDAL" && body.tunnel_number) {
     await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71_001, body.tunnel_number]);
-    await assertTunnelAvailable(client, body.tunnel_number);
+    if (!compartir) await assertTunnelAvailable(client, body.tunnel_number);
   }
 
   const uniqueIds = [...new Set(body.entry_ids)];
@@ -1708,6 +1715,7 @@ export async function createDryingBatch(client: PoolClient, body: z.infer<typeof
   }
 
   const groups = groupDryingEntries(entries.rows);
+  if (compartir) await assertTunnelCompartible(client, body.tunnel_number!, entries.rows);
   const reports = [];
   const separated = groups.length > 1;
   for (const entryIds of groups) {
@@ -2267,6 +2275,34 @@ function calculateDryingHours(start?: string | Date | null, end?: string | Date 
   const endTime = new Date(end).getTime();
   if (Number.isNaN(startTime) || Number.isNaN(endTime) || endTime < startTime) return null;
   return Number(((endTime - startTime) / 3_600_000).toFixed(2));
+}
+
+// 🤝 Secadora compartida: solo se suma a un túnel que SIGUE secando (sin hora final) y sin repetir el registro de
+// un mismo dueño y tipo (ese se completa editándolo). Si el túnel está libre, se guarda como un llenado normal.
+async function assertTunnelCompartible(
+  client: PoolClient,
+  tunnelNumber: number,
+  nuevos: Array<{ accionista_id: string | null; operation_type: string | null; is_maquila: boolean }>
+) {
+  const activos = await client.query(
+    `SELECT d.dry_end_at, l.accionista_id, l.operation_type, l.is_maquila, COALESCE(a.name, 'servicio') AS accionista_name
+     FROM drying_tunnel_reports d
+     JOIN lots l ON l.id = d.lot_id
+     LEFT JOIN accionistas a ON a.id = l.accionista_id
+     WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS'`,
+    [tunnelNumber]
+  );
+  if (!activos.rowCount) return;
+  if (activos.rows.some((r) => r.dry_end_at)) {
+    throw new ApiError(409, `El túnel ${tunnelNumber} ya terminó de secar (tiene hora final): no se le puede sumar arroz. Usa otro túnel.`);
+  }
+  const clave = (acc: string | null, op: unknown, maq: boolean) => `${acc ?? "SIN_SOCIO"}|${normalizeDryingOperationType(op, Boolean(maq))}`;
+  const ya = new Map(activos.rows.map((r) => [clave(r.accionista_id, r.operation_type, r.is_maquila), String(r.accionista_name)]));
+  const repetido = nuevos.find((n) => ya.has(clave(n.accionista_id, n.operation_type, n.is_maquila)));
+  if (repetido) {
+    const op = normalizeDryingOperationType(repetido.operation_type, repetido.is_maquila) === "COMPRA" ? "arroz propio" : "servicio";
+    throw new ApiError(409, `El túnel ${tunnelNumber} ya tiene el ${op} de ${ya.get(clave(repetido.accionista_id, repetido.operation_type, repetido.is_maquila))}: agrégale los tickets editando ese secado.`);
+  }
 }
 
 async function assertTunnelAvailable(client: PoolClient, tunnelNumber: number) {

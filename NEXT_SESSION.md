@@ -1,8 +1,22 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-26
+Actualizado: 2026-10-28
 
-## Último cambio: Nota del taller con varios renglones (Transporte) y Configuración de Transporte con menú
+## Último cambio: Secadora compartida (dos dueños o propio + servicio en la misma secadora)
+
+- Caso real 2026-10-28: secadora 2 con 26.69+55.59 QQ comprados de STALYN y un servicio completo de 21.10 QQ de
+  CEYRO; se secan juntos y se separan antes de pilar.
+- Secadoras › tarjeta roja «En uso» › «🤝 Mi arroz se echó en esta misma secadora»: con «Trabajando en» el otro
+  dueño, se llena esa secadora y se manda `compartir_secadora: true` a POST /process-flow/drying/batch.
+- `assertTunnelCompartible`: solo si el túnel sigue secando (sin hora final) y sin repetir dueño+tipo (ese se completa
+  editando). Queda como su propio registro en el mismo túnel; terminar cierra juntos todos los del túnel, el
+  combustible se reparte por QQ (motor_fuel_partes) y la nómina cuenta el túnel una vez (COUNT DISTINCT).
+- /drying/tunnels-status ahora trae accionista_id, total_quintals, es_servicio y dry_end_at; la tarjeta lista todos
+  los registros del túnel. Simulacro `secadora_compartida`.
+- Simulacros `combustible` y `combustible_pendiente` fallan en la copia: necesitan secados previos y la base real no
+  tiene ninguno tras el borrado de fábrica (no es por este cambio).
+
+## Cambio anterior: Nota del taller con varios renglones (Transporte) y Configuración de Transporte con menú
 
 - Transporte › Caja › Salió dinero › REPARACION_MANT › «🧾 Nota con varios renglones»: Cant, Descripción, Tipo
   (Repuesto / Mano de obra) y Valor por renglón; Contado (cuenta) o A crédito (CxP EGRESO_CREDITO al taller).
