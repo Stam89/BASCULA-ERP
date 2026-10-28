@@ -6058,6 +6058,13 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 
 /* Caja · Nuevo movimiento: buscador de categoría con recientes */
 .cjBuscaChips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+/* ⚡ Atajos de «Salió dinero»: lo que más se paga, en un toque (2026-10-28). */
+.cjAtajos { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 2px 0 10px; }
+.cjAtajo { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 6px; border-radius: 10px; border: 1px solid var(--c-border, #cbd5e1);
+  background: var(--c-surface, #fff); color: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: center; line-height: 1.2; }
+.cjAtajo span { font-size: 22px; }
+.cjAtajo:hover { border-color: #0f766e; background: #f0fdfa; }
+.cjNoEfectivo { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px dashed #94a3b8; }
 .cjBuscaChips small { opacity: 0.7; font-weight: 700; }
 .cjBuscaChips button { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--c-border, #cbd5e1); background: transparent; color: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
 .cjBuscaChips button:hover { border-color: var(--c-brand, #0f766e); }

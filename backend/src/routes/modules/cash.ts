@@ -13,7 +13,7 @@ import { anularGastoTransporte } from "../../services/gasto-transporte.js";
 import { cruzarGastoPorSocio, cuantoLeDebeAlSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 import { anularDineroEntreSocios, bajarDeudasDe, crearDeudaEntreSocios } from "../../services/entre-socios.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
-import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
+import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, deshacerCrucesYDeuda, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
@@ -688,6 +688,22 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
       }
     }
 
+    // 💳 Gasto que pagó OTRO socio (su tarjeta o su dinero): se anula la otra línea y vuelve lo cruzado.
+    if (m.reference_type === "pagado_por_socio" && m.reference_id) {
+      const par = (await client.query(
+        "SELECT * FROM cash_movements WHERE id = $1 AND reversed_at IS NULL AND reversal_of IS NULL FOR UPDATE", [m.reference_id]
+      )).rows[0];
+      if (par) {
+        await client.query(
+          `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
+          [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
+           `Anulación: ${body.reason} (lo que pagó el socio)`, par.id, user?.id ?? null, par.medio]
+        );
+        await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
+      }
+      await deshacerCrucesYDeuda(client, m.movement === "EXPENSE" ? m.id : String(m.reference_id));
+    }
     // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
     if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
     // Venta detalle de arroz de OTRO socio cobrada en esta caja: la venta se anula y el arroz vuelve a su dueño.
@@ -906,8 +922,19 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
     // «¿De quién es este gasto?»: la caja de la Matriz paga un gasto de un SOCIO (sale en los gastos del socio,
     // se descuenta de lo que la Matriz le debía y el resto se lo debe el socio).
-    por_cuenta_de: z.string().uuid().optional()
+    por_cuenta_de: z.string().uuid().optional(),
+    // 💳 «No es efectivo · lo pagó un socio» (pedido del dueño 2026-10-28, su columna FOMENTO): el gasto es de esta
+    // caja pero lo pagó OTRO accionista con su tarjeta o su dinero. No sale efectivo: entra y sale lo mismo, y primero
+    // baja lo que ese socio le debía a esta caja; el resto queda como deuda de esta caja con él.
+    pagado_por: z.string().uuid().optional()
   }).parse(req.body);
+  if (body.pagado_por) {
+    if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede pagarlo otro socio.");
+    if (body.modalidad_pago === "CREDITO" || body.es_fondo || body.activo_fijo || (body.sacos?.length ?? 0) > 0 || body.maquina_id || body.por_cuenta_de) {
+      throw new ApiError(400, "Lo que pagó otro socio se registra sin crédito, fondo, activo fijo, sacos, máquina ni gasto de socio.");
+    }
+    if (body.pagado_por === (req as AuthenticatedRequest).accionistaId) throw new ApiError(400, "Elige el socio que lo pagó (no esta misma caja).");
+  }
   if (body.por_cuenta_de) {
     if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede ser gasto de otro socio.");
     if (body.modalidad_pago === "CREDITO" || body.es_fondo || body.activo_fijo || (body.sacos?.length ?? 0) > 0 || body.maquina_id) {
@@ -992,7 +1019,12 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     } else {
       await validarCategoriaManual(client, body.category, body.movement, accionistaId);
     }
-    if (body.movement === "EXPENSE") await avisarSobregiro(client, req.params.id as string, body.amount, req);
+    const pagador = body.pagado_por
+      ? (await client.query("SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true", [body.pagado_por])).rows[0] as { id: string; name: string } | undefined
+      : undefined;
+    if (body.pagado_por && !pagador) throw new ApiError(404, "El socio que lo pagó no existe o está inactivo.");
+    // Lo que pagó otro socio no saca efectivo de esta caja: no hay sobregiro que avisar.
+    if (body.movement === "EXPENSE" && !pagador) await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
     const catNombre = socio ? (await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category])).rows[0]?.nombre ?? body.category : null;
@@ -1009,6 +1041,39 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
        proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio), socio?.id ?? null, socio ? body.category : null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
+    if (pagador) {
+      // El gasto queda con su categoría (sale en el resultado); al lado entra lo mismo «de» ese socio, así la gaveta
+      // no cambia. Las dos líneas se enlazan para anularse juntas.
+      const gastoId = mov.rows[0].id as string;
+      const cat = (await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category])).rows[0]?.nombre ?? body.category;
+      const concepto = [cat, body.subcategoria?.trim(), body.description?.trim()].filter(Boolean).join(" · ");
+      const yo = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "esta caja";
+      const entra = await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
+         VALUES ($1, 'INCOME', 'COBRO_ENTRE_SOCIOS', 'pagado_por_socio', $2, $3, $4, $5, $6) RETURNING id`,
+        [req.params.id, gastoId, body.amount, `💳 Lo pagó ${pagador.name} (no entró efectivo): ${concepto}`, body.created_by ?? null, mov.rows[0].medio]
+      );
+      const upd = await client.query(
+        `UPDATE cash_movements SET reference_type = 'pagado_por_socio', reference_id = $2,
+                description = concat_ws(' · ', NULLIF(description, ''), $3::text)
+          WHERE id = $1 RETURNING *`,
+        [gastoId, entra.rows[0].id, `💳 lo pagó ${pagador.name}`]
+      );
+      const { descontado, resto } = await bajarDeudasDe(client, { movimientoId: gastoId, deudorId: pagador.id, acreedorId: accionistaId!, monto: body.amount });
+      await crearDeudaEntreSocios(client, {
+        movimientoId: gastoId, deudorId: accionistaId!, acreedorId: pagador.id, monto: resto,
+        descDeudor: `Lo pagó ${pagador.name} por ti: ${concepto}`,
+        descAcreedor: `Pagaste un gasto de ${yo}: ${concepto}`
+      });
+      await notificar(client, {
+        accionistaId: pagador.id, tipo: "PAGO",
+        titulo: `Pagaste un gasto de ${yo}`,
+        mensaje: `${concepto}: ${dinero(body.amount)}.` + (descontado > 0 ? ` Bajó ${dinero(descontado)} de lo que le debías a ${yo}.` : "")
+          + (resto > 0.005 ? ` ${yo} te debe ${dinero(resto)} (Por Cobrar).` : ""),
+        monto: body.amount, referenciaTipo: "cash_movements", referenciaId: gastoId
+      });
+      return { ...upd.rows[0], pagado_por: { socio: pagador.name, descontado, le_debes: round2(resto) } };
+    }
     if (socio) {
       const cruce = await cruzarGastoPorSocio(client, { movimientoId: mov.rows[0].id, pagadorId: accionistaId!, socio, monto: body.amount, concepto: conceptoSocio });
       return { ...mov.rows[0], gasto_por_socio: { socio: socio.name, ...cruce } };

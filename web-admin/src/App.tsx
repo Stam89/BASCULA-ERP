@@ -2851,7 +2851,7 @@ export function App() {
   function abrirMovimientoCaja(tipo: "EXPENSE" | "INCOME") {
     setMovType(tipo); setMovCategory(""); setMovSubcategoria(""); setMovPayableId(""); setMovReceivableId(""); setMovMaquinaId("");
     setMovProveedor(""); setMovModalidad("CONTADO"); setMovVence(""); setMovEsFondo(false); setMovResponsable(""); setMovOpcionesOpen(false);
-    setMovPorCuentaDe("");
+    setMovPorCuentaDe(""); setMovNoEfectivo(false); setMovPagadoPor("");
     setMaintenanceForm((f) => ({ ...f, area: "", section: "" }));
     setTeqTipoInicial(undefined); setTeqKey((k) => k + 1);
     setCajaMenu(null);
@@ -2917,6 +2917,10 @@ export function App() {
   const [teqActivoInicial, setTeqActivoInicial] = useState<string | undefined>(undefined);
   // «¿De quién es este gasto?» (solo la caja de la Matriz): "" = de esta caja; si no, el id del socio dueño del gasto.
   const [movPorCuentaDe, setMovPorCuentaDe] = useState("");
+  // 💳 «No es efectivo» (pedido del dueño 2026-10-28, su columna FOMENTO del Excel): el egreso no sale de la gaveta.
+  // A crédito (queda por pagar) o lo pagó otro socio con su tarjeta o su dinero (`movPagadoPor`).
+  const [movNoEfectivo, setMovNoEfectivo] = useState(false);
+  const [movPagadoPor, setMovPagadoPor] = useState("");
   // 🤝 Cuentas entre socios (pantalla + los tres movimientos); `op` abre directo uno desde el buscador de Caja.
   const [entreSocios, setEntreSocios] = useState<null | { op?: OpEntreSocios; con?: string }>(null);
   const [movDeudaSocio, setMovDeudaSocio] = useState<{ socio: string; le_debe: number } | null>(null);
@@ -10415,10 +10419,15 @@ export function App() {
     const porCuentaDe = movement === "EXPENSE" && esMatrizActiva && gastoDeSocioPosible(category) && !esFondo && !aCredito && !maquinaId ? movPorCuentaDe || undefined : undefined;
     const descripcionTxt = String(form.get("description") ?? "").trim();
     const conTarjeta = movement === "EXPENSE" && movFormaPago === "TARJETA" && !aCredito;
+    // 💳 No es efectivo · lo pagó otro socio: el gasto queda en esta caja sin sacar efectivo y se cruza con ese socio.
+    const pagadoPor = movement === "EXPENSE" && movNoEfectivo && !aCredito && !esFondo && !esActivo && !maquinaId && !porCuentaDe && !movDeTransporte
+      ? movPagadoPor || undefined : undefined;
+    if (movement === "EXPENSE" && movNoEfectivo && !aCredito && !pagadoPor) throw new Error("«No es efectivo»: elige «A crédito» o el socio que lo pagó.");
     const limpiarEgreso = () => {
       safeResetForm(formElement);
       setMovCategory(""); setMovSubcategoria(""); setMovProveedor(""); setMovVence(""); setMovOpcionesOpen(false);
       setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo("");
+      setMovNoEfectivo(false); setMovPagadoPor(""); setMovPorCuentaDe("");
     };
     // 🚜 Gasto de Transporte y Cosechadora pagado con esta caja (la Matriz).
     if (movement === "EXPENSE" && esMatrizActiva && movDeTransporte && !esFondo && !aCredito && category !== "COMPRA_ACTIVO_FIJO") {
@@ -10428,7 +10437,7 @@ export function App() {
         categoria: movTrCategoria || "OTROS",
         activo_id: movTrActivo || undefined,
         monto: amount,
-        description: [catNombre, movSubcategoria.trim(), descripcionTxt, conTarjeta ? "pagado con tarjeta" : ""].filter(Boolean).join(" · "),
+        description: [category === "GASTO_OPERATIVO" && (movSubcategoria.trim() || descripcionTxt) ? "" : catNombre, movSubcategoria.trim(), descripcionTxt, conTarjeta ? "pagado con tarjeta" : ""].filter(Boolean).join(" · ") || "Gasto de Transporte",
         pagado_a: provTxt || undefined,
         medio_pago: movFormaPago === "EFECTIVO" ? "EFECTIVO" : "BANCO"
       });
@@ -10440,7 +10449,8 @@ export function App() {
       return;
     }
     const creado = await apiPost<{ activo_fijo?: { id: string; name: string } | null; credito?: boolean; cuenta_por_pagar?: { proveedor: string };
-      gasto_por_socio?: { socio: string; descontado: number; por_cobrar: number } }>(`/cash/${registerId}/movements`, {
+      gasto_por_socio?: { socio: string; descontado: number; por_cobrar: number };
+      pagado_por?: { socio: string; descontado: number; le_debes: number } }>(`/cash/${registerId}/movements`, {
       movement,
       category,
       amount,
@@ -10457,10 +10467,11 @@ export function App() {
       due_date: aCredito && movVence ? movVence : undefined,
       maquina_id: maquinaId,
       medio: dashboard.current_cash_register?.tipo === "MIXTO" ? movMedio : undefined,
-      por_cuenta_de: porCuentaDe
+      por_cuenta_de: porCuentaDe,
+      pagado_por: pagadoPor
     });
     safeResetForm(formElement);
-    setMovPorCuentaDe("");
+    setMovPorCuentaDe(""); setMovNoEfectivo(false); setMovPagadoPor("");
     setMovMedio("EFECTIVO");
     setMovCategory("");
     setMovPayableId("");
@@ -10472,8 +10483,13 @@ export function App() {
     setMovOpcionesOpen(false);
     await loadSubcategorias(); // refresca la memoria del datalist
     const gs = creado.gasto_por_socio;
+    const pp = creado.pagado_por;
     addToast(
-      gs
+      pp
+        ? `💳 Gasto registrado: lo pagó ${pp.socio}, no salió efectivo de la caja` +
+          (pp.descontado > 0 ? ` · bajó ${money(pp.descontado)} de lo que ${pp.socio} te debía` : "") +
+          (pp.le_debes > 0 ? ` · le debes ${money(pp.le_debes)} a ${pp.socio} (Cuentas entre socios)` : "")
+        : gs
         ? `🤝 Gasto de ${gs.socio} registrado: salió ${money(amount)} de esta caja y queda en los gastos de ${gs.socio}` +
           (gs.descontado > 0 ? ` · se descontaron ${money(gs.descontado)} de lo que le debías` : "") +
           (gs.por_cobrar > 0 ? ` · ${gs.socio} te debe ${money(gs.por_cobrar)} (Por Cobrar)` : "")
@@ -20158,6 +20174,33 @@ Motivo (obligatorio):`, ""));
                             : [{ key: "SOC:recibir", titulo: "🤝 Un socio me dio dinero", detalle: "abono a lo que me debe o préstamo", etiqueta: "entre socios", buscar: "socio dinero préstamo prestamo abono" }]) : []),
                           ...cxcPendientes.map((ar) => ({ key: `CXC:${ar.id}`, titulo: `Cobro: ${ar.customer_name || ar.description || "Cliente"}`, detalle: `${ar.customer_name && ar.description ? `${String(ar.description).slice(0, 60)} · ` : ""}saldo ${money(Number(ar.balance))}`, etiqueta: "por cobrar" }))
                         ];
+                        // ⚡ Atajos de «Salió dinero» (pedido del dueño 2026-10-28): lo que más se paga, en un toque y sin
+                        //    pensar en la categoría. Solo salen los que existen para esta caja.
+                        type Atajo = { k: string; t: string; i: string; cat?: string; sub?: string; ir?: "anticipo" | "fomentos"; transporte?: boolean; repuesto?: boolean };
+                        const atajos: Atajo[] = movType !== "EXPENSE" ? [] : ([
+                          { k: "comida", t: "Comida", i: "🍽️", cat: "ALIMENTACION", sub: "Comida" },
+                          { k: "agua", t: "Agua", i: "💧", cat: "ALIMENTACION", sub: "Agua" },
+                          { k: "montacarga", t: "Gasolina montacarga", i: "🛻", cat: "GASOLINA_MONTACARGA", sub: "Gasolina" },
+                          { k: "diesel", t: "Diésel", i: "⛽", cat: "DIESEL" },
+                          { k: "estibada", t: "Estibada", i: "📦", cat: "GASTO_OPERATIVO", sub: "Estibada" },
+                          { k: "limpieza", t: "Limpieza", i: "🧹", cat: "COCINERA", sub: "Limpieza" },
+                          { k: "flete", t: "Flete", i: "🚚", cat: codigosVisibles.has("FLETE") ? "FLETE" : "GASTO_OPERATIVO", sub: "Flete" },
+                          { k: "fiat", t: "Fiat / vehículos", i: "🚗", cat: "GASTOS_FIAT" },
+                          { k: "cascara", t: "Arroz en cáscara", i: "🌾", ir: "anticipo" },
+                          { k: "fomento", t: "Fomento", i: "🌱", ir: "fomentos" },
+                          { k: "transporte", t: "Transporte", i: "🚜", cat: "GASTO_OPERATIVO", transporte: true },
+                          { k: "repuesto", t: "Repuesto", i: "🔩", repuesto: true }
+                        ] as Atajo[]).filter((a) => a.ir ? true : a.repuesto ? mantVisible : a.transporte ? (esMatrizActiva && codigosVisibles.has("GASTO_OPERATIVO")) : codigosVisibles.has(a.cat!));
+                        const usarAtajo = (a: Atajo) => {
+                          if (a.ir) { setCajaSubTab(a.ir); return; }
+                          if (a.repuesto) { elegirCategoria("MANTENIMIENTO_EQUIPO"); setTeqTipoInicial("COMPRA"); setTeqKey((k) => k + 1); return; }
+                          elegirCategoria(a.cat!, a.sub ?? "");
+                          setMovPorCuentaDe(""); setMovNoEfectivo(false); setMovPagadoPor("");
+                          if (a.transporte) {
+                            setMovDeTransporte(true); setMovTrCategoria("OTROS");
+                            if (campoCategoriasGasto.length === 0) apiGet<Array<{ nombre: string }>>("/campo/categorias-gasto").then((r) => setCampoCategoriasGasto(r.map((x) => x.nombre))).catch(() => undefined);
+                          } else setMovDeTransporte(false);
+                        };
                         const recientes = (cajaRecientes[movType] ?? []).filter((c) => codigosVisibles.has(c)).slice(0, 6);
                         const sugeridas = recientes.length ? recientes : visibles.filter((c) => !esGuiada(c.codigo)).slice(0, 6).map((c) => c.codigo);
                         const catSel = visibles.find((c) => c.codigo === movCategory) ?? cashCategories.find((c) => c.codigo === movCategory);
@@ -20175,7 +20218,16 @@ Motivo (obligatorio):`, ""));
                               </div>
                             ) : (
                               <>
-                                <BuscadorCombo id="cajaCat" autoFocus max={16}
+                                {atajos.length > 0 && (
+                                  <div className="cjAtajos" role="group" aria-label="Lo que más se paga">
+                                    {atajos.map((a) => (
+                                      <button key={a.k} type="button" className="cjAtajo" onClick={() => usarAtajo(a)}>
+                                        <span aria-hidden="true">{a.i}</span>{a.t}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                <BuscadorCombo id="cajaCat" autoFocus={atajos.length === 0} max={16}
                                   placeholder={movType === "EXPENSE" ? "🔍 Escribe qué se pagó: cilindro, motor de secadora, diésel, almuerzo…" : "🔍 Escribe qué entró o el cliente que pagó…"}
                                   opciones={opciones} vacio="Nada coincide: prueba con otra palabra o crea la categoría en Configuración"
                                   crear={mantVisible ? (t) => {
@@ -20531,6 +20583,11 @@ Motivo (obligatorio):`, ""));
                       );
                       const mixta = dashboard.current_cash_register?.tipo === "MIXTO";
                       const deTransportePosible = esMatrizActiva && !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO";
+                      // 🤝 Gasto de un socio pagado con esta caja: se descuenta de lo que la Matriz le debe (cruce).
+                      const deSocioPosible = esMatrizActiva && !movEsFondo && gastoDeSocioPosible(movCategory) && sociosDelGasto.length > 0;
+                      // 💳 No es efectivo: a crédito o lo pagó otro socio (no con Transporte ni gasto de socio).
+                      const noEfectivoPosible = !movDeTransporte && !movPorCuentaDe && !movEsFondo && movCategory !== "COMPRA_ACTIVO_FIJO";
+                      const otrosSocios = accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "SOCIO" || a.tipo === "MATRIZ"));
                       const formas: Array<[FormaPagoEgreso, string]> = [
                         ...(mixta ? [["EFECTIVO", "💵 Efectivo"], ["TRANSFERENCIA", "🏦 Transferencia"], ["TARJETA", "💳 Tarjeta"]] as Array<[FormaPagoEgreso, string]>
                           : [["EFECTIVO", dashboard.current_cash_register?.tipo === "BANCO" ? "🏦 Del banco" : "💵 De la caja"]] as Array<[FormaPagoEgreso, string]>),
@@ -20538,7 +20595,9 @@ Motivo (obligatorio):`, ""));
                       ];
                       const elegirTransporte = (si: boolean) => {
                         setMovDeTransporte(si);
+                        setMovPorCuentaDe("");
                         if (!si) return;
+                        setMovNoEfectivo(false); setMovPagadoPor("");
                         if (movFormaPago === "CREDITO") setMovFormaPago("EFECTIVO");
                         if (!movTrCategoria) setMovTrCategoria(/DIESEL/i.test(movCategory) ? "DIESEL" : /GASOLINA/i.test(movCategory) ? "GASOLINA" : /ALIMENT|VIATIC/i.test(movCategory) ? "VIATICOS" : /MATRICUL/i.test(movCategory) ? "MATRICULACION" : "OTROS");
                         if (campoCategoriasGasto.length === 0) {
@@ -20551,9 +20610,19 @@ Motivo (obligatorio):`, ""));
                             <div>
                               <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>¿De quién es el gasto?</span>
                               <div className="teq-pago">
-                                <button type="button" className={!movDeTransporte ? "is-on" : ""} onClick={() => elegirTransporte(false)}>🏭 {matrizName || "La Matriz"}</button>
+                                <button type="button" className={!movDeTransporte && !movPorCuentaDe ? "is-on" : ""} onClick={() => elegirTransporte(false)}>🏭 {matrizName || "La Matriz"}</button>
+                                {deSocioPosible && sociosDelGasto.map((s) => (
+                                  <button key={s.id} type="button" className={movPorCuentaDe === s.id ? "is-on" : ""}
+                                    onClick={() => { setMovDeTransporte(false); setMovPorCuentaDe(s.id); setMovNoEfectivo(false); setMovPagadoPor(""); if (movFormaPago === "CREDITO") setMovFormaPago("EFECTIVO"); }}>🤝 {s.name}</button>
+                                ))}
                                 <button type="button" className={movDeTransporte ? "is-on" : ""} onClick={() => elegirTransporte(true)}>🚜 Transporte y Cosechadora</button>
                               </div>
+                              {movPorCuentaDe && (
+                                <small className="muted" style={{ display: "block", marginTop: 6 }}>
+                                  🤝 Sale de esta caja pero es gasto de {sociosDelGasto.find((s) => s.id === movPorCuentaDe)?.name}: primero se descuenta de lo que {matrizName || "la Matriz"} le debe
+                                  {movDeudaSocio && movDeudaSocio.socio === movPorCuentaDe ? ` (hoy ${money(movDeudaSocio.le_debe)})` : ""} y el resto queda por cobrarle.
+                                </small>
+                              )}
                               {movDeTransporte && (
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginTop: 8 }}>
                                   <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Categoría en Transporte</span>
@@ -20586,10 +20655,35 @@ Motivo (obligatorio):`, ""));
                           <div>
                             <span style={{ display: "block", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>¿Cómo se pagó?</span>
                             <div className="teq-pago" role="radiogroup" aria-label="Cómo se pagó">
-                              {formas.map(([f, t]) => (
-                                <button key={f} type="button" role="radio" aria-checked={movFormaPago === f} className={movFormaPago === f ? "is-on" : ""} onClick={() => setMovFormaPago(f)}>{t}</button>
+                              {formas.filter(([f]) => f !== "CREDITO").map(([f, t]) => (
+                                <button key={f} type="button" role="radio" aria-checked={!movNoEfectivo && movFormaPago === f} className={!movNoEfectivo && movFormaPago === f ? "is-on" : ""}
+                                  onClick={() => { setMovNoEfectivo(false); setMovPagadoPor(""); setMovFormaPago(f); }}>{t}</button>
                               ))}
+                              {noEfectivoPosible && (creditoPosible || otrosSocios.length > 0) && (
+                                <button type="button" role="radio" aria-checked={movNoEfectivo} className={movNoEfectivo ? "is-on" : ""}
+                                  onClick={() => { setMovNoEfectivo(true); setMovPagadoPor(""); setMovFormaPago(creditoPosible ? "CREDITO" : "EFECTIVO"); }}>🧾 No es efectivo</button>
+                              )}
                             </div>
+                            {movNoEfectivo && (
+                              <div className="cjNoEfectivo">
+                                <small className="muted">No sale de la gaveta. ¿Cómo quedó?</small>
+                                <div className="teq-pago">
+                                  {creditoPosible && (
+                                    <button type="button" className={movFormaPago === "CREDITO" ? "is-on" : ""} onClick={() => { setMovPagadoPor(""); setMovFormaPago("CREDITO"); }}>🧾 A crédito</button>
+                                  )}
+                                  {otrosSocios.map((s) => (
+                                    <button key={s.id} type="button" className={movPagadoPor === s.id ? "is-on" : ""}
+                                      onClick={() => { setMovPagadoPor(s.id); setMovFormaPago("EFECTIVO"); }}>💳 Lo pagó {s.name}</button>
+                                  ))}
+                                </div>
+                                {movPagadoPor && (
+                                  <small style={{ color: "#0f766e" }}>
+                                    💳 El gasto queda en esta caja sin sacar efectivo. Primero baja lo que {otrosSocios.find((s) => s.id === movPagadoPor)?.name} le debía a esta caja;
+                                    el resto se lo quedas debiendo (Cuentas entre socios).
+                                  </small>
+                                )}
+                              </div>
+                            )}
                           </div>
                           {credito && (
                             <>

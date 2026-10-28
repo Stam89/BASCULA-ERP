@@ -2,7 +2,27 @@
 
 Actualizado: 2026-10-28
 
-## Último cambio: Secadora compartida (dos dueños o propio + servicio en la misma secadora)
+## Último cambio: Caja «Salió dinero» con atajos y «No es efectivo» (mejoras 1 y 2 de la caja)
+
+- Del Excel PILADORA (memoria `cuadre-caja-adaptacion`): la cajera dejó de poner categoría y usa la columna FOMENTO
+  para lo que no es efectivo. Mejoras 3 a 5 (cáscara al agricultor, nómina del viernes, conteo al cerrar) EN ESPERA.
+- ⚡ Atajos (`cjAtajos`) al abrir un egreso: Comida, Agua, Gasolina montacarga, Diésel, Estibada, Limpieza, Flete
+  (FLETE en socios / GASTO_OPERATIVO·Flete en la Matriz), Fiat, Arroz en cáscara (→ Anticipos), Fomento (→ Fomentos),
+  Transporte (gasto de Transporte) y Repuesto. Solo salen los que existen para esa caja. El buscador sigue debajo.
+- «¿De quién es el gasto?» ahora también ofrece los socios (`por_cuenta_de`, cruce de siempre), además de la Matriz y
+  Transporte.
+- 🧾 «No es efectivo» en «¿Cómo se pagó?»: A crédito (CxP de siempre) o «💳 Lo pagó X» (`pagado_por` en
+  POST /cash/:id/movements). El egreso queda con su categoría real; al lado entra un COBRO_ENTRE_SOCIOS por lo mismo
+  (la gaveta no cambia), enlazados por reference_type `pagado_por_socio`. Primero baja lo que X le debía a la caja
+  (`bajarDeudasDe`) y el resto queda como deuda de la caja con X (`crearDeudaEntreSocios`). Anular una línea anula las
+  dos y deshace el cruce. Simulacro `pagado_por_socio`.
+- Arreglo: el «crédito a favor» de una piladora en Transporte ignoraba que las compensaciones (gasto de Transporte
+  pagado por la Matriz, compensación manual) graban una salida con `cxp_id`; quedaba en negativo (-$40.50 de CEYRO).
+  `CREDITO_DISPONIBLE_SQL`, convertir-y-aplicar y la regla de consistencia ahora excluyen `cxp_id`.
+- Simulacros que fallan por datos reales (no por el código, igual en main): cuentas_entre_socios,
+  gasto_transporte_matriz, gasto_transporte_general, caja_auditoria B5.
+
+## Cambio anterior: Secadora compartida (dos dueños o propio + servicio en la misma secadora)
 
 - Caso real 2026-10-28: secadora 2 con 26.69+55.59 QQ comprados de STALYN y un servicio completo de 21.10 QQ de
   CEYRO; se secan juntos y se separan antes de pilar.

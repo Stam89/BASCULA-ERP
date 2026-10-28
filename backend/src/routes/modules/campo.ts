@@ -2175,10 +2175,11 @@ campoRouter.post("/nomina-operadores/pagos/:id/anular", requireAdmin, asyncRoute
 // El "crédito a favor" de un cliente-piladora = Σ(entradas − salidas) en la cuenta
 // interna 'CRUCE PILADORA' con servicio_id NULL (entrada = crédito generado al
 // cruzar un flete sin servicio que emparejar; salida = crédito consumido al
-// aplicarlo). El SELECT es la ÚNICA fuente del crédito disponible.
+// aplicarlo). El SELECT es la ÚNICA fuente del crédito disponible. Las salidas de una COMPENSACIÓN (pagan una CxP de
+// Transporte, `cxp_id`) no consumen crédito: su entrada abona un servicio (2026-10-28, quedaba en negativo).
 const CREDITO_DISPONIBLE_SQL = `
   COALESCE(SUM(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)
-    FILTER (WHERE m.servicio_id IS NULL AND ct.nombre = 'CRUCE PILADORA'), 0)`;
+    FILTER (WHERE m.servicio_id IS NULL AND m.cxp_id IS NULL AND ct.nombre = 'CRUCE PILADORA'), 0)`;
 
 // Lista de clientes-piladora con crédito a favor disponible + cuántos partes
 // pendientes ('por_cobrar') tienen (por nombre) para poder convertirlos.
@@ -2251,12 +2252,12 @@ campoRouter.post("/conciliacion/convertir-y-aplicar", asyncRoute(async (req, res
     let disponible = 0;
     if (cuentaCruce) {
       await client.query(
-        "SELECT 1 FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL FOR UPDATE",
+        "SELECT 1 FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL AND cxp_id IS NULL FOR UPDATE",
         [cli.id, cuentaCruce]
       );
       disponible = Number((await client.query(
         `SELECT COALESCE(SUM(CASE WHEN signo = 'entrada' THEN monto ELSE -monto END), 0)::float AS c
-         FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL`,
+         FROM campo_movimientos WHERE cliente_id = $1 AND cuenta_id = $2 AND servicio_id IS NULL AND cxp_id IS NULL`,
         [cli.id, cuentaCruce]
       )).rows[0].c);
     }

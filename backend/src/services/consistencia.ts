@@ -243,7 +243,7 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
      WHERE c.nombre = 'CAJA' GROUP BY c.id HAVING sum(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END) < -0.005` },
   { modulo: "Transporte", nombre: "Campo: el crédito a favor de cada piladora nunca es negativo", sql: `
     SELECT m.cliente_id, sum(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END)::float credito FROM campo_movimientos m JOIN campo_cuentas c ON c.id = m.cuenta_id
-     WHERE c.nombre = 'CRUCE PILADORA' AND m.servicio_id IS NULL AND m.cliente_id IS NOT NULL
+     WHERE c.nombre = 'CRUCE PILADORA' AND m.servicio_id IS NULL AND m.cxp_id IS NULL AND m.cliente_id IS NOT NULL
      GROUP BY m.cliente_id HAVING sum(CASE WHEN m.signo = 'entrada' THEN m.monto ELSE -m.monto END) < -0.005` },
   { modulo: "Transporte", nombre: "Campo: la cuenta interna CRUCE PILADORA solo se mueve con un cliente", sql: `
     SELECT m.id FROM campo_movimientos m JOIN campo_cuentas c ON c.id = m.cuenta_id WHERE c.nombre = 'CRUCE PILADORA' AND m.cliente_id IS NULL LIMIT 20` },
