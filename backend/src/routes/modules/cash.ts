@@ -717,6 +717,36 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     if (m.reference_type === "venta_detalle_por_asignar" && m.reference_id) {
       await client.query("UPDATE ventas_detalle_por_asignar SET anulado_at = now() WHERE id = $1 AND asignado_at IS NULL", [m.reference_id]);
     }
+    // 🌾 Anticipo al agricultor (Caja › Arroz en cáscara): se cancela el anticipo y, si al entregarlo pagó lo que se le
+    // debía, esa deuda (y el neto de su liquidación) vuelve. Si ya se descontó en una liquidación, no se deja (2026-10-28:
+    // antes el dinero volvía a la caja pero el anticipo seguía pendiente y se le descontaba igual).
+    if (m.reference_type === "farmer_advances" && m.reference_id) {
+      const adv = (await client.query("SELECT id, status FROM farmer_advances WHERE id = $1 FOR UPDATE", [m.reference_id])).rows[0];
+      if (adv && adv.status !== "CANCELLED") {
+        const apps = (await client.query(
+          "SELECT id, liquidation_id, payable_id, amount_applied::float AS monto FROM advance_applications WHERE advance_id = $1", [adv.id]
+        )).rows as Array<{ id: string; liquidation_id: string | null; payable_id: string | null; monto: number }>;
+        if (apps.some((a) => !a.payable_id)) {
+          throw new ApiError(409, "Este anticipo ya se descontó en una liquidación: anula primero esa liquidación.");
+        }
+        for (const a of apps) {
+          await client.query(
+            `UPDATE accounts_payable SET balance = LEAST(amount, balance + $2),
+                    status = CASE WHEN LEAST(amount, balance + $2) >= amount - 0.005 THEN 'CONFIRMED'::document_status ELSE 'PARTIAL'::document_status END
+              WHERE id = $1`,
+            [a.payable_id, a.monto]
+          );
+          if (a.liquidation_id) {
+            await client.query(
+              "UPDATE liquidations SET advances_discount = GREATEST(0, advances_discount - $2), net_amount = net_amount + $2 WHERE id = $1",
+              [a.liquidation_id, a.monto]
+            );
+          }
+          await client.query("DELETE FROM advance_applications WHERE id = $1", [a.id]);
+        }
+        await client.query("UPDATE farmer_advances SET status = 'CANCELLED', balance = 0 WHERE id = $1", [adv.id]);
+      }
+    }
     // Dinero entre socios (sale de una caja y entra a la otra): se anulan las dos líneas, lo descontado y el préstamo.
     if (m.reference_type === "dinero_entre_socios" && m.reference_id) {
       await anularDineroEntreSocios(client, { id: m.reference_id, motivo: body.reason, userId: user?.id ?? null });

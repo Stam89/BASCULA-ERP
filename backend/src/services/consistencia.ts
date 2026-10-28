@@ -127,7 +127,7 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
            COALESCE((SELECT sum(x.amount_applied) FROM advance_applications x LEFT JOIN liquidations l ON l.id = x.liquidation_id
                       WHERE x.advance_id = fa.id AND (l.id IS NULL OR l.status <> 'CANCELLED')), 0)::float ap
       FROM farmer_advances fa
-     WHERE abs((fa.amount - COALESCE((SELECT sum(x.amount_applied) FROM advance_applications x LEFT JOIN liquidations l ON l.id = x.liquidation_id
+     WHERE fa.status <> 'CANCELLED' AND abs((fa.amount - COALESCE((SELECT sum(x.amount_applied) FROM advance_applications x LEFT JOIN liquidations l ON l.id = x.liquidation_id
                       WHERE x.advance_id = fa.id AND (l.id IS NULL OR l.status <> 'CANCELLED')), 0)) - fa.balance) > 0.01
        AND fa.concept NOT LIKE '%ANULADO%'` },
   { modulo: "Liquidaciones", nombre: "Liquidaciones vigentes: neto = monto de su cuenta por pagar al agricultor", sql: `

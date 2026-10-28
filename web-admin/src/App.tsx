@@ -2984,6 +2984,9 @@ export function App() {
   const [cashSummary, setCashSummary] = useState<CashSummary | null>(null);
   const [cashPayables, setCashPayables] = useState<AccountPayable[]>([]);
   const [anticipoFarmerId, setAnticipoFarmerId] = useState("");
+  // 🌾 Arroz en cáscara (mejora 3 de la caja, 2026-10-28): concepto elegido en un toque y alta rápida del agricultor.
+  const [anticipoConcepto, setAnticipoConcepto] = useState("Anticipo por arroz en cáscara");
+  const [anticipoCreando, setAnticipoCreando] = useState(false);
   const [newCajaTipo, setNewCajaTipo] = useState<CashRegisterType>("EFECTIVO");
   const [newCajaName, setNewCajaName] = useState("Caja Principal");
   const [newCajaCash, setNewCajaCash] = useState("0");
@@ -4689,26 +4692,6 @@ export function App() {
       .filter((f) => f.pendingQq > 0),
     [farmers, pendingEntries]
   );
-
-  // Agricultores con saldo pendiente en liquidaciones (para anticipo en tab Liquidaciones)
-  const farmersWithPendingLiq = useMemo(() => {
-    const pendingByFarmer = new Map<string, { name: string; pending: number }>();
-    for (const r of liquidacionesList) {
-      const bal = Number(r.pending_balance ?? 0);
-      if (bal > 0) {
-        const prev = pendingByFarmer.get(r.farmer_id);
-        pendingByFarmer.set(r.farmer_id, {
-          name: r.farmer_name,
-          pending: (prev?.pending ?? 0) + bal
-        });
-      }
-    }
-    return Array.from(pendingByFarmer.entries()).map(([id, v]) => ({
-      id,
-      full_name: v.name,
-      pending_advance_balance: v.pending
-    }));
-  }, [liquidacionesList]);
 
   type LiqBatch = {
     key: string;
@@ -10267,17 +10250,29 @@ export function App() {
     const form = new FormData(formElement);
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
+    const farmerId = String(form.get("farmer_id") ?? "");
+    const amount = round2(Number(form.get("amount")));
+    if (!farmerId) throw new Error("Elige o escribe el agricultor.");
+    if (!(amount > 0)) throw new Error("Escribe el monto.");
+    const concepto = String(form.get("concept") ?? "").trim() || anticipoConcepto;
+    // Lo que esta caja le debe hoy: se paga primero (de lo más viejo a lo más nuevo) y el resto queda de anticipo.
+    const debe = round2(cashPayables.filter((p) => p.farmer_id === farmerId && !p.entre_socios && Number(p.balance) > 0.005)
+      .reduce((s, p) => s + Number(p.balance), 0));
     await apiPost("/advances", {
-      farmer_id: form.get("farmer_id"),
-      amount: Number(form.get("amount")),
-      concept: form.get("concept"),
+      farmer_id: farmerId,
+      amount,
+      concept: concepto,
       cash_register_id: registerId,
       apply_to_payables: true,
       ...cuerpoMedio(medioOperacion)
     });
     setMedioOperacion("EFECTIVO");
     safeResetForm(formElement);
-    addToast("Anticipo registrado", "success");
+    const pagado = Math.min(debe, amount);
+    const nombre = farmers.find((f) => f.id === farmerId)?.full_name ?? "el agricultor";
+    addToast(`🌾 ${money(amount)} a ${nombre}` +
+      (pagado > 0 ? ` · ${money(pagado)} pagan lo que se le debía` : "") +
+      (amount - pagado > 0.005 ? ` · ${money(round2(amount - pagado))} quedan de anticipo (se descuentan en su próxima liquidación)` : ""), "success");
     await refresh();
     await refreshCaja(registerId);
   }
@@ -19697,7 +19692,7 @@ Motivo (obligatorio):`, ""));
                   const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
                     { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por dólares, libras o QQ" },
                     { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
-                    { key: "anticipo", icon: "💸", label: "Anticipos", hint: "Anticipo a agricultor" },
+                    { key: "anticipo", icon: "🌾", label: "Arroz en cáscara", hint: "Anticipo o pago al agricultor" },
                     { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
                     { key: "mantenimiento", icon: "🔧", label: "Mantenimiento", hint: "Reparaciones y repuestos" }
                   ];
@@ -20087,25 +20082,83 @@ Motivo (obligatorio):`, ""));
                 {/* ── Anticipo ── */}
                 {cajaSubTab === "anticipo" && (
                   <form onSubmit={(event) => submitCajaAnticipo(event).then(() => setAnticipoFarmerId("")).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
-                    <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 700 }}>💸 Anticipo a agricultor</h2>
-                    {farmersWithPendingLiq.length === 0 ? (
-                      <div style={{ background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: "6px", padding: "12px 16px", color: "#92400e", fontSize: 13 }}>
-                        ⚠ No hay agricultores con saldo pendiente en liquidaciones
-                      </div>
-                    ) : (
-                      <>
-                        <label style={{ display: "block", marginBottom: 16 }}>
-                          <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Agricultor</span>
-                          <ElegirBuscando id="anticipoAgricultor" nombre="farmer_id" valor={anticipoFarmerId} onCambiar={setAnticipoFarmerId}
-                            placeholder="🔍 Escribe el nombre del agricultor…" vacio="Ningún agricultor con saldo pendiente con ese nombre."
-                            opciones={farmersWithPendingLiq.map((f) => ({ key: f.id, titulo: f.full_name, detalle: `Pendiente ${money(f.pending_advance_balance)}` }))} />
-                        </label>
-                        <Input name="amount" label="Monto $" type="number" />
-                        <Input name="concept" label="Concepto" />
-                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El anticipo sale en efectivo o por el banco?" />}
-                        <button className="primary" style={{ width: "100%", padding: "10px 0" }} disabled={farmersWithPendingLiq.length === 0}>💰 Registrar anticipo</button>
-                      </>
-                    )}
+                    {(() => {
+                      // 🌾 Arroz en cáscara (mejora 3): cualquier agricultor (o uno nuevo). Lo que se le debe se paga
+                      // primero; lo que pase queda de anticipo y se descuenta solo en su próxima liquidación.
+                      const debePorFarmer = new Map<string, number>();
+                      for (const p of cashPayables) {
+                        if (!p.farmer_id || p.entre_socios || !(Number(p.balance) > 0.005)) continue;
+                        debePorFarmer.set(p.farmer_id, round2((debePorFarmer.get(p.farmer_id) ?? 0) + Number(p.balance)));
+                      }
+                      const sel = farmers.find((f) => f.id === anticipoFarmerId);
+                      const debe = sel ? debePorFarmer.get(sel.id) ?? 0 : 0;
+                      const anticipos = sel ? Number(sel.pending_advance_balance) || 0 : 0;
+                      const opciones = [...farmers]
+                        .sort((a, b) => (debePorFarmer.get(b.id) ?? 0) - (debePorFarmer.get(a.id) ?? 0) || a.full_name.localeCompare(b.full_name))
+                        .map((f) => {
+                          const d = debePorFarmer.get(f.id) ?? 0;
+                          const an = Number(f.pending_advance_balance) || 0;
+                          return { key: f.id, titulo: f.full_name, detalle: [d > 0 ? `se le debe ${money(d)}` : "", an > 0 ? `anticipos ${money(an)}` : ""].filter(Boolean).join(" · ") || undefined };
+                        });
+                      const sinTilde = (x: string) => x.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+                      const crearAgricultor = async (nombre: string) => {
+                        const limpio = nombre.trim().toUpperCase();
+                        if (limpio.length < 3 || anticipoCreando) return;
+                        setAnticipoCreando(true);
+                        try {
+                          const f = await apiPost<Farmer>("/farmers", { full_name: limpio });
+                          setFarmers((cur) => [...cur, { ...f, pending_advance_balance: 0 }]);
+                          setAnticipoFarmerId(f.id);
+                          addToast(`Agricultor «${limpio}» creado`, "success");
+                        } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo crear el agricultor", "error"); }
+                        finally { setAnticipoCreando(false); }
+                      };
+                      return (
+                        <>
+                          <h2 style={{ margin: "0 0 6px", fontSize: 18, fontWeight: 700 }}>🌾 Arroz en cáscara</h2>
+                          <p className="muted" style={{ margin: "0 0 16px", fontSize: 13 }}>Anticipo o pago al agricultor por la cáscara que entrega.</p>
+                          <label style={{ display: "block", marginBottom: 12 }}>
+                            <span style={{ display: "block", fontWeight: 600, marginBottom: 6, fontSize: 13 }}>Agricultor</span>
+                            <input type="hidden" name="farmer_id" value={sel ? sel.id : ""} />
+                            {sel ? (
+                              <div className="combo__elegida">
+                                <span className="combo__titulo">✓ {sel.full_name}</span>
+                                <button type="button" className="btnGhost" onClick={() => setAnticipoFarmerId("")}>Cambiar</button>
+                              </div>
+                            ) : (
+                              <BuscadorCombo id="anticipoAgricultor" placeholder="🔍 Escribe el nombre del agricultor…" opciones={opciones} max={12}
+                                vacio="No está registrado: escribe su nombre completo para crearlo."
+                                crear={(t) => (t.trim().length >= 3 && !farmers.some((f) => sinTilde(f.full_name) === sinTilde(t)) ? `➕ Crear agricultor «${t.trim().toUpperCase()}»` : null)}
+                                onCrear={(t) => { void crearAgricultor(t); }}
+                                onElegir={setAnticipoFarmerId} />
+                            )}
+                          </label>
+                          {sel && (
+                            <div className="cjCascaraResumen">
+                              <div><small>Se le debe</small><strong>{money(debe)}</strong></div>
+                              <div><small>Anticipos sin descontar</small><strong>{money(anticipos)}</strong></div>
+                            </div>
+                          )}
+                          <div className="teq-pago" style={{ margin: "4px 0 12px" }} role="radiogroup" aria-label="Concepto">
+                            {["Anticipo por arroz en cáscara", "Pago de cáscara", "Abono por arroz"].map((c) => (
+                              <button key={c} type="button" role="radio" aria-checked={anticipoConcepto === c} className={anticipoConcepto === c ? "is-on" : ""}
+                                onClick={() => setAnticipoConcepto(c)}>{c}</button>
+                            ))}
+                          </div>
+                          <Input name="amount" label="Monto $" type="number" />
+                          <Input name="concept" label="Detalle (opcional)" required={false} placeholder={anticipoConcepto} />
+                          {sel && (
+                            <small className="muted" style={{ display: "block", margin: "-4px 0 12px" }}>
+                              {debe > 0
+                                ? `Primero se paga lo que se le debe (${money(debe)}, de lo más viejo a lo más nuevo); lo que pase queda de anticipo y se descuenta solo en su próxima liquidación.`
+                                : "No se le debe nada: todo queda de anticipo y se descuenta solo en su próxima liquidación."}
+                            </small>
+                          )}
+                          {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿Sale en efectivo o por el banco?" />}
+                          <button className="primary" style={{ width: "100%", padding: "10px 0" }} disabled={!sel}>💰 Entregar al agricultor</button>
+                        </>
+                      );
+                    })()}
                   </form>
                 )}
 

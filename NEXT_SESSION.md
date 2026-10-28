@@ -2,7 +2,21 @@
 
 Actualizado: 2026-10-28
 
-## Último cambio: Secado con la cuadrilla pagada por fuera
+## Último cambio: Caja › 🌾 Arroz en cáscara (mejora 3 de la caja)
+
+- La pestaña Anticipos de Caja ahora se llama «🌾 Arroz en cáscara». Antes solo listaba agricultores con
+  liquidación pendiente. Ahora busca en TODOS y crea uno nuevo desde el buscador (POST /farmers).
+- Muestra «se le debe» (Por Pagar de esta caja) y «anticipos sin descontar», con chips de concepto (Anticipo por
+  arroz en cáscara / Pago de cáscara / Abono por arroz) y un aviso de lo que pasará.
+- Usa POST /advances con apply_to_payables: primero paga lo que se le debe y el resto queda de anticipo.
+  El botón ⚡ «Arroz en cáscara» de «Salió dinero» lleva aquí.
+- Arreglo: anular en Caja la entrega de un anticipo (reference_type farmer_advances) ahora lo CANCELA y devuelve la
+  deuda que pagó (y el neto de su liquidación). Antes el dinero volvía y el anticipo seguía pendiente. Si ya se
+  descontó en una liquidación → 409. La regla de consistencia de anticipos ignora los cancelados.
+  Simulacro `arroz_en_cascara`.
+- Mejoras 4 (nómina del viernes) y 5 (conteo de billetes al cerrar) EN ESPERA.
+
+## Cambio anterior: Secado con la cuadrilla pagada por fuera
 
 - Caso 2026-10-28: la cáscara de ROVINSON (7 tickets, 87.62 QQ) se secó el sábado 24/10 y se registra después. Su
   cuadrilla ya se pagó en el Excel.

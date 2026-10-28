@@ -6064,6 +6064,10 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   background: var(--c-surface, #fff); color: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: center; line-height: 1.2; }
 .cjAtajo span { font-size: 22px; }
 .cjAtajo:hover { border-color: #0f766e; background: #f0fdfa; }
+.cjCascaraResumen { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
+.cjCascaraResumen div { border: 1px solid var(--c-border, #e5e7eb); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; }
+.cjCascaraResumen small { opacity: 0.7; font-weight: 700; font-size: 11.5px; }
+.cjCascaraResumen strong { font-size: 16px; }
 .cjNoEfectivo { display: grid; gap: 6px; margin-top: 8px; padding: 8px 10px; border-radius: 8px; border: 1px dashed #94a3b8; }
 .cjBuscaChips small { opacity: 0.7; font-weight: 700; }
 .cjBuscaChips button { padding: 5px 10px; border-radius: 999px; border: 1px solid var(--c-border, #cbd5e1); background: transparent; color: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; }
