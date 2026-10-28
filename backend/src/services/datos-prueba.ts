@@ -103,6 +103,7 @@ export const WIPE_TABLES = [
   "motor_fuel_partes",
   "costo_operativo",
   "cierres_mes",
+  "cash_cuadres",
   "cash_movement_cuentas",
   "dinero_entre_socios",
   "cruces_entre_socios",

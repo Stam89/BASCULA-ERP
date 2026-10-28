@@ -408,6 +408,72 @@ cashRouter.post("/registers/:id/close", asyncRoute(async (req, res) => {
   res.json(result);
 }));
 
+// 🧮 CUADRE DEL DÍA sin cerrar la caja (mejora 5, 2026-10-28): se cuentan billetes y monedas del EFECTIVO; si no cuadra
+// con el sistema, la diferencia queda como faltante/sobrante (categorías del arqueo) con su motivo y la caja queda igual
+// a lo contado. Diferencias de más de $1 exigen motivo. Se puede volver a contar: el nuevo cuadre ajusta lo que falte.
+const DENOMINACIONES = ["100", "50", "20", "10", "5", "1", "1m", "0.50", "0.25", "0.10", "0.05", "0.01"] as const;
+/** Valor de cada denominación ("1m" = moneda de un dólar). */
+export const valorDenominacion = (d: string) => (d === "1m" ? 1 : Number(d));
+/** Total contado a partir del conteo por denominación (lógica pura). */
+export function totalConteo(conteo: Record<string, number>): number {
+  return round2(Object.entries(conteo).reduce((s, [d, n]) => s + valorDenominacion(d) * (Number(n) || 0), 0));
+}
+
+cashRouter.post("/registers/:id/cuadre", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const userId = (req as AuthenticatedRequest).user?.id ?? null;
+  const body = z.object({
+    conteo: z.record(z.enum(DENOMINACIONES), z.number().int().min(0).max(100000)).default({}),
+    motivo: z.string().trim().max(300).optional()
+  }).parse(req.body ?? {});
+  const result = await inTransaction(async (client) => {
+    const reg = (await client.query(
+      "SELECT id, status, tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!reg || reg.status !== "OPEN") throw new ApiError(400, "Caja no está abierta o no existe");
+    if (reg.tipo === "BANCO") throw new ApiError(400, "Una caja de banco no tiene billetes que contar.");
+    const contado = totalConteo(body.conteo);
+    const sistema = round2((await saldosDeCaja(client, reg.id)).efectivo);
+    const diferencia = round2(contado - sistema);
+    const motivo = (body.motivo ?? "").trim();
+    if (Math.abs(diferencia) > 1 && motivo.length < 5) {
+      throw new ApiError(400, `No cuadra: ${diferencia < 0 ? "faltan" : "sobran"} $${Math.abs(diferencia).toFixed(2)}. Escribe el motivo de la diferencia.`);
+    }
+    const cuadre = (await client.query(
+      `INSERT INTO cash_cuadres (cash_register_id, conteo, contado, sistema, diferencia, motivo, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [reg.id, JSON.stringify(body.conteo), contado, sistema, diferencia, motivo || null, userId]
+    )).rows[0];
+    if (Math.abs(diferencia) > 0.005) {
+      const mov = (await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, medio, reference_type, reference_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'EFECTIVO', 'arqueo', $6, $7) RETURNING id`,
+        [reg.id, diferencia < 0 ? "EXPENSE" : "INCOME", diferencia < 0 ? "FALTANTE_CAJA" : "SOBRANTE_CAJA", Math.abs(diferencia),
+         `Cuadre del día: ${diferencia < 0 ? "faltante" : "sobrante"}${motivo ? ` · ${motivo}` : " de centavos"}`, cuadre.id, userId]
+      )).rows[0];
+      await client.query("UPDATE cash_cuadres SET cash_movement_id = $2 WHERE id = $1", [cuadre.id, mov.id]);
+      cuadre.cash_movement_id = mov.id;
+    }
+    return { ...cuadre, contado, sistema, diferencia };
+  });
+  res.status(201).json(result);
+}));
+
+cashRouter.get("/registers/:id/cuadres", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const rows = await pool.query(
+    `SELECT c.id, c.fecha::text, c.conteo, c.contado::float, c.sistema::float, c.diferencia::float, c.motivo, c.created_at,
+            u.name AS usuario
+       FROM cash_cuadres c
+       JOIN cash_registers r ON r.id = c.cash_register_id
+       LEFT JOIN users u ON u.id = c.created_by
+      WHERE c.cash_register_id = $1 AND r.accionista_id = $2
+      ORDER BY c.created_at DESC LIMIT 60`,
+    [req.params.id, accionistaId]
+  );
+  res.json(rows.rows);
+}));
+
 // ── Traspaso entre EFECTIVO y BANCO de una caja mixta (depositar el efectivo / retirar del banco) ──
 // Dos líneas enlazadas (sale de un medio, entra al otro): el saldo total no cambia. Anular una anula las dos.
 cashRouter.post("/registers/:id/traspaso", asyncRoute(async (req, res) => {
@@ -638,7 +704,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
-    if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cierre de esa caja: no se anula.");
+    if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
     // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
     await revertirMovimientoDePrestamo(client, m);
 

@@ -41,6 +41,7 @@ import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
 import { BuscadorGlobal, type Filtro } from "./components/BuscadorGlobal";
+import { ContarBilletes, conteoParaEnviar, totalDeConteo, type Conteo } from "./components/ContarBilletes";
 import { PagarSemana, imprimirReciboSemana, type EleccionSemana, type SemanaVista, type SemanaPagada } from "./components/PagarSemana";
 import { revisarFinalizacion } from "./secadoras/revisarFinalizacion";
 import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
@@ -2969,7 +2970,10 @@ export function App() {
   const [catForm, setCatForm] = useState({ codigo: "", nombre: "", tipo: "EGRESO", aplicable_a: "AMBOS", incluir_resultado: true });
   const [cashMovements, setCashMovements] = useState<CashMovement[]>([]);
   // Cierre de caja con arqueo y traspaso efectivo↔banco (caja mixta).
-  const [cierreCaja, setCierreCaja] = useState<{ efectivo: string; banco: string; notas: string; busy?: boolean } | null>(null);
+  const [cierreCaja, setCierreCaja] = useState<{ efectivo: string; banco: string; notas: string; busy?: boolean; conteo?: Conteo } | null>(null);
+  // 🧮 Cuadre del día sin cerrar la caja (mejora 5, 2026-10-28): conteo por billete, motivo y los últimos cuadres.
+  type CuadreCaja = { id: string; fecha: string; contado: number; sistema: number; diferencia: number; motivo: string | null; created_at: string; usuario: string | null };
+  const [cuadreDia, setCuadreDia] = useState<{ conteo: Conteo; motivo: string; busy?: boolean; historial: CuadreCaja[] } | null>(null);
   const [traspaso, setTraspaso] = useState<{ direccion: "DEPOSITO" | "RETIRO"; monto: string; descripcion: string; busy?: boolean } | null>(null);
   const [movMedio, setMovMedio] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   // Efectivo o banco de los cobros/pagos fuera del formulario de movimientos (Por Cobrar, Por Pagar, anticipos,
@@ -10214,6 +10218,30 @@ export function App() {
     if (!cashSummary) return;
     await refreshCaja(cashSummary.id).catch(() => undefined);
     setCierreCaja({ efectivo: "", banco: "", notas: "" });
+  }
+  async function abrirCuadreDia() {
+    if (!cashSummary) return;
+    await refreshCaja(cashSummary.id).catch(() => undefined);
+    const historial = await apiGet<CuadreCaja[]>(`/cash/registers/${cashSummary.id}/cuadres`).catch(() => [] as CuadreCaja[]);
+    setCuadreDia({ conteo: {}, motivo: "", historial });
+  }
+  async function guardarCuadreDia() {
+    const c = cuadreDia;
+    if (!c || !cashSummary) return;
+    setCuadreDia({ ...c, busy: true });
+    try {
+      const r = await apiPost<{ contado: number; sistema: number; diferencia: number }>(`/cash/registers/${cashSummary.id}/cuadre`, {
+        conteo: conteoParaEnviar(c.conteo), motivo: c.motivo.trim() || undefined
+      });
+      setCuadreDia(null);
+      addToast(Math.abs(r.diferencia) < 0.005
+        ? `🧮 Cuadre del día: ✓ cuadra (${money(r.contado)})`
+        : `🧮 Cuadre del día: ${r.diferencia < 0 ? "faltante" : "sobrante"} de ${money(Math.abs(r.diferencia))} registrado · la caja queda en ${money(r.contado)}`, "success");
+      await refreshCaja(cashSummary.id);
+    } catch (e) {
+      setCuadreDia((cur) => cur && { ...cur, busy: false });
+      addToast(e instanceof Error ? e.message : "No se pudo guardar el cuadre", "error");
+    }
   }
   async function confirmarCierreCaja() {
     const c = cierreCaja;
@@ -19843,6 +19871,9 @@ Motivo (obligatorio):`, ""));
                           {esMatrizActiva && visibleTabs.includes("Nomina") && (
                             <button type="button" title="Pagar de una vez a la planta, cuadrilla, bajada de carro y sueldos semanales" onClick={() => irADestino("Nomina", "pagos")}>🗓️ Pagar nómina del viernes</button>
                           )}
+                          {(dashboard.current_cash_register?.tipo ?? "EFECTIVO") !== "BANCO" && (
+                            <button type="button" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadre del día</button>
+                          )}
                           {cajaSubTab !== "resumen" && (
                             <button type="button" onClick={() => abrir("resumen")}>📋 Movimientos</button>
                           )}
@@ -19890,7 +19921,13 @@ Motivo (obligatorio):`, ""));
                       <div className="modalCard cjArqueo" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
                         <h3 style={{ margin: 0 }}>🔒 Cerrar caja · arqueo</h3>
                         <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Cuenta el dinero y escríbelo. Si no cuadra, la diferencia queda registrada como faltante o sobrante con su motivo.</p>
-                        {tipo !== "BANCO" && fila("💵 Efectivo en la gaveta", sisEf, c.efectivo, (v) => setCierreCaja({ ...c, efectivo: v }), difEf)}
+                        {tipo !== "BANCO" && fila("💵 Efectivo en la gaveta", sisEf, c.efectivo, (v) => setCierreCaja({ ...c, efectivo: v, conteo: undefined }), difEf)}
+                        {tipo !== "BANCO" && (c.conteo ? (
+                          <ContarBilletes conteo={c.conteo} disabled={c.busy}
+                            onCambiar={(conteo) => { const t = totalDeConteo(conteo); setCierreCaja({ ...c, conteo, efectivo: t > 0 ? String(t) : "" }); }} />
+                        ) : (
+                          <button type="button" className="btnGhost" disabled={c.busy} onClick={() => setCierreCaja({ ...c, conteo: {} })}>🧮 Contar billetes y monedas</button>
+                        ))}
                         {tipo !== "EFECTIVO" && fila("🏦 Banco", sisBa, c.banco, (v) => setCierreCaja({ ...c, banco: v }), difBa)}
                         {Number(cashSummary.fondos_por_liquidar?.n ?? 0) > 0 && (
                           <div className="alertBox" style={{ margin: 0 }}>⏳ Hay {cashSummary.fondos_por_liquidar?.n} fondo(s) a rendir cuentas por liquidar ({money(Number(cashSummary.fondos_por_liquidar?.monto ?? 0))}). Puedes cerrar igual: se liquidan después desde la caja abierta.</div>
@@ -19902,6 +19939,56 @@ Motivo (obligatorio):`, ""));
                           <button type="button" className="dangerBtn" disabled={c.busy || (hayDif && c.notas.trim().length < 5)} onClick={() => confirmarCierreCaja()}>{c.busy ? "Cerrando…" : "Cerrar caja"}</button>
                           <button type="button" disabled={c.busy} onClick={() => setCierreCaja(null)}>Cancelar</button>
                         </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {cuadreDia && cashSummary && (() => {
+                  const c = cuadreDia;
+                  const sistema = Number(cashSummary.saldo_efectivo ?? cashSummary.current_balance);
+                  const contado = totalDeConteo(c.conteo);
+                  const contoAlgo = Object.values(c.conteo).some((n) => Number(n) > 0);
+                  const dif = round2(contado - sistema);
+                  const pideMotivo = contoAlgo && Math.abs(dif) > 1;
+                  return (
+                    <div className="modalOverlay" onClick={() => !c.busy && setCuadreDia(null)}>
+                      <div className="modalCard cjArqueo cjCuadre" role="dialog" aria-modal="true" aria-label="Cuadre del día" onClick={(e) => e.stopPropagation()}>
+                        <h3 style={{ margin: 0 }}>🧮 Cuadre del día</h3>
+                        <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>Cuenta los billetes y monedas de la gaveta. La caja sigue abierta; si no cuadra, la diferencia queda como faltante o sobrante con su motivo.</p>
+                        <ContarBilletes conteo={c.conteo} disabled={c.busy} onCambiar={(conteo) => setCuadreDia({ ...c, conteo })} />
+                        <div className="cjCuadre__res">
+                          <span>Según el sistema <b>{money(sistema)}</b></span>
+                          <span className={!contoAlgo ? "muted" : Math.abs(dif) < 0.005 ? "cjArqueo__ok" : "cjArqueo__dif"}>
+                            {!contoAlgo ? "Aún sin contar" : Math.abs(dif) < 0.005 ? "✓ Cuadra" : `${dif < 0 ? "Faltante" : "Sobrante"} ${money(Math.abs(dif))}`}
+                          </span>
+                        </div>
+                        {contoAlgo && Math.abs(dif) >= 0.005 && (
+                          <label className="anularVentaModal__motivo"><span>{pideMotivo ? "Motivo de la diferencia (obligatorio)" : "Motivo (opcional, son centavos)"}</span>
+                            <textarea rows={2} value={c.motivo} disabled={c.busy} placeholder="Ej: se pagó un taxi sin registrar" onChange={(e) => setCuadreDia({ ...c, motivo: e.target.value })} />
+                          </label>
+                        )}
+                        <div className="buttonRow">
+                          <button type="button" className="primary" disabled={c.busy || !contoAlgo || (pideMotivo && c.motivo.trim().length < 5)} onClick={() => { guardarCuadreDia().catch(() => undefined); }}>
+                            {c.busy ? "Guardando…" : "Guardar cuadre"}
+                          </button>
+                          <button type="button" disabled={c.busy} onClick={() => setCuadreDia(null)}>Cancelar</button>
+                        </div>
+                        {c.historial.length > 0 && (
+                          <details className="cjCuadre__hist">
+                            <summary>Cuadres anteriores de esta caja ({c.historial.length})</summary>
+                            <ul>
+                              {c.historial.map((h) => (
+                                <li key={h.id}>
+                                  <span>{new Date(h.created_at).toLocaleString("es-EC", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                                  <span>contado <b>{money(h.contado)}</b></span>
+                                  <span className={Math.abs(h.diferencia) < 0.005 ? "cjArqueo__ok" : "cjArqueo__dif"}>{Math.abs(h.diferencia) < 0.005 ? "✓ cuadró" : `${h.diferencia < 0 ? "faltó" : "sobró"} ${money(Math.abs(h.diferencia))}`}</span>
+                                  {h.motivo && <small className="muted">{h.motivo}</small>}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
                       </div>
                     </div>
                   );

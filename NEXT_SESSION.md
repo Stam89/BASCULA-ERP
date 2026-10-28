@@ -2,7 +2,19 @@
 
 Actualizado: 2026-10-28
 
-## Último cambio: Nómina del viernes con casillas y sueldo semanal por día (mejora 4 de la caja)
+## Último cambio: 🧮 Cuadre del día sin cerrar la caja (mejora 5 de la caja)
+
+- Caja › Otros registros › «🧮 Cuadre del día» (no sale en cajas de BANCO): contador de billetes ($100…$1) y monedas
+  ($1, 50¢…1¢; clave «1m» = moneda de $1), comparado con el EFECTIVO del sistema. La caja sigue abierta.
+- POST /cash/registers/:id/cuadre {conteo, motivo}: guarda en `cash_cuadres` (migración 20261123) y, si no cuadra,
+  registra FALTANTE_CAJA / SOBRANTE_CAJA (reference_type 'arqueo', reference_id = el cuadre); la caja queda igual a lo
+  contado. Más de $1 exige motivo; los centavos no. Ese ajuste no se anula (se vuelve a contar).
+  GET /cash/registers/:id/cuadres = historial (sale en la misma ventana).
+- El cierre de caja también tiene «🧮 Contar billetes y monedas» (llena el efectivo contado).
+- `cash_cuadres` entra al borrado de fábrica. Simulacro `cuadre_diario`.
+- Mejoras de caja 1-5 HECHAS.
+
+## Cambio anterior: Nómina del viernes con casillas y sueldo semanal por día (mejora 4 de la caja)
 
 - «Pagar la semana» (Nómina › Pagos y botón «🗓️ Pagar nómina del viernes» en Caja › Otros registros) ahora tiene
   casillas: lo desmarcado queda pendiente. La bajada de carro va toda junta (`bajada`). POST /nomina-semanal/pagar

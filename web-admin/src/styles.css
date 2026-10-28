@@ -6070,6 +6070,19 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   background: var(--c-surface, #fff); color: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; text-align: center; line-height: 1.2; }
 .cjAtajo span { font-size: 22px; }
 .cjAtajo:hover { border-color: #0f766e; background: #f0fdfa; }
+/* 🧮 Contar billetes (cuadre del día y cierre, 2026-10-28). */
+.contar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 14px; border: 1px solid var(--c-border, #e5e7eb); border-radius: 10px; padding: 10px 12px; }
+.contar__col { display: grid; gap: 4px; align-content: start; }
+.contar__col > small { font-weight: 700; opacity: 0.75; }
+.contar__fila { display: grid; grid-template-columns: 44px 10px minmax(0, 1fr) 70px; align-items: center; gap: 6px; margin: 0; font-size: 13px; }
+.contar__fila input { padding: 5px 6px; text-align: right; min-width: 0; }
+.contar__den { font-weight: 700; }
+.contar__sub { text-align: right; font-variant-numeric: tabular-nums; opacity: 0.75; font-size: 12px; }
+.contar__total { grid-column: 1 / -1; display: flex; justify-content: space-between; border-top: 1px solid var(--c-border, #e5e7eb); padding-top: 6px; font-size: 15px; }
+.cjCuadre__res { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 14px; }
+.cjCuadre__hist ul { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 4px; font-size: 12.5px; }
+.cjCuadre__hist li { display: flex; flex-wrap: wrap; gap: 4px 10px; border-bottom: 1px dashed var(--c-border, #e5e7eb); padding-bottom: 4px; }
+@media (max-width: 560px) { .contar { grid-template-columns: minmax(0, 1fr); } }
 .cjCascaraResumen { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
 .cjCascaraResumen div { border: 1px solid var(--c-border, #e5e7eb); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; }
 .cjCascaraResumen small { opacity: 0.7; font-weight: 700; font-size: 11.5px; }
