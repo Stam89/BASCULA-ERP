@@ -2,12 +2,16 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 🗓️ Jornada del secador al corregir la fecha de la corrida (2026-10-29)
+## Último cambio: 🗓️ El secador se paga por el día de la HORA DE INICIO (2026-10-29)
 
-- sync-run (fecha/hora/secador de la corrida) ahora también RECUENTA el (secador, día) que la corrida deja
-  (`recontarJornadasSecador`): antes la jornada se movía al día nuevo, pero el día viejo seguía con los túneles de
-  antes. Caso real: la secadora 3 tenía llenado 27/10 (arrancó el 28) → HUGO el 27 con 3 y el 28 con 2; se corrigió la
-  corrida del motor 2 a 28/10 → 27 con 2, 28 con 3. Simulacro `secador_cambio_fecha`.
+- Regla del dueño: la FECHA DE LLENADO fecha el pago de la CUADRILLA (sin cambios) y la HORA DE INICIO el del SECADOR.
+  `diaSecadorSql()` (utils/secador-workday.ts) = día de dry_start_at en hora de Ecuador, si no filled_at, si no created_at.
+  Lo usan autoGenerarPagoSecador (día, conteo de túneles, huérfanas), /labor/secador-suggestions, el freno de «reabrir»
+  y `recontarJornadasSecador`. Los pagos de cuadrilla siguen por filled_at.
+- sync-run recuenta también el (secador, día) que la corrida deja y los días de jornadas pendientes que apuntan a ella.
+- POST /process-flow/drying/secador/recalcular {from,to} (admin): recalcula las jornadas PENDIENTES del secador de ese
+  rango con la regla vigente (un día sin túneles iniciados queda solo con guardianía). Caso real: HUGO 27/10 = 2 y
+  28/10 = 3 (la secadora 3 se llenó el 27 y arrancó el 28). Simulacro `secador_cambio_fecha`.
 
 ## Cambio anterior: 🔀 Cambiar de secadora antes de encender el motor (2026-10-29)
 

@@ -8,7 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
-import { esDiaPagableSecador, fechasLaborablesDesdeLunes } from "../../utils/secador-workday.js";
+import { diaSecadorSql, esDiaPagableSecador, fechasLaborablesDesdeLunes } from "../../utils/secador-workday.js";
 import { fechaEc } from "../../utils/fechas.js";
 
 export const laborRouter = Router();
@@ -856,31 +856,28 @@ laborRouter.get("/secador-suggestions", asyncRoute(async (req, res) => {
   const to = q.to ?? fechaEc(today);
   const rates = await getRates(pool, (req as AuthenticatedRequest).accionistaId);
 
-  // La CORRIDA (no el día calendario) es la unidad de cobro del secador: los
-  // túneles de un mismo motor comparten la FECHA DE LLENADO (filled_at), que es
-  // la fecha oficial unificada de la corrida. Agrupar por filled_at evita que una
-  // corrida continua que cruza la medianoche (llenó el 1, terminó el 2) se
-  // fragmente en dos filas y se duplique la guardianía. Solo si el secador
-  // trabaja corridas distintas (otra fecha de llenado) salen filas separadas.
+  // El secador se cobra por el DÍA DE LA HORA DE INICIO (regla del dueño 2026-10-29: el llenado fecha a la
+  // cuadrilla y el inicio al secador; ver diaSecadorSql). La hora de inicio es única por corrida, así que una
+  // corrida que cruza la medianoche (inició el 1, terminó el 2) sigue en una sola fila.
   // Los días de guardianía independientes se pueden agregar a mano en secador-days.
   const result = await pool.query(
     `WITH corrida_tunnels AS (
-       -- Túneles distintos de cada CORRIDA (por fecha oficial de llenado)
-       SELECT COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date,
+       -- Túneles distintos de cada día de INICIO
+       SELECT ${diaSecadorSql()} AS work_date,
               COUNT(DISTINCT tunnel_number)::int AS total_tunnels_active,
               MIN(COALESCE(dry_start_at::date, filled_at, created_at::date)) AS dia_inicio,
               MAX(COALESCE(dry_end_at::date, dry_start_at::date, filled_at, created_at::date)) AS dia_fin
        FROM drying_tunnel_reports
-       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
-       GROUP BY COALESCE(filled_at, dry_start_at::date, created_at::date)
+       WHERE ${diaSecadorSql()} BETWEEN $1 AND $2
+       GROUP BY ${diaSecadorSql()}
      ),
      corrida_workers AS (
        -- Qué secadores trabajaron cada corrida (por nombre del operador)
        SELECT DISTINCT
          COALESCE(NULLIF(TRIM(operator_name), ''), 'Secador') AS worker_name,
-         COALESCE(filled_at, dry_start_at::date, created_at::date) AS work_date
+         ${diaSecadorSql()} AS work_date
        FROM drying_tunnel_reports
-       WHERE COALESCE(filled_at, dry_start_at::date, created_at::date) BETWEEN $1 AND $2
+       WHERE ${diaSecadorSql()} BETWEEN $1 AND $2
      )
      SELECT
        cw.worker_name,

@@ -25,3 +25,8 @@ export function fechasLaborablesDesdeLunes(weekStart: string): string[] | null {
     return current.toISOString().slice(0, 10);
   });
 }
+
+// 🗓️ Regla del dueño (2026-10-29): la FECHA DE LLENADO fecha el pago de la CUADRILLA y la HORA DE INICIO fecha el del
+// SECADOR. El día del secador es el de la hora de inicio (hora de Ecuador); sin hora de inicio, el de llenado.
+export const diaSecadorSql = (a = "") =>
+  `COALESCE((${a}dry_start_at AT TIME ZONE 'America/Guayaquil')::date, ${a}filled_at, ${a}created_at::date)`;

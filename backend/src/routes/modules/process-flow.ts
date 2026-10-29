@@ -20,7 +20,7 @@ import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEff
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
-import { esDiaPagableSecador } from "../../utils/secador-workday.js";
+import { diaSecadorSql, esDiaPagableSecador } from "../../utils/secador-workday.js";
 import { pesosPorTiempoCompartido } from "../../utils/reparto-combustible.js";
 
 export const processFlowRouter = Router();
@@ -203,7 +203,7 @@ function fmtInicio(value: unknown): string {
 export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId: string): Promise<void> {
   const r = await client.query(
     `SELECT d.status, d.operator_name, d.filled_at, d.dry_start_at, d.created_at, l.accionista_id,
-            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date
+            ${diaSecadorSql("d.")} AS work_date
      FROM drying_tunnel_reports d
      LEFT JOIN lots l ON l.id = d.lot_id
      WHERE d.id = $1`,
@@ -233,8 +233,8 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
     return;
   }
 
-  // Túneles físicos distintos que YA INICIARON de esta corrida (misma fecha de
-  // llenado) y mismo secador. Una carga mixta puede crear varios reportes para
+  // Túneles físicos distintos que YA INICIARON ese día (por la hora de inicio)
+  // con el mismo secador. Una carga mixta puede crear varios reportes para
   // un mismo túnel, por eso se usa DISTINCT y nunca se paga doble ese túnel.
   const t = await client.query(
     `SELECT COUNT(DISTINCT tunnel_number)::int AS tunnels
@@ -243,7 +243,7 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
        AND COALESCE(dry_method, 'TUNEL') = 'TUNEL'
        AND tunnel_number IS NOT NULL
        AND btrim(COALESCE(operator_name, '')) = $1
-       AND COALESCE(filled_at, dry_start_at::date, created_at::date) = $2::date`,
+       AND ${diaSecadorSql()} = $2::date`,
     [worker, workDate]
   );
   const tunnels = Number(t.rows[0]?.tunnels ?? 0);
@@ -268,12 +268,12 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
         AND wp.status = 'PENDING'
         AND wp.reference_type = 'drying_report'
         AND btrim(COALESCE(ref.operator_name, '')) = $1
-        AND COALESCE(ref.filled_at, ref.dry_start_at::date, ref.created_at::date) = $2::date
+        AND ${diaSecadorSql("ref.")} = $2::date
         AND NOT (btrim(wp.worker_name) = $1 AND wp.work_date = $2::date)
         AND NOT EXISTS (
           SELECT 1 FROM drying_tunnel_reports b
            WHERE btrim(COALESCE(b.operator_name, '')) = btrim(wp.worker_name)
-             AND COALESCE(b.filled_at, b.dry_start_at::date, b.created_at::date) = wp.work_date
+             AND ${diaSecadorSql("b.")} = wp.work_date
              AND (b.status = 'COMPLETED' OR b.dry_start_at IS NOT NULL)
         )
       ORDER BY wp.created_at ASC`,
@@ -329,7 +329,7 @@ async function recontarJornadasSecador(client: PoolClient, dias: Array<{ worker:
     if (!d.worker) continue;
     const ref = (await client.query(
       `SELECT id FROM drying_tunnel_reports
-        WHERE btrim(COALESCE(operator_name, '')) = $1 AND COALESCE(filled_at, dry_start_at::date, created_at::date) = $2::date
+        WHERE btrim(COALESCE(operator_name, '')) = $1 AND ${diaSecadorSql()} = $2::date
           AND (status = 'COMPLETED' OR dry_start_at IS NOT NULL) AND COALESCE(dry_method, 'TUNEL') = 'TUNEL'
         ORDER BY created_at LIMIT 1`,
       [d.worker, toDateOnly(d.dia)]
@@ -552,8 +552,13 @@ processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, r
     // Secador y día de la jornada ANTES del cambio: si la corrida se pasa a otro día, el día de antes se vuelve a
     // contar (p. ej. el 27 quedaba con 3 secadoras aunque la 3 ya era del 28).
     const diasAntes = (await client.query(
-      `SELECT DISTINCT btrim(COALESCE(operator_name, '')) AS worker, COALESCE(filled_at, dry_start_at::date, created_at::date) AS dia
-         FROM drying_tunnel_reports WHERE motor_number = $1 AND motor_fuel_id IS NULL`,
+      `SELECT DISTINCT btrim(COALESCE(operator_name, '')) AS worker, ${diaSecadorSql()} AS dia
+         FROM drying_tunnel_reports WHERE motor_number = $1 AND motor_fuel_id IS NULL
+       UNION
+       SELECT DISTINCT btrim(wp.worker_name), wp.work_date
+         FROM worker_payments wp JOIN drying_tunnel_reports d ON d.id = wp.reference_id
+        WHERE wp.worker_role = 'SECADOR' AND wp.status = 'PENDING' AND wp.reference_type = 'drying_report'
+          AND d.motor_number = $1 AND d.motor_fuel_id IS NULL`,
       [motor]
     )).rows;
     // Los túneles de la corrida (mismo motor, combustible aún no cerrado).
@@ -955,7 +960,7 @@ processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(asy
     // Partidas del MISMO túnel físico y la misma corrida (cerraron juntas).
     const partidas = (await client.query(
       `SELECT d.id, d.lot_id, d.operator_name, l.lot_code,
-              COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date
+              ${diaSecadorSql("d.")} AS work_date
          FROM drying_tunnel_reports d
          LEFT JOIN lots l ON l.id = d.lot_id
         WHERE d.motor_number = $1 AND d.tunnel_number = $2 AND d.status = 'COMPLETED'
@@ -1808,6 +1813,56 @@ async function secadoMismoDuenoEnTunel(
   const fila = r.rows.find((x) => clave(x.accionista_id, x.operation_type, x.is_maquila) === buscada);
   return fila ? String(fila.id) : null;
 }
+
+// 🗓️ RECALCULAR la jornada del secador de un rango de días con la regla vigente (el día es el de la HORA DE INICIO).
+// Para los días que ya se habían contado por la fecha de llenado. Solo toca jornadas PENDIENTES de secados; lo pagado
+// no se modifica. Un día que se quedó sin túneles iniciados vuelve a ser solo guardianía.
+processFlowRouter.post("/drying/secador/recalcular", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.body);
+  const result = await inTransaction(async (client) => {
+    const dias = (await client.query(
+      `SELECT DISTINCT btrim(COALESCE(operator_name, '')) AS worker, ${diaSecadorSql()} AS dia
+         FROM drying_tunnel_reports
+        WHERE ${diaSecadorSql()} BETWEEN $1::date AND $2::date AND (status = 'COMPLETED' OR dry_start_at IS NOT NULL)
+       UNION
+       SELECT DISTINCT btrim(worker_name), work_date FROM worker_payments
+        WHERE worker_role = 'SECADOR' AND status = 'PENDING' AND reference_type = 'drying_report'
+          AND work_date BETWEEN $1::date AND $2::date`,
+      [body.from, body.to]
+    )).rows;
+    await recontarJornadasSecador(client, dias);
+    // Jornadas pendientes cuyo día ya no tiene ningún túnel iniciado: quedan solo con la guardianía.
+    const sinTuneles = (await client.query(
+      `SELECT wp.id FROM worker_payments wp
+        WHERE wp.worker_role = 'SECADOR' AND wp.status = 'PENDING' AND wp.reference_type = 'drying_report'
+          AND wp.tunnels > 0 AND wp.work_date BETWEEN $1::date AND $2::date
+          AND NOT EXISTS (SELECT 1 FROM drying_tunnel_reports d
+                           WHERE btrim(COALESCE(d.operator_name, '')) = btrim(wp.worker_name)
+                             AND ${diaSecadorSql("d.")} = wp.work_date AND d.dry_start_at IS NOT NULL)`,
+      [body.from, body.to]
+    )).rows;
+    if (sinTuneles.length) {
+      const rates = await getRates(client, await getMatrizId(client));
+      const g = round2(Number(rates.secador_guardiania ?? 0));
+      await client.query(
+        `UPDATE worker_payments SET tunnels = 0, base_amount = $2, net_amount = $2 - COALESCE(discount, 0),
+                notes = 'Guardianía de turno · sin túneles iniciados ese día'
+          WHERE id = ANY($1::uuid[])`,
+        [sinTuneles.map((x) => x.id), g]
+      );
+    }
+    const jornadas = (await client.query(
+      `SELECT worker_name, work_date::text AS dia, tunnels, base_amount::float AS base, status
+         FROM worker_payments WHERE worker_role = 'SECADOR' AND work_date BETWEEN $1::date AND $2::date ORDER BY work_date, worker_name`,
+      [body.from, body.to]
+    )).rows;
+    return { dias_revisados: dias.length, solo_guardiania: sinTuneles.length, jornadas };
+  });
+  res.json(result);
+}));
 
 // 🔀 CAMBIAR DE SECADORA (pedido del dueño 2026-10-29: «lo de la secadora 1 va en la 2 y lo de la 2 en la 1»).
 // Se mueve TODO lo que hay en el túnel de ese secado (es el túnel físico) al túnel elegido; si el elegido también está
