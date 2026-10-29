@@ -2,7 +2,14 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📦 Producción › Desde Stock = solo LOTES GUARDADOS, con varios lotes por pilada (2026-10-29)
+## Último cambio: 📍 Saldo inicial de arroz pilado con presentación y «Allá» (2026-10-29)
+
+- Saldos iniciales › Inventario: «Presentación» (bultos × peso del saco; 25 lb = @ arroba) calcula los QQ y se anota en
+  el detalle (el inventario sigue en QQ por producto, sin presentación). «¿Dónde está?»: piladora o «Allá: <proveedor>»
+  de selección/envejecimiento (`external_provider_id` → `bodegaAlla`, exportada de selection.ts); la cáscara no puede
+  quedar allá. /saldos-iniciales/contrapartes trae `presentaciones` y `externos`. Simulacro `saldo_inicial_alla`.
+
+## Cambio anterior: 📦 Producción › Desde Stock = solo LOTES GUARDADOS, con varios lotes por pilada (2026-10-29)
 
 - /lots/dry-in-storage devuelve SOLO lo guardado (Reportes › Lotes guardados): secados apartados (`stock_kind:
   'secado'`, drying_report_id, tunnel_number, ubicación, agricultores) y saldo inicial apartado (`'lote'`), más los

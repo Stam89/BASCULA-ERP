@@ -16,6 +16,7 @@
 import { Router } from "express";
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import { bodegaAlla } from "./selection.js";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { lockInventoryStock } from "../../db/inventory-lock.js";
@@ -130,7 +131,7 @@ saldosInicialesRouter.get("/", asyncRoute(async (req, res) => {
 // ── Catálogos para elegir (clientes, agricultores, proveedores, socios, productos)
 saldosInicialesRouter.get("/contrapartes", asyncRoute(async (req, res) => {
   const { accionistaId } = contexto(req as AuthenticatedRequest);
-  const [clientes, agricultores, proveedores, socios, productos] = await Promise.all([
+  const [clientes, agricultores, proveedores, socios, productos, presentaciones, externos] = await Promise.all([
     pool.query("SELECT id, full_name AS nombre, identification FROM customers ORDER BY full_name"),
     pool.query("SELECT id, full_name AS nombre, identification FROM farmers WHERE is_active IS NOT FALSE ORDER BY full_name"),
     pool.query("SELECT id, name AS nombre, identification FROM suppliers WHERE is_active IS NOT FALSE ORDER BY name"),
@@ -138,11 +139,14 @@ saldosInicialesRouter.get("/contrapartes", asyncRoute(async (req, res) => {
     pool.query(
       `SELECT id, code, name, product_type FROM products WHERE is_active IS NOT FALSE
         ORDER BY CASE product_type WHEN 'RAW_MATERIAL' THEN 0 WHEN 'FINISHED_GOOD' THEN 1 WHEN 'PACKAGED_GOOD' THEN 2 ELSE 3 END, name`
-    )
+    ),
+    pool.query("SELECT product_id, name, weight_lb::float AS weight_lb FROM product_presentations ORDER BY weight_lb DESC"),
+    // Proveedores de selección / envejecimiento: el arroz puede estar «Allá» con ellos.
+    pool.query("SELECT id, name AS nombre FROM external_providers WHERE is_active IS NOT FALSE ORDER BY name")
   ]);
   res.json({
     clientes: clientes.rows, agricultores: agricultores.rows, proveedores: proveedores.rows,
-    socios: socios.rows, productos: productos.rows
+    socios: socios.rows, productos: productos.rows, presentaciones: presentaciones.rows, externos: externos.rows
   });
 }));
 
@@ -238,6 +242,8 @@ const inventarioSchema = z.object({
   cantidad: z.number().refine((n) => n !== 0 && Math.abs(n) <= 1_000_000, "La cantidad no puede ser 0."),
   costo_unitario: z.number().nonnegative().optional(),   // $ por QQ (referencial)
   warehouse_id: z.string().uuid().optional(),
+  // 📍 Arroz que está «Allá» donde el proveedor de selección / envejecimiento (pedido del dueño 2026-10-29).
+  external_provider_id: z.string().uuid().optional(),
   detalle: z.string().trim().max(300).optional()
 });
 
@@ -250,8 +256,11 @@ saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
     if (!prod.rows[0]) throw new ApiError(404, "Producto no encontrado");
     const p = prod.rows[0] as { id: string; code: string; name: string; product_type: string };
     const esCascara = p.product_type === "RAW_MATERIAL";
-    // Bodega: la indicada (de su tipo) o la primera del tipo que corresponde.
-    const bod = body.warehouse_id
+    if (body.external_provider_id && esCascara) throw new ApiError(400, "La cáscara no queda «allá»: solo el arroz pilado, seleccionado o envejecido.");
+    // Bodega: «Allá: <proveedor>», la indicada (de su tipo) o la primera del tipo que corresponde.
+    const bod = body.external_provider_id
+      ? await client.query("SELECT id, name, type FROM warehouses WHERE id = $1", [await bodegaAlla(client, body.external_provider_id)])
+      : body.warehouse_id
       ? await client.query("SELECT id, name, type FROM warehouses WHERE id = $1", [body.warehouse_id])
       : await client.query(
         `SELECT id, name, type FROM warehouses

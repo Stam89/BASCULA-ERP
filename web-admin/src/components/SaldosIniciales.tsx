@@ -25,7 +25,8 @@ type Registro = {
 };
 type Opcion = { id: string; nombre: string; identification?: string | null };
 type Producto = { id: string; code: string; name: string; product_type: string };
-type Contrapartes = { clientes: Opcion[]; agricultores: Opcion[]; proveedores: Opcion[]; socios: Opcion[]; productos: Producto[] };
+type Presentacion = { product_id: string; name: string; weight_lb: number };
+type Contrapartes = { clientes: Opcion[]; agricultores: Opcion[]; proveedores: Opcion[]; socios: Opcion[]; productos: Producto[]; presentaciones?: Presentacion[]; externos?: Opcion[] };
 type Avisar = (msg: string, tipo: "success" | "error" | "warn") => void;
 type Sel = { id?: string; nombre: string; nuevo?: boolean };
 
@@ -157,10 +158,27 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
   const [busy, setBusy] = useState(false);
   // Producto que se DEBE (ej. se tomó el arroz de un cliente de servicio de pilada para un pedido): saldo negativo.
   const [negativo, setNegativo] = useState(false);
+  // 📦 Presentación (informativa): bultos × peso del saco → QQ. El inventario se lleva en QQ por producto.
+  const [pesoLb, setPesoLb] = useState("");
+  const [bultos, setBultos] = useState("");
+  // 📍 Dónde está: en la piladora o «Allá» con el proveedor de selección / envejecimiento.
+  const [allaId, setAllaId] = useState("");
   const prod = cp.productos.find((p) => p.id === productId);
   const esCascara = prod?.product_type === "RAW_MATERIAL";
   const enNegativo = negativo && !!prod && !esCascara;
   const qqN = r2(Number(qq) || 0);
+  const pesos = useMemo(() => {
+    const propios = (cp.presentaciones ?? []).filter((x) => x.product_id === productId).map((x) => Number(x.weight_lb));
+    return [...new Set(propios.length ? propios : [100, 50, 25, 10, 5])].sort((a, b) => b - a);
+  }, [cp.presentaciones, productId]);
+  const nombrePeso = (lb: number) => (lb === 25 ? "25 lb (@ arroba)" : lb === 100 ? "100 lb (quintal)" : `${lb} lb`);
+  function cambiarBultos(b: string, lb: string) {
+    setBultos(b); setPesoLb(lb);
+    const n = Number(b), w = Number(lb);
+    if (n > 0 && w > 0) setQq(String(r2((n * w) / 100)));
+  }
+  const textoPresentacion = Number(bultos) > 0 && Number(pesoLb) > 0 ? `${Number(bultos)} bultos de ${nombrePeso(Number(pesoLb))}` : "";
+  const alla = (cp.externos ?? []).find((x) => x.id === allaId);
   const costoN = costo === "" ? null : r2(Number(costo) || 0);
   const grupos = useMemo(() => {
     const m = new Map<string, Producto[]>();
@@ -175,10 +193,12 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
     setBusy(true);
     try {
       const r = await apiPost<{ lote: string | null; bodega: string }>("/saldos-iniciales/inventario", {
-        corte, product_id: prod.id, cantidad: enNegativo ? -qqN : qqN, costo_unitario: costoN ?? undefined, detalle: detalle.trim() || undefined
+        corte, product_id: prod.id, cantidad: enNegativo ? -qqN : qqN, costo_unitario: costoN ?? undefined,
+        external_provider_id: !esCascara && allaId ? allaId : undefined,
+        detalle: [textoPresentacion, detalle.trim()].filter(Boolean).join(" · ") || undefined
       });
       avisar(`${prod.name}: ${enNegativo ? `−${qqTxt(qqN)} (en negativo)` : qqTxt(qqN)} en ${r.bodega}${r.lote ? ` · lote ${r.lote} listo para pilar` : ""}`, "success");
-      setQq(""); setCosto(""); setDetalle(""); setNegativo(false);
+      setQq(""); setCosto(""); setDetalle(""); setNegativo(false); setBultos("");
       onGuardado();
     } catch (err) {
       avisar((err as Error).message, "error");
@@ -200,6 +220,17 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
             ))}
           </select>
         </label>
+        {prod && !esCascara && (
+          <label>Presentación <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <input type="number" min="0" step="1" value={bultos} placeholder="Bultos" style={{ maxWidth: 90 }}
+                onChange={(e) => cambiarBultos(e.target.value, pesoLb || String(pesos[0] ?? 100))} />
+              <select value={pesoLb || String(pesos[0] ?? 100)} onChange={(e) => cambiarBultos(bultos, e.target.value)}>
+                {pesos.map((lb) => <option key={lb} value={lb}>{nombrePeso(lb)}</option>)}
+              </select>
+            </span>
+          </label>
+        )}
         <label>Cantidad (QQ) *
           <input type="number" min="0" step="0.01" value={qq} placeholder="0.00" onChange={(e) => setQq(e.target.value)} style={{ fontWeight: 700 }} />
         </label>
@@ -224,6 +255,18 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
           Recuerda que ese arroz se le debe al cliente del servicio de pilada.
         </p>
       )}
+      {prod && !esCascara && (cp.externos ?? []).length > 0 && (
+        <label>¿Dónde está?
+          <select value={allaId} onChange={(e) => setAllaId(e.target.value)}>
+            <option value="">En la piladora (bodega de producto terminado)</option>
+            {(cp.externos ?? []).map((x) => <option key={x.id} value={x.id}>Allá: {x.nombre} (selección / envejecimiento)</option>)}
+          </select>
+        </label>
+      )}
+      {alla && (
+        <p className="si-aviso">📍 Queda en <strong>«Allá: {alla.nombre}»</strong>: sigue siendo tuyo y ya se puede vender (se retira allá al preparar el pedido) o traer a la piladora desde Selección.</p>
+      )}
+      {textoPresentacion && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>📦 {textoPresentacion} = {qqTxt(qqN)} (se anota en el detalle)</p>}
       <label>Detalle
         <input type="text" maxLength={300} value={detalle} placeholder={esCascara ? "Ej: tendal norte, de Juan Pérez" : enNegativo ? "Ej: arroz del pilado de Juan Pérez usado en el pedido 123" : "Ej: conteo físico del 30"} onChange={(e) => setDetalle(e.target.value)} />
       </label>
@@ -235,7 +278,7 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
         </p>
       )}
       <div className="si-acciones">
-        <small className="muted">Queda al {fechaTxt(corte)} en la bodega de su tipo.</small>
+        <small className="muted">Queda al {fechaTxt(corte)} en {alla ? `«Allá: ${alla.nombre}»` : "la bodega de su tipo"}.</small>
         <button className="primary" disabled={!prod || qqN <= 0 || busy}>{busy ? "Guardando…" : enNegativo ? "➖ Cargar en negativo" : "➕ Cargar inventario"}</button>
       </div>
     </form>

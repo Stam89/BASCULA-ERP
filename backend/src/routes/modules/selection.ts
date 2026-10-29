@@ -26,7 +26,7 @@ const TYPE_LABEL: Record<string, string> = {
  * Bodega «Allá: <proveedor>» (tipo EXTERNO): lo que el proveedor ya procesó pero QUEDÓ ALLÁ. Sigue siendo del
  * socio (inventario y balance) pero no se despacha desde la piladora hasta traerlo. Se crea la primera vez.
  */
-async function bodegaAlla(tx: PoolClient, providerId: string): Promise<string> {
+export async function bodegaAlla(tx: PoolClient, providerId: string): Promise<string> {
   const ya = await tx.query("SELECT id FROM warehouses WHERE external_provider_id = $1", [providerId]);
   if (ya.rowCount) return ya.rows[0].id;
   const prov = await tx.query("SELECT name FROM external_providers WHERE id = $1", [providerId]);
