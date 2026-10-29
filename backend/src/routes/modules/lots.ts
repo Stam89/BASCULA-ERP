@@ -216,8 +216,8 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
          -- …o 'Solo Servicio de Pilada': ya viene seco, salta secadoras y va
          -- directo a producción desde stock/bodega.
          OR l.operation_type = 'PILADO'
-         -- …o cáscara seca cargada como saldo inicial.
-         OR l.saldo_inicial
+         -- …o cáscara seca cargada como saldo inicial (si no está apartada en «Lotes guardados»).
+         OR (l.saldo_inicial AND NOT l.apartado_arianos)
        )
        AND NOT EXISTS (
          SELECT 1 FROM drying_tunnel_reports d

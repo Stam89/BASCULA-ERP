@@ -22903,7 +22903,8 @@ Motivo (obligatorio):`, ""));
                             <span className="interesFijoModal__txt">
                               <strong>{money(Number(e.valor))}</strong>
                               <small>{e.fecha ? e.fecha.slice(0, 10).split("-").reverse().join("/") : "—"} · {dias} días{e.concepto ? ` · ${e.concepto}` : ""}</small>
-                              {meses == null && (
+                            </span>
+                            {meses == null && (
                                 <label className="interesFijoModal__desde">
                                   <span>Cobrar hasta</span>
                                   <input type="date" disabled={fomentoInteresFijoBusy || cerrado}
@@ -22918,10 +22919,9 @@ Motivo (obligatorio):`, ""));
                                   {e.interes_hasta ? (
                                     !cerrado && <button type="button" className="btnGhost" title="Quitar: cobrar hasta hoy" disabled={fomentoInteresFijoBusy}
                                       onClick={() => { ajustarFechaInteresEntrega(e, null).catch(() => undefined); }}>↺</button>
-                                  ) : <small className="muted">vacío = hasta hoy</small>}
+                                  ) : <small className="muted">(vacío = hasta hoy)</small>}
                                 </label>
                               )}
-                            </span>
                             <select value={meses ?? ""} disabled={fomentoInteresFijoBusy || cerrado}
                               onChange={(ev) => ajustarInteresFijoEntrega(e, ev.target.value === "" ? null : Number(ev.target.value))}>
                               <option value="">Por días ({money(interesDe(e, null))})</option>
@@ -25617,8 +25617,8 @@ Motivo (obligatorio):`, ""));
                         <tbody>
                           {pend.map((r: any) => (
                             <tr key={r.id}>
-                              <td>{fmtF(r.dry_end_at)}</td>
-                              <td>{r.lot_code ?? "—"}</td>
+                              <td>{r.saldo_inicial ? "Saldo inicial" : fmtF(r.dry_end_at)}</td>
+                              <td>{r.lot_code ?? "—"}{r.saldo_inicial && r.detalle ? <small className="muted" style={{ display: "block", maxWidth: 360 }}>{String(r.detalle)}</small> : null}</td>
                               <td>{r.rice_type}</td>
                               <td className="num">{cantidad(Number(r.quintals))}</td>
                               <td><input value={arianosUbic[r.id] ?? ""} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>
@@ -25646,8 +25646,8 @@ Motivo (obligatorio):`, ""));
                         <tbody>
                           {apart.map((r: any) => (
                             <tr key={r.id}>
-                              <td>{fmtF(r.dry_end_at)}</td>
-                              <td>{r.lot_code ?? "—"}</td>
+                              <td>{r.saldo_inicial ? "Saldo inicial" : fmtF(r.dry_end_at)}</td>
+                              <td>{r.lot_code ?? "—"}{r.saldo_inicial && r.detalle ? <small className="muted" style={{ display: "block", maxWidth: 360 }}>{String(r.detalle)}</small> : null}</td>
                               <td>{r.rice_type}</td>
                               <td className="num">{cantidad(Number(r.quintals))}</td>
                               <td><input value={arianosUbic[r.id] ?? (r.ubicacion_arianos ?? "")} placeholder="Bodega / sitio" style={inp} onChange={(e) => setArianosUbic((m) => ({ ...m, [r.id]: e.target.value }))} /></td>

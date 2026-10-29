@@ -2,7 +2,17 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 🌾 Cáscara del Proceso guardado + Fomento «Cobrar hasta» (2026-10-29)
+## Último cambio: 📦 Lotes guardados con la cáscara del saldo inicial (2026-10-29)
+
+- Migración 20261126: lots.apartado_arianos / apartado_at / ubicacion_arianos. /reports/arianos agrega los lotes
+  SI-… (saldo_inicial, WEIGHED, sin proceso) con `saldo_inicial: true` y `detalle` (notas); apartar/ubicación también
+  actualizan lots. /lots/dry-in-storage excluye el saldo inicial apartado. Simulacro `lotes_guardados_saldo`.
+- Datos: STALYN, cáscara 0.11 de saldo inicial al 14/10: SI-141026-001 (127.57), -002 (90.30), -003 (124.59) = los 3
+  lotes de septiembre por pilar del Excel. Categoría de ingreso APORTE_SOCIO «Aporte del socio (de su bolsillo)»
+  (AMBOS): dinero que un socio pone en su propia caja; no es venta ni deuda.
+- Modal del fomento: «Cobrar hasta» en su propia fila a lo ancho (antes apretado en la primera columna).
+
+## Cambio anterior: 🌾 Cáscara del Proceso guardado + Fomento «Cobrar hasta» (2026-10-29)
 
 - Un «Proceso guardado» saca de bodega la cáscara de sus túneles (principal + report.juntos): movimientos PROCESS_INPUT
   reference_type 'milling_draft_input' (reference_id = túnel), objetivo = −existencia del lote sin ellos

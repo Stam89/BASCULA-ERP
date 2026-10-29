@@ -81,6 +81,18 @@ reportsRouter.get("/arianos", asyncRoute(async (req, res) => {
       ORDER BY d.dry_end_at DESC NULLS LAST`,
     [acc]
   );
+  // 📦 Cáscara seca del SALDO INICIAL (lotes SI-…, sin secado): también se guarda con su ubicación.
+  const saldos = await pool.query(
+    `SELECT l.id, l.lot_code, l.rice_type, l.notes AS detalle,
+            COALESCE((SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.lot_id = l.id AND m.reference_type = 'saldo_inicial'), 0)::float AS quintals,
+            l.created_at AS dry_end_at, l.apartado_arianos, l.apartado_at, l.ubicacion_arianos, true AS saldo_inicial
+       FROM lots l
+      WHERE l.saldo_inicial AND l.accionista_id = $1 AND l.status = 'WEIGHED'
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.lot_id = l.id AND b.status <> 'CANCELLED')
+      ORDER BY l.lot_code`,
+    [acc]
+  );
+  result.rows.push(...saldos.rows.filter((r) => Number(r.quintals) > 0));
   const pendientes = result.rows.filter((r) => !r.apartado_arianos);
   const apartados = result.rows.filter((r) => r.apartado_arianos);
   res.json({ pendientes, apartados });
@@ -108,7 +120,17 @@ reportsRouter.post("/arianos/apartar", asyncRoute(async (req, res) => {
       RETURNING d.id`,
     [body.ids, body.apartar, acc, body.ubicacion ?? null]
   );
-  res.json({ ok: true, updated: result.rowCount ?? 0, apartar: body.apartar });
+  const lotes = await pool.query(
+    `UPDATE lots l
+        SET apartado_arianos = $2,
+            apartado_at = CASE WHEN $2 THEN now() ELSE NULL END,
+            ubicacion_arianos = CASE WHEN $2 THEN $4 ELSE NULL END
+      WHERE l.id = ANY($1::uuid[]) AND l.saldo_inicial AND l.accionista_id = $3 AND l.status = 'WEIGHED'
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.lot_id = l.id AND b.status <> 'CANCELLED')
+      RETURNING l.id`,
+    [body.ids, body.apartar, acc, body.ubicacion ?? null]
+  );
+  res.json({ ok: true, updated: (result.rowCount ?? 0) + (lotes.rowCount ?? 0), apartar: body.apartar });
 }));
 
 // Actualizar solo la ubicacion de un lote ya guardado (por si lo mueven de
@@ -131,7 +153,11 @@ reportsRouter.post("/arianos/ubicacion", asyncRoute(async (req, res) => {
       RETURNING d.id`,
     [body.id, body.ubicacion ?? null, acc]
   );
-  res.json({ ok: true, updated: result.rowCount ?? 0 });
+  const lote = await pool.query(
+    "UPDATE lots SET ubicacion_arianos = $2 WHERE id = $1 AND saldo_inicial AND accionista_id = $3 AND apartado_arianos = true RETURNING id",
+    [body.id, body.ubicacion ?? null, acc]
+  );
+  res.json({ ok: true, updated: (result.rowCount ?? 0) + (lote.rowCount ?? 0) });
 }));
 
 // ── Resumen consolidado del período ────────────────────────────────────────
