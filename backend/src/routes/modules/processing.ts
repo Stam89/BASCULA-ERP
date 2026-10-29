@@ -16,7 +16,7 @@ import { createProductionWorkerPayments } from "./labor.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
-import { sincronizarInventarioBorrador } from "../../services/borrador-pilado-inventario.js";
+import { REF_BORRADOR_CASCARA, sincronizarCascaraBorrador, sincronizarInventarioBorrador, tunelesDelBorrador } from "../../services/borrador-pilado-inventario.js";
 import { fechaPiladoValida, fecharProcesoEn } from "../../services/fecha-pilado.js";
 
 export const processingRouter = Router();
@@ -48,7 +48,10 @@ async function retirarInventarioDeBorradores(client: PoolClient, processingBatch
     [processingBatchId]
   );
   for (const x of r.rows) ids.add(String(x.drying_report_id));
-  for (const id of ids) await sincronizarInventarioBorrador(client, id, null, createdBy);
+  for (const id of ids) {
+    await sincronizarInventarioBorrador(client, id, null, createdBy);
+    await sincronizarCascaraBorrador(client, id, createdBy);
+  }
 }
 
 // Procesos de pilado guardados (en curso) del accionista activo. Se sigue
@@ -269,6 +272,7 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   if (cerrado.rowCount) throw new ApiError(409, "Este túnel ya se piló y se cerró: no se puede guardar otra vez su proceso.");
 
   const result = await inTransaction(async (client) => {
+    const antes = await tunelesDelBorrador(client, dryingId);
     const r = await client.query(
       `INSERT INTO milling_drafts (drying_report_id, accionista_id, report, pilado_entries, saved_by)
        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
@@ -282,6 +286,8 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
     );
     // Lo ya pilado y guardado cuenta en inventario desde ahora.
     await sincronizarInventarioBorrador(client, dryingId, { entradas: body.pilado_entries, reporte: body.report, warehouseId: body.warehouse_id }, body.saved_by);
+    // 🌾 La cáscara de sus secadoras (la principal y las juntadas) ya entró a la piladora: sale de bodega.
+    for (const id of new Set([...antes, ...(await tunelesDelBorrador(client, dryingId))])) await sincronizarCascaraBorrador(client, id, body.saved_by);
     return r.rows[0];
   });
   res.json(result);
@@ -289,9 +295,11 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
 
 processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
+    const tuneles = await tunelesDelBorrador(client, String(req.params.dryingId));
     await client.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
-    // Descartado: lo que había puesto en inventario se retira.
+    // Descartado: lo que había puesto en inventario se retira y la cáscara vuelve a bodega.
     await sincronizarInventarioBorrador(client, String(req.params.dryingId), null);
+    for (const id of tuneles) await sincronizarCascaraBorrador(client, id);
   });
   res.status(204).end();
 }));
@@ -1119,8 +1127,9 @@ async function assertStockNoNegativo(
   const r = await client.query(
     `SELECT COALESCE(SUM(quantity), 0)::numeric AS qq
      FROM inventory_movements
-     WHERE product_id = $1 AND warehouse_id = $2 AND lot_id = $3`,
-    [productId, warehouseId, lotId]
+     WHERE product_id = $1 AND warehouse_id = $2 AND lot_id = $3
+       AND reference_type IS DISTINCT FROM $4`,
+    [productId, warehouseId, lotId, REF_BORRADOR_CASCARA]
   );
   const disponible = Number(r.rows[0]?.qq ?? 0);
   // Tolerancia de 1 g (0.001 QQ) para no bloquear por redondeos.
@@ -1434,6 +1443,10 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         );
       }
       await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [lotId]);
+    }
+    // 🌾 La cáscara que el «Proceso guardado» había apartado ya la consumió el proceso: lo apartado vuelve a 0.
+    if (body.drying_report_id) {
+      for (const id of new Set([body.drying_report_id, ...body.drying_report_ids_extra])) await sincronizarCascaraBorrador(client, id, body.created_by);
     }
 
     return batch.rows[0];

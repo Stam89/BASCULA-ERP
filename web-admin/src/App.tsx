@@ -1677,8 +1677,8 @@ type FomentoEntrega = {
   created_at: string;
   es_saldo_anterior?: boolean;
   meses_interes_fijo?: number | null;
-  /** 📅 Desde qué fecha se cobra el gasto adm. «por días» (null = desde la fecha de la entrega). */
-  fecha_interes?: string | null;
+  /** 📅 Hasta qué fecha se cobra el gasto adm. «por días» (null = hasta hoy / hasta la cuenta). */
+  interes_hasta?: string | null;
   dias_corte?: number | null;
 };
 
@@ -9385,13 +9385,13 @@ export function App() {
       setFomentoInteresFijoBusy(false);
     }
   }
-  // 📅 Desde qué fecha se cobra el gasto administrativo «por días» de UNA entrega (null = su fecha de entrega).
+  // 📅 Hasta qué fecha se cobra el gasto administrativo «por días» de UNA entrega (null = hasta hoy / hasta la cuenta).
   async function ajustarFechaInteresEntrega(entrega: FomentoEntrega, fecha: string | null) {
     if (!fomentoDetalle) return;
     setFomentoInteresFijoBusy(true);
     try {
-      await apiPatch(`/fomentos/${fomentoDetalle.id}/entregas/${entrega.id}/fecha-interes`, { fecha });
-      addToast(fecha ? `📅 Entrega de ${money(Number(entrega.valor))}: se cobra desde el ${fecha.split("-").reverse().join("/")}` : `Entrega de ${money(Number(entrega.valor))}: se cobra desde su fecha de entrega`, "success");
+      await apiPatch(`/fomentos/${fomentoDetalle.id}/entregas/${entrega.id}/interes-hasta`, { fecha });
+      addToast(fecha ? `📅 Entrega de ${money(Number(entrega.valor))}: se cobra hasta el ${fecha.split("-").reverse().join("/")}` : `Entrega de ${money(Number(entrega.valor))}: se cobra hasta hoy (sigue subiendo)`, "success");
       await loadFomentoDetalle(fomentoDetalle.id);
       await refreshFomentos();
     } catch (err) {
@@ -22890,7 +22890,7 @@ Motivo (obligatorio):`, ""));
                       <button type="button" className="interesFijoModal__x" disabled={fomentoInteresFijoBusy} onClick={() => setFomentoInteresFijoModalOpen(false)} aria-label="Cerrar">✕</button>
                     </div>
                     <p className="interesFijoModal__nota">
-                      Elige en cada entrega: <b>por días</b> (sube cada día hasta que se haga la cuenta) o <b>meses fijos</b> (cobra solo esos meses y no sube más). En «por días» puedes cambiar <b>desde qué fecha se cobra</b>.
+                      Elige en cada entrega: <b>por días</b> (sube cada día hasta que se haga la cuenta) o <b>meses fijos</b> (cobra solo esos meses y no sube más). En «por días» puedes poner <b>hasta qué fecha se cobra</b> (vacío = sigue subiendo hasta hoy).
                     </p>
                     {cerrado && <p className="cfgAviso">A este fomento ya se le hizo la cuenta: su gasto administrativo quedó cerrado.</p>}
                     <div className="interesFijoModal__lista">
@@ -22905,19 +22905,20 @@ Motivo (obligatorio):`, ""));
                               <small>{e.fecha ? e.fecha.slice(0, 10).split("-").reverse().join("/") : "—"} · {dias} días{e.concepto ? ` · ${e.concepto}` : ""}</small>
                               {meses == null && (
                                 <label className="interesFijoModal__desde">
-                                  <span>Cobrar desde</span>
+                                  <span>Cobrar hasta</span>
                                   <input type="date" disabled={fomentoInteresFijoBusy || cerrado}
-                                    key={`${e.id}-${e.fecha_interes ?? ""}`}
-                                    defaultValue={(e.fecha_interes ?? e.fecha ?? "").slice(0, 10)}
+                                    key={`${e.id}-${e.interes_hasta ?? ""}`}
+                                    min={(e.fecha ?? "").slice(0, 10) || undefined}
+                                    defaultValue={(e.interes_hasta ?? "").slice(0, 10)}
                                     onBlur={(ev) => {
                                       const v = ev.currentTarget.value;
-                                      const propia = (e.fecha ?? "").slice(0, 10);
-                                      if (v && v !== (e.fecha_interes ?? propia).slice(0, 10)) ajustarFechaInteresEntrega(e, v === propia ? null : v).catch(() => undefined);
+                                      const actualHasta = (e.interes_hasta ?? "").slice(0, 10);
+                                      if (v !== actualHasta) ajustarFechaInteresEntrega(e, v || null).catch(() => undefined);
                                     }} />
-                                  {e.fecha_interes && !cerrado && (
-                                    <button type="button" className="btnGhost" title="Volver a la fecha de la entrega" disabled={fomentoInteresFijoBusy}
+                                  {e.interes_hasta ? (
+                                    !cerrado && <button type="button" className="btnGhost" title="Quitar: cobrar hasta hoy" disabled={fomentoInteresFijoBusy}
                                       onClick={() => { ajustarFechaInteresEntrega(e, null).catch(() => undefined); }}>↺</button>
-                                  )}
+                                  ) : <small className="muted">vacío = hasta hoy</small>}
                                 </label>
                               )}
                             </span>

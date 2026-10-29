@@ -321,7 +321,7 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
   const fomentos = (await db.query(
     `SELECT a.name AS operacion,
             SUM(CASE WHEN fe.es_saldo_anterior THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
-                     ELSE fe.valor * f.renta / 30.0 * GREATEST(f.liquidado_at::date - COALESCE(fe.fecha_interes, fe.fecha), 0) END)::float AS interes
+                     ELSE fe.valor * f.renta / 30.0 * GREATEST(LEAST(f.liquidado_at::date, COALESCE(fe.interes_hasta, f.liquidado_at::date)) - fe.fecha, 0) END)::float AS interes
        FROM fomentos f
        JOIN fomento_entregas fe ON fe.fomento_id = f.id
        JOIN accionistas a ON a.id = f.accionista_id

@@ -2,7 +2,22 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📅 Fomento: «Cobrar desde» por entrega + Procesos guardados con pilar juntos (2026-10-29)
+## Último cambio: 🌾 Cáscara del Proceso guardado + Fomento «Cobrar hasta» (2026-10-29)
+
+- Un «Proceso guardado» saca de bodega la cáscara de sus túneles (principal + report.juntos): movimientos PROCESS_INPUT
+  reference_type 'milling_draft_input' (reference_id = túnel), objetivo = −existencia del lote sin ellos
+  (`sincronizarCascaraBorrador`, services/borrador-pilado-inventario.ts). Se sincroniza al guardar/descartar el borrador,
+  al crear el proceso (POST /processing-batches: el PROCESS_INPUT real la consume y lo apartado vuelve a 0) y al cerrar.
+  assertStockNoNegativo no cuenta lo apartado. Un borrador cuyo túnel ya tiene proceso cerrado no aparta nada.
+  Simulacro `cascara_borrador`.
+- Fomento: el dueño quería «HASTA qué fecha se cobra», no «desde». Migración 20261125 `fomento_entregas.interes_hasta`
+  (NULL = hasta hoy/la cuenta); días = LEAST(corte, COALESCE(interes_hasta, corte)) − fecha en los 9 cálculos.
+  PATCH /fomentos/:id/entregas/:entregaId/interes-hasta (no antes de la entrega). `fecha_interes` (20261124) quedó
+  sin uso. Modal: «Cobrar hasta» (vacío = hasta hoy) y ↺. Simulacro `fomento_fecha_interes`.
+- Dato: lote 00007-29-10-26 de FRANCISCO ALVARADO pasó de 0.11 a CORRIENTE (secado, lote, ticket, informe y su
+  movimiento de cáscara a CASCARA-CORRIENTE).
+
+## Cambio anterior: 📅 Fomento: «Cobrar desde» por entrega + Procesos guardados con pilar juntos (2026-10-29)
 
 - Migración 20261124: `fomento_entregas.fecha_interes` (NULL = desde la fecha de la entrega). Los 7 cálculos del gasto
   administrativo «por días» usan `COALESCE(fe.fecha_interes, fe.fecha)` (fomentos.ts listado/detalle/intereses/cartera,

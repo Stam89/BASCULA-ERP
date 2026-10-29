@@ -126,8 +126,9 @@ const SELECT_FOMENTO = `
       SUM(CASE WHEN fe.es_saldo_anterior
                THEN fe.valor * f2.renta * COALESCE(fe.meses_interes_fijo, 0)
                ELSE fe.valor * f2.renta / 30.0 * GREATEST(
-                    (CASE WHEN f2.status = 'CERRADO_LIQUIDACION' AND f2.liquidado_at IS NOT NULL
-                          THEN f2.liquidado_at::date ELSE CURRENT_DATE END) - COALESCE(fe.fecha_interes, fe.fecha), 0) END) AS gasto_adm
+                    LEAST((CASE WHEN f2.status = 'CERRADO_LIQUIDACION' AND f2.liquidado_at IS NOT NULL
+                          THEN f2.liquidado_at::date ELSE CURRENT_DATE END), COALESCE(fe.interes_hasta, (CASE WHEN f2.status = 'CERRADO_LIQUIDACION' AND f2.liquidado_at IS NOT NULL
+                          THEN f2.liquidado_at::date ELSE CURRENT_DATE END))) - fe.fecha, 0) END) AS gasto_adm
     FROM fomento_entregas fe
     JOIN fomentos f2 ON f2.id = fe.fomento_id
     GROUP BY fomento_id
@@ -213,7 +214,7 @@ fomentosRouter.get("/intereses", asyncRoute(async (req, res) => {
                 SUM(fe.valor) FILTER (WHERE fe.es_saldo_anterior) AS saldo_anterior,
                 SUM(CASE WHEN fe.es_saldo_anterior
                          THEN fe.valor * c.renta * COALESCE(fe.meses_interes_fijo, 0)
-                         ELSE fe.valor * c.renta / 30.0 * GREATEST(c.corte - COALESCE(fe.fecha_interes, fe.fecha), 0) END) AS interes
+                         ELSE fe.valor * c.renta / 30.0 * GREATEST(LEAST(c.corte, COALESCE(fe.interes_hasta, c.corte)) - fe.fecha, 0) END) AS interes
            FROM fomento_entregas fe WHERE fe.fomento_id = c.id
        ) e ON true
        LEFT JOIN LATERAL (
@@ -246,7 +247,7 @@ fomentosRouter.get("/intereses", asyncRoute(async (req, res) => {
        LEFT JOIN LATERAL (
          SELECT sum(fe.valor) AS capital,
                 sum(CASE WHEN fe.es_saldo_anterior THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
-                         ELSE fe.valor * f.renta / 30.0 * GREATEST(CURRENT_DATE - COALESCE(fe.fecha_interes, fe.fecha), 0) END) AS interes
+                         ELSE fe.valor * f.renta / 30.0 * GREATEST(LEAST(CURRENT_DATE, COALESCE(fe.interes_hasta, CURRENT_DATE)) - fe.fecha, 0) END) AS interes
            FROM fomento_entregas fe WHERE fe.fomento_id = f.id
        ) e ON true
        LEFT JOIN LATERAL (SELECT sum(fp.valor) AS pagado FROM fomento_pagos fp WHERE fp.fomento_id = f.id) p ON true
@@ -756,18 +757,21 @@ fomentosRouter.get("/:id", asyncRoute(async (req, res) => {
     pool.query(
       `SELECT e.*,
         GREATEST(
-          (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
-                THEN f.liquidado_at::date ELSE CURRENT_DATE END) - COALESCE(e.fecha_interes, e.fecha), 0) AS dias_corte,
+          LEAST((CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                THEN f.liquidado_at::date ELSE CURRENT_DATE END), COALESCE(e.interes_hasta, (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                THEN f.liquidado_at::date ELSE CURRENT_DATE END))) - e.fecha, 0) AS dias_corte,
         ROUND(CASE WHEN e.es_saldo_anterior
                    THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
                    ELSE e.valor * f.renta / 30.0 * GREATEST(
-                        (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
-                              THEN f.liquidado_at::date ELSE CURRENT_DATE END) - COALESCE(e.fecha_interes, e.fecha), 0) END, 2) AS interes,
+                        LEAST((CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END), COALESCE(e.interes_hasta, (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END))) - e.fecha, 0) END, 2) AS interes,
         ROUND(e.valor + CASE WHEN e.es_saldo_anterior
                    THEN e.valor * f.renta * COALESCE(e.meses_interes_fijo, 0)
                    ELSE e.valor * f.renta / 30.0 * GREATEST(
-                        (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
-                              THEN f.liquidado_at::date ELSE CURRENT_DATE END) - COALESCE(e.fecha_interes, e.fecha), 0) END, 2) AS suman
+                        LEAST((CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END), COALESCE(e.interes_hasta, (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
+                              THEN f.liquidado_at::date ELSE CURRENT_DATE END))) - e.fecha, 0) END, 2) AS suman
        FROM fomento_entregas e
        JOIN fomentos f ON f.id = e.fomento_id
        WHERE e.fomento_id = $1
@@ -939,9 +943,9 @@ fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", requirePermiso("ED
   res.json(full.rows[0]);
 }));
 
-// 📅 Fecha desde la que se cobra el gasto administrativo «por días» de UNA entrega (null = desde la fecha de la
-// entrega). Pedido del dueño 2026-10-29: la entrega es del 29/07 pero se le quiere cobrar desde el 28/08.
-fomentosRouter.patch("/:id/entregas/:entregaId/fecha-interes", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+// 📅 Fecha HASTA la que se cobra el gasto administrativo «por días» de UNA entrega (null = hasta hoy / hasta la cuenta).
+// Pedido del dueño 2026-10-29: la entrega es del 29/07 y se le cobra hasta el 28/08 (después ya no sube).
+fomentosRouter.patch("/:id/entregas/:entregaId/interes-hasta", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({ fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }).parse(req.body);
   const fomentoId = String(req.params.id);
@@ -949,11 +953,15 @@ fomentosRouter.patch("/:id/entregas/:entregaId/fecha-interes", requirePermiso("E
     const fom = await client.query("SELECT liquidado_at FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [fomentoId, accionistaId]);
     if (!fom.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
     if (fom.rows[0].liquidado_at) throw new ApiError(409, "A este fomento ya se le hizo la cuenta: su gasto administrativo quedó cerrado.");
-    const r = await client.query(
-      "UPDATE fomento_entregas SET fecha_interes = $3::date WHERE id = $2 AND fomento_id = $1 AND NOT es_saldo_anterior",
-      [fomentoId, req.params.entregaId, body.fecha]
-    );
-    if (!r.rowCount) throw new ApiError(404, "Entrega no encontrada (o cobra meses fijos: la fecha solo aplica «por días»).");
+    const e = (await client.query(
+      "SELECT fecha::text AS fecha, es_saldo_anterior FROM fomento_entregas WHERE id = $2 AND fomento_id = $1 FOR UPDATE",
+      [fomentoId, req.params.entregaId]
+    )).rows[0];
+    if (!e) throw new ApiError(404, "Entrega no encontrada en este fomento");
+    if (e.es_saldo_anterior) throw new ApiError(409, "Esta entrega cobra meses fijos: la fecha solo aplica «por días».");
+    if (body.fecha && body.fecha < String(e.fecha).slice(0, 10)) throw new ApiError(400, "La fecha hasta la que se cobra no puede ser antes de la entrega.");
+    await client.query("UPDATE fomento_entregas SET interes_hasta = $3::date, fecha_interes = NULL WHERE id = $2 AND fomento_id = $1",
+      [fomentoId, req.params.entregaId, body.fecha]);
   });
   const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
   res.json(full.rows[0]);
