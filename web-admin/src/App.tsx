@@ -4358,6 +4358,29 @@ export function App() {
     () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cáscara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
     [stock]
   );
+  // 🧮 Total para vender (pedido del dueño 2026-10-29): la vendedora ve cuántos QQ hay de cada producto SIN importar
+  // dónde esté: la piladora más lo que quedó «Allá» con el proveedor de selección / envejecimiento (ya se vende).
+  const totalParaVender = useMemo(() => {
+    const tipoDe = new Map(visibleInventoryProducts.map((p) => [p.id, p.product_type]));
+    const orden: Record<string, number> = { FINISHED_GOOD: 0, PACKAGED_GOOD: 1, BYPRODUCT: 2 };
+    const m = new Map<string, { nombre: string; tipo: string; piladora: number; alla: Array<{ donde: string; qq: number }> }>();
+    for (const r of stock) {
+      if (r.ownership !== "OWNED") continue;
+      const tipo = String(r.product_type ?? tipoDe.get(r.product_id ?? "") ?? "");
+      if (!(tipo in orden)) continue;
+      const qq = Number(r.quantity) || 0;
+      if (Math.abs(qq) < 0.0005) continue;
+      const k = r.product_id ?? r.product_name;
+      const x = m.get(k) ?? { nombre: r.product_name, tipo, piladora: 0, alla: [] };
+      if (r.warehouse_type === "EXTERNO") x.alla.push({ donde: r.warehouse_name.replace(/^Allá:\s*/i, ""), qq });
+      else x.piladora += qq;
+      m.set(k, x);
+    }
+    return [...m.values()]
+      .map((x) => ({ ...x, total: x.piladora + x.alla.reduce((s, a) => s + a.qq, 0) }))
+      .filter((x) => Math.abs(x.total) > 0.0005)
+      .sort((a, b) => (orden[a.tipo] - orden[b.tipo]) || b.total - a.total);
+  }, [stock, visibleInventoryProducts]);
   const criticalSupplies = useMemo(
     () => insumos.filter((item) => item.is_critical),
     [insumos]
@@ -16971,6 +16994,27 @@ Motivo (obligatorio):`, ""));
                 <button type="button" className="primary" onClick={() => setCuadreOpen(true)}>⚖️ Ajuste / Cuadre Manual</button>
               </div>
             </div>
+
+            {/* 🧮 Total para vender: piladora + «Allá», por producto. */}
+            {totalParaVender.length > 0 && (
+              <section className="invTotalVender" style={{ gridColumn: "1 / -1" }}>
+                <div className="invTotalVender__cab">
+                  <h3>🧮 Total para vender</h3>
+                  <small className="muted">QQ de cada producto sin importar dónde esté: piladora + lo que está allá con el proveedor</small>
+                </div>
+                <div className="invTotalVender__grid">
+                  {totalParaVender.map((x) => (
+                    <div key={x.nombre} className={`invTotalVender__item${x.total < 0 ? " is-neg" : ""}`}>
+                      <span className="invTotalVender__nombre">{x.nombre}</span>
+                      <strong>{cantidad(x.total)} QQ</strong>
+                      {x.alla.length > 0 && (
+                        <small>🏭 Piladora {cantidad(x.piladora)} · {x.alla.map((a) => `📍 ${a.donde} ${cantidad(a.qq)}`).join(" · ")}</small>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {/* Panel de existencias: resumen de colores por categoría + detalle con barras y estados. */}
             <div style={{ gridColumn: "1 / -1" }}>

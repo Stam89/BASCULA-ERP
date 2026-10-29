@@ -5336,6 +5336,16 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 
 /* Pestañas de Inventario y botones de la cabecera (compactos en el celular). */
 .invAcciones { display: flex; gap: 8px; flex-wrap: wrap; }
+/* 🧮 Total para vender (piladora + allá) */
+.invTotalVender { border: 1px solid var(--c-border, #e5e7eb); border-radius: 14px; padding: 12px 14px; background: var(--c-surface, #fff); }
+.invTotalVender__cab { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.invTotalVender__cab h3 { margin: 0; font-size: 16px; }
+.invTotalVender__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.invTotalVender__item { display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; background: #f0fdf4; border: 1px solid #bbf7d0; }
+.invTotalVender__item.is-neg { background: #fef2f2; border-color: #fecaca; }
+.invTotalVender__item strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+.invTotalVender__nombre { font-size: 12.5px; font-weight: 600; }
+.invTotalVender__item small { font-size: 11px; opacity: 0.8; }
 @media (max-width: 640px) {
   /* Las pestañas se reparten el ancho: se ven todas sin deslizar. */
   .invNav { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); align-self: stretch; overflow: visible; gap: 6px; }
