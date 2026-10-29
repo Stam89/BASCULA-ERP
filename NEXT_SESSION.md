@@ -2,7 +2,16 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: ➕ Sumar un peso que faltó a una secadora ya llena (2026-10-29)
+## Último cambio: 🔀 Cambiar de secadora antes de encender el motor (2026-10-29)
+
+- Tarjeta roja de un túnel ocupado sin hora de inicio: «→ Pasar a Secadora X» / «⇄ Intercambiar con Secadora X».
+  POST /process-flow/drying/:id/cambiar-secadora {tunnel_number}: mueve TODO lo del túnel (y si el destino está lleno,
+  intercambia). 409 si algún secado involucrado tiene hora de inicio/final, combustible o el llenado pagado, o si el motor
+  de destino ya arrancó. Cambia tunnel_number, dryer_name, motor_number, lot_process_reports (stage TUNEL_n, título,
+  report_data) y nota del lote; `moverCuadrillaLlenadoDeTunel` (cuadrilla.ts) pasa la labor a «RECEPCION A TUNEL n» y
+  actualiza el pago pendiente. tunnels-status devuelve id y dry_start_at. Simulacro `cambiar_secadora` (liberarTuneles:false).
+
+## Cambio anterior: ➕ Sumar un peso que faltó a una secadora ya llena (2026-10-29)
 
 - Secadoras: la tarjeta de un túnel ocupado (sin hora final) ofrece «➕ Agregar más arroz a esta secadora» (antes «🤝 Mi
   arroz se echó…»). Guarda con `compartir_secadora: true`. En `createDryingBatch`, cada grupo cuyo dueño+tipo ya tiene un

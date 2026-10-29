@@ -1104,8 +1104,10 @@ type MotorActiveReport = {
 
 /** Túnel ocupado por OTRO accionista (secado en curso): se bloquea en el formulario. */
 type TunnelStatusRow = {
+  id?: string;
   tunnel_number: number;
   accionista_name: string;
+  dry_start_at?: string | null;
   total_quintals?: number;
   es_servicio?: boolean;
   dry_end_at?: string | null;
@@ -2611,6 +2613,9 @@ export function App() {
   // 🤝 Secadora compartida (2026-10-28): túneles en uso que YA tienen hora final (no se les puede sumar arroz) y las
   // secadoras donde el usuario indicó que su arroz se echó junto con el que ya está secando.
   const [tunelesConHoraFinal, setTunelesConHoraFinal] = useState<Record<number, boolean>>({});
+  // 🔀 Secado de cada túnel ocupado y si todavía se puede cambiar de secadora (motor sin hora de inicio).
+  const [secadoDelTunel, setSecadoDelTunel] = useState<Record<number, { id: string; sinInicio: boolean }>>({});
+  const [cambiandoSecadora, setCambiandoSecadora] = useState(false);
   const [secadoraCompartida, setSecadoraCompartida] = useState<Record<string, boolean>>({});
   // Combustible DEL MOTOR: bombona y diesel por medidor (inicio - fin), y
   // cilindros por unidad. Se registra una vez y se reparte.
@@ -11141,7 +11146,12 @@ export function App() {
     // una secadora compartida tiene uno por dueño/servicio.
     const occupied: Record<number, string> = {};
     const conHoraFinal: Record<number, boolean> = {};
+    const secados: Record<number, { id: string; sinInicio: boolean }> = {};
     for (const r of tunnelRows) {
+      if (r.id) {
+        const cur = secados[r.tunnel_number];
+        secados[r.tunnel_number] = { id: cur?.id ?? r.id, sinInicio: (cur?.sinInicio ?? true) && !r.dry_start_at && !r.dry_end_at };
+      }
       const qq = Number(r.total_quintals ?? 0);
       const parte = `${r.accionista_name}${r.es_servicio ? " · servicio" : ""}${qq > 0 ? ` (${qq.enReal()} QQ)` : ""}`;
       occupied[r.tunnel_number] = occupied[r.tunnel_number] ? `${occupied[r.tunnel_number]} + ${parte}` : parte;
@@ -11149,6 +11159,29 @@ export function App() {
     }
     setOccupiedTunnels(occupied);
     setTunelesConHoraFinal(conHoraFinal);
+    setSecadoDelTunel(secados);
+  }
+
+  // 🔀 Se anotó en la secadora equivocada: se pasa todo a la otra (si está llena, se intercambian). Solo sin hora de inicio.
+  async function cambiarDeSecadora(desde: number, hacia: number) {
+    const sec = secadoDelTunel[desde];
+    if (!sec || cambiandoSecadora) return;
+    const ocupada = occupiedTunnels[hacia];
+    const ok = await confirmar(ocupada
+      ? `🔀 Intercambiar secadoras\n\nLo de la Secadora ${desde} (${occupiedTunnels[desde]}) pasa a la Secadora ${hacia}, y lo de la Secadora ${hacia} (${ocupada}) pasa a la Secadora ${desde}.\n\nLa cuadrilla del llenado se ajusta a la tarifa de cada secadora. ¿Continuar?`
+      : `🔀 Cambiar de secadora\n\nLo de la Secadora ${desde} (${occupiedTunnels[desde]}) pasa a la Secadora ${hacia}, que está libre.\n\nLa cuadrilla del llenado se ajusta a la tarifa de esa secadora. ¿Continuar?`);
+    if (!ok) return;
+    setCambiandoSecadora(true);
+    try {
+      const r = await apiPost<{ intercambio: boolean }>(`/process-flow/drying/${sec.id}/cambiar-secadora`, { tunnel_number: hacia });
+      addToast(r.intercambio ? `🔀 Listo: se intercambiaron la Secadora ${desde} y la Secadora ${hacia}` : `🔀 Listo: pasó de la Secadora ${desde} a la Secadora ${hacia}`, "success");
+      await refresh();
+      await loadMotorActive();
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo cambiar de secadora", "error");
+    } finally {
+      setCambiandoSecadora(false);
+    }
   }
 
   // Guarda TODO el informe del motor junto: crea el lote de cada secadora que
@@ -15740,6 +15773,19 @@ Motivo (obligatorio):`, ""));
                                 ➕ Agregar más arroz a esta secadora
                               </button>
                               <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Un peso que faltó del mismo dueño (antes de encender el motor) o el arroz de otro dueño / un servicio.</p>
+                              {secadoDelTunel[t]?.sinInicio && (
+                                <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #fca5a5" }}>
+                                  <p className="muted" style={{ fontSize: 12.5, margin: "0 0 6px" }}>🔀 ¿Se anotó en la secadora equivocada? (el motor aún no arranca)</p>
+                                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                                    {[1, 2, 3].filter((x) => x !== t).map((x) => (
+                                      <button key={x} type="button" className="btnGhost" disabled={cambiandoSecadora || (Boolean(occupiedTunnels[x]) && !secadoDelTunel[x]?.sinInicio)}
+                                        onClick={() => { cambiarDeSecadora(t, x).catch(() => undefined); }}>
+                                        {occupiedTunnels[x] ? `⇄ Intercambiar con Secadora ${x}` : `→ Pasar a Secadora ${x}`}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </>
                           )}
                         </div>

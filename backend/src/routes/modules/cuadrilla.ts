@@ -292,6 +292,36 @@ export async function upsertCuadrillaSecadoraEntry(
   }
 }
 
+// 🔀 El secado se cambió de secadora (antes de encender el motor): la labor del llenado es por túnel
+// («RECEPCION A TUNEL n»), así que cada asignación pasa a la labor del túnel nuevo y su pago pendiente se actualiza
+// (tarifa, túnel y nota). En sacos la labor no depende del túnel. Lo ya pagado no se toca (se valida antes).
+export async function moverCuadrillaLlenadoDeTunel(client: PoolClient, dryingReportId: string, tunel: number): Promise<void> {
+  const rep = (await client.query(
+    `SELECT d.recepcion_empaque, d.recepcion_sacos::float AS recepcion_sacos, d.total_quintals::float AS qq,
+            COALESCE(d.filled_at, d.dry_start_at::date, d.created_at::date) AS work_date, d.cuadrilla_pagada_fuera, l.accionista_id
+       FROM drying_tunnel_reports d LEFT JOIN lots l ON l.id = d.lot_id WHERE d.id = $1`,
+    [dryingReportId]
+  )).rows[0];
+  if (!rep || rep.cuadrilla_pagada_fuera) return;
+  const socioId = await resolveCuadrillaSocioId(client, rep.accionista_id);
+  const labor = await resolveTunnelLabor(client, {
+    tunnel_number: tunel, momento: "LLENADO", empaque: rep.recepcion_empaque, sacos: rep.recepcion_sacos, quintals: rep.qq, socio_id: socioId
+  });
+  const asig = (await client.query(
+    "SELECT id, worker_name, activity_id, quintals::float AS quintals FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND momento = 'LLENADO'",
+    [dryingReportId]
+  )).rows;
+  const workDate = rep.work_date ? new Date(rep.work_date).toISOString().slice(0, 10) : null;
+  for (const a of asig) {
+    const activityId = "missing" in labor ? String(a.activity_id) : labor.activity_id;
+    await client.query("UPDATE drying_tunnel_cuadrilla SET activity_id = $2 WHERE id = $1", [a.id, activityId]);
+    await upsertCuadrillaSecadoraEntry(client, {
+      referencia_id: dryingReportId, tunnel_number: tunel, momento: "LLENADO", activity_id: activityId,
+      worker_name: a.worker_name, quantity: Number(a.quintals), work_date: workDate, accionista_id: rep.accionista_id
+    });
+  }
+}
+
 // Cuadrilla a la que se asigna un pago autogenerado cuando el operador no eligió
 // una: respeta la ya asignada en el túnel; si no hay, usa el grupo de cuadrilla
 // por defecto (el más antiguo activo); si tampoco, el literal "CUADRILLA".

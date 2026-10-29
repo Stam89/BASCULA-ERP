@@ -16,7 +16,7 @@ import {
   linkLotProcessReports,
   type ProcessStage
 } from "../../utils/process-reports.js";
-import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEffectiveCuadrillaActivityByName } from "./cuadrilla.js";
+import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEffectiveCuadrillaActivityByName, moverCuadrillaLlenadoDeTunel } from "./cuadrilla.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
@@ -418,7 +418,7 @@ processFlowRouter.get("/drying/tunnels-status", asyncRoute(async (_req, res) => 
   const result = await pool.query(
     `SELECT d.tunnel_number,
             COALESCE(a.name, 'servicio de pilado/maquila') AS accionista_name,
-            l.accionista_id, d.total_quintals::float AS total_quintals, d.dry_end_at,
+            d.id, l.accionista_id, d.total_quintals::float AS total_quintals, d.dry_start_at, d.dry_end_at,
             (COALESCE(l.operation_type, CASE WHEN l.is_maquila THEN 'SECADO_PILADO' ELSE 'COMPRA' END) <> 'COMPRA') AS es_servicio
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
@@ -1784,6 +1784,75 @@ async function secadoMismoDuenoEnTunel(
   const fila = r.rows.find((x) => clave(x.accionista_id, x.operation_type, x.is_maquila) === buscada);
   return fila ? String(fila.id) : null;
 }
+
+// 🔀 CAMBIAR DE SECADORA (pedido del dueño 2026-10-29: «lo de la secadora 1 va en la 2 y lo de la 2 en la 1»).
+// Se mueve TODO lo que hay en el túnel de ese secado (es el túnel físico) al túnel elegido; si el elegido también está
+// lleno, se INTERCAMBIAN. Solo mientras el motor NO arranca: ningún secado con hora de inicio, hora final, combustible
+// o el llenado de la cuadrilla ya pagado. Cambia túnel, nombre de secadora, motor, el informe del túnel, la nota del
+// lote y la labor/pago del llenado de la cuadrilla (la tarifa es por túnel).
+processFlowRouter.post("/drying/:dryingId/cambiar-secadora", asyncRoute(async (req, res) => {
+  const body = z.object({ tunnel_number: z.coerce.number().int().min(1).max(3) }).parse(req.body);
+  const dryingId = String(req.params.dryingId);
+  const result = await inTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71_001, 0]);
+    const rep = (await client.query("SELECT id, tunnel_number, status, dry_method FROM drying_tunnel_reports WHERE id = $1", [dryingId])).rows[0];
+    if (!rep) throw new ApiError(404, "Secado no encontrado");
+    if (rep.status !== "IN_PROGRESS" || String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL" || !rep.tunnel_number) {
+      throw new ApiError(409, "Solo se cambia de secadora un secado de túnel que sigue en proceso.");
+    }
+    const origen = Number(rep.tunnel_number), destino = body.tunnel_number;
+    if (origen === destino) throw new ApiError(400, `Ya está en la secadora ${destino}.`);
+    const involucrados = (await client.query(
+      `SELECT d.id, d.tunnel_number, d.dry_start_at, d.dry_end_at, d.motor_fuel_id, d.process_report_id, d.lot_id,
+              EXISTS (SELECT 1 FROM cuadrilla_entries e WHERE e.origen = 'SECADORA' AND e.referencia_id = d.id
+                        AND e.momento = 'LLENADO' AND e.paid_at IS NOT NULL) AS llenado_pagado
+         FROM drying_tunnel_reports d
+        WHERE d.status = 'IN_PROGRESS' AND d.tunnel_number = ANY($1::int[]) AND COALESCE(d.dry_method, 'TUNEL') <> 'TENDAL'
+        FOR UPDATE`,
+      [[origen, destino]]
+    )).rows;
+    for (const d of involucrados) {
+      const t = d.tunnel_number;
+      if (d.dry_start_at) throw new ApiError(409, `La secadora ${t} ya tiene hora de inicio (el motor arrancó): ya no se cambia de secadora. Si de verdad no ha arrancado, borra primero la hora de inicio.`);
+      if (d.dry_end_at || d.motor_fuel_id) throw new ApiError(409, `La secadora ${t} ya terminó de secar: no se cambia.`);
+      if (d.llenado_pagado) throw new ApiError(409, `La cuadrilla del llenado de la secadora ${t} ya se pagó: no se cambia de secadora.`);
+    }
+    // El motor de destino no puede estar ya encendido con otra secadora.
+    const motorDestino = motorDeSecadora(`Secadora ${destino}`);
+    const encendido = await client.query(
+      `SELECT 1 FROM drying_tunnel_reports WHERE motor_number = $1 AND motor_fuel_id IS NULL AND dry_start_at IS NOT NULL
+          AND status = 'IN_PROGRESS' AND NOT (id = ANY($2::uuid[])) LIMIT 1`,
+      [motorDestino, involucrados.map((d) => d.id)]
+    );
+    if (encendido.rowCount) throw new ApiError(409, `El motor de la secadora ${destino} ya está encendido: no se le puede pasar este arroz.`);
+
+    const movidos: Array<{ id: string; de: number; a: number }> = [];
+    for (const d of involucrados) {
+      const nuevo = Number(d.tunnel_number) === origen ? destino : origen;
+      const secadora = `Secadora ${nuevo}`;
+      await client.query(
+        "UPDATE drying_tunnel_reports SET tunnel_number = $2, dryer_name = $3, motor_number = $4 WHERE id = $1",
+        [d.id, nuevo, secadora, motorDeSecadora(secadora)]
+      );
+      if (d.process_report_id) {
+        await client.query(
+          `UPDATE lot_process_reports SET stage = $2, report_title = $3,
+                  report_data = report_data || jsonb_build_object('tunnel_number', $4::int, 'dryer_name', $5::text)
+            WHERE id = $1`,
+          [d.process_report_id, `TUNEL_${nuevo}`, `Informe Tunel ${nuevo}`, nuevo, secadora]
+        );
+      }
+      await client.query(
+        "UPDATE lots SET notes = regexp_replace(COALESCE(notes, ''), 'túnel [0-9]+', $2) WHERE id = $1",
+        [d.lot_id, `túnel ${nuevo}`]
+      );
+      await moverCuadrillaLlenadoDeTunel(client, String(d.id), nuevo);
+      movidos.push({ id: String(d.id), de: Number(d.tunnel_number), a: nuevo });
+    }
+    return { movidos, intercambio: movidos.some((m) => m.de === destino) };
+  });
+  res.json(result);
+}));
 
 // ➕ SUMAR TICKETS a un secado ya registrado (pedido del dueño 2026-10-29: «faltó agregar un peso y el motor aún no
 // se enciende»). Solo mientras el motor NO arranca (sin hora de inicio) y sin combustible cerrado. Los tickets pasan
