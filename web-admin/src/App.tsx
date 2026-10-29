@@ -1279,6 +1279,9 @@ type MillingDraft = {
   total_quintals?: string | number;
   rice_type?: string;
   lot_code?: string;
+  /** 🔗 Pilar juntos: túneles y lotes de las otras secadoras del borrador (total_quintals ya los suma). */
+  tuneles_juntos?: number[];
+  lotes_juntos?: string[];
   /** Si true, ya existe un processing_batch abierto para este túnel. */
   has_open_batch?: boolean;
 };
@@ -4478,6 +4481,8 @@ export function App() {
       const m = l.is_maquila;
       return m === true || m === 1 || m === "t" || m === "true";
     });
+  // 🔗 PILAR JUNTOS: otros túneles secos del mismo socio cuyo arroz se mezcló antes de la piladora.
+  const [productionDryingExtras, setProductionDryingExtras] = useState<string[]>([]);
   const productionDryingReports = useMemo(
     () => dryingReports.filter(
       (report) =>
@@ -4488,21 +4493,20 @@ export function App() {
         // para no duplicar la producción. Excepción: el lote actualmente cargado
         // se conserva para que el formulario pueda mostrarlo al continuar un
         // proceso y finalizarlo. Al salir del formulario deja de ser visible.
-        (report.id === productionDryingId || (
+        (report.id === productionDryingId || productionDryingExtras.includes(report.id) || (
           !report.has_draft &&
-          !millingDrafts.some((d) => d.drying_report_id === report.id)
+          !millingDrafts.some((d) => d.drying_report_id === report.id ||
+            (Array.isArray(d.report?.juntos) && (d.report.juntos as unknown[]).includes(report.id)))
         )) &&
         // Fuera SOLO los lotes de 'Solo Servicio de Secado'.
         !esSoloSecado(report)
     ),
-    [dryingReports, millingDrafts, productionDryingId]
+    [dryingReports, millingDrafts, productionDryingId, productionDryingExtras]
   );
   const selectedProductionDrying = useMemo(
     () => dryingReports.find((report) => report.id === productionDryingId) ?? null,
     [dryingReports, productionDryingId]
   );
-  // 🔗 PILAR JUNTOS: otros túneles secos del mismo socio cuyo arroz se mezcló antes de la piladora.
-  const [productionDryingExtras, setProductionDryingExtras] = useState<string[]>([]);
   // Selector como el de Secadoras: lista con casillas → «➕ Agregar al lote» → secadoras utilizadas (con Quitar).
   const [prodPickerOpen, setProdPickerOpen] = useState(false);
   const [prodPick, setProdPick] = useState<string[]>([]);
@@ -17254,8 +17258,8 @@ Motivo (obligatorio):`, ""));
                   <tbody>
                     {millingDrafts.map((d) => (
                       <tr key={d.drying_report_id}>
-                        <td style={{ fontWeight: 600 }}>{d.lot_code ?? "—"}</td>
-                        <td>Túnel {d.tunnel_number}</td>
+                        <td style={{ fontWeight: 600 }}>{[d.lot_code ?? "—", ...(d.lotes_juntos ?? [])].join(" + ")}</td>
+                        <td>{(d.tuneles_juntos ?? []).length ? `Túneles ${[d.tunnel_number, ...(d.tuneles_juntos ?? [])].join(" + ")} 🔗` : `Túnel ${d.tunnel_number}`}</td>
                         <td>{d.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</td>
                         <td className="num">{Number(d.total_quintals ?? 0).enReal()}</td>
                         <td className="muted">{new Date(d.saved_at).toLocaleString("es-EC")}</td>

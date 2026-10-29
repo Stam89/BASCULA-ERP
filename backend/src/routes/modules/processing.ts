@@ -59,7 +59,11 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
     `SELECT d.drying_report_id, d.report, d.pilado_entries, d.saved_at,
-            t.tunnel_number, t.total_quintals, t.rice_type,
+            t.tunnel_number, t.rice_type,
+            -- 🔗 Pilar juntos: el borrador guarda en report.juntos las otras secadoras; se suman sus QQ y túneles.
+            (t.total_quintals + COALESCE(j.qq, 0)) AS total_quintals,
+            COALESCE(j.tuneles, ARRAY[]::int[]) AS tuneles_juntos,
+            COALESCE(j.lotes, ARRAY[]::text[]) AS lotes_juntos,
             l.lot_code,
             EXISTS (
               SELECT 1 FROM processing_batches b
@@ -68,6 +72,14 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
      FROM milling_drafts d
      JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
      JOIN lots l ON l.id = t.lot_id
+     LEFT JOIN LATERAL (
+       SELECT SUM(x.total_quintals) AS qq, array_agg(x.tunnel_number ORDER BY x.tunnel_number) AS tuneles,
+              array_agg(xl.lot_code ORDER BY x.tunnel_number) AS lotes
+         FROM drying_tunnel_reports x JOIN lots xl ON xl.id = x.lot_id
+        WHERE jsonb_typeof(d.report->'juntos') = 'array'
+          AND x.id::text IN (SELECT jsonb_array_elements_text(d.report->'juntos'))
+          AND x.id <> d.drying_report_id
+     ) j ON true
      WHERE l.accionista_id = $1
        AND NOT EXISTS (
          SELECT 1 FROM processing_batches b
