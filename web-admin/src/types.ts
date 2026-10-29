@@ -51,6 +51,13 @@ export type Lot = {
   net_weight?: string | number | null;
   /** Cuántos pesos de báscula agrupa el lote. */
   entries_count?: number;
+  /** 📦 Desde Stock (lotes guardados): 'secado' entra como secadora (drying_report_id); 'lote' como lote sin secado. */
+  stock_kind?: "secado" | "lote";
+  drying_report_id?: string | null;
+  tunnel_number?: number | null;
+  ubicacion?: string | null;
+  agricultores?: string | null;
+  saldo_inicial?: boolean;
 };
 
 // Ingreso de materia prima: un pesaje de báscula que todavía no pertenece a un

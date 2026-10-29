@@ -184,56 +184,43 @@ lotsRouter.get("/", asyncRoute(async (req, res) => {
 //     vivo (excluye lo ya pilado/liquidado).
 // Los lotes solo pesados/recepcionados en báscula (sin secar ni botar) nunca
 // tienen ese VACIADO, así que quedan fuera por definición.
+// 📦 Producción › Desde Stock (pedido del dueño 2026-10-29): SOLO los LOTES GUARDADOS de Reportes › Lotes guardados
+// (secados apartados y cáscara seca del saldo inicial apartada) más los servicios «Solo pilada», que ya vienen secos.
+// Lo que sale de las secadoras sin guardar se pila desde «Desde Secadoras». `stock_kind` dice cómo entra a la pilada:
+// 'secado' (con su drying_report_id, como secadora juntada) o 'lote' (lote sin secado → lot_ids_extra).
 lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `SELECT l.*, COALESCE(f.full_name, CASE WHEN l.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name,
-            COUNT(t.id)::int AS entries_count,
-            COALESCE(SUM(t.net_weight), 0) AS net_weight,
-            COALESCE(SUM(t.quintals), 0) + COALESCE(si.qq, 0) AS quintals
-     FROM lots l
-     LEFT JOIN farmers f ON f.id = l.farmer_id
-     LEFT JOIN weighing_tickets t ON t.lot_id = l.id
-     -- Cáscara del SALDO INICIAL (Configuración → Saldos iniciales): entra seca a
-     -- bodega como lote propio, sin tickets ni secadora; sus QQ son los de su ingreso.
-     LEFT JOIN LATERAL (
-       SELECT SUM(m.quantity) AS qq FROM inventory_movements m
-        WHERE l.saldo_inicial AND m.lot_id = l.id AND m.reference_type = 'saldo_inicial'
-     ) si ON true
-     WHERE l.accionista_id = $1
-       AND l.status = 'WEIGHED'
-       AND (
-         -- Ya secado (túnel o tendal COMPLETED + VACIADO a bodega)…
-         EXISTS (
-           SELECT 1
-           FROM drying_tunnel_reports d
-           JOIN drying_tunnel_cuadrilla c
-             ON c.drying_report_id = d.id AND c.momento = 'VACIADO'
-           WHERE d.lot_id = l.id
-             AND d.status = 'COMPLETED'
-             AND d.apartado_arianos = false
-         )
-         -- …o 'Solo Servicio de Pilada': ya viene seco, salta secadoras y va
-         -- directo a producción desde stock/bodega.
-         OR l.operation_type = 'PILADO'
-         -- …o cáscara seca cargada como saldo inicial (si no está apartada en «Lotes guardados»).
-         OR (l.saldo_inicial AND NOT l.apartado_arianos)
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM drying_tunnel_reports d
-         WHERE d.lot_id = l.id AND d.status = 'IN_PROGRESS'
-       )
-       -- Solo un proceso YA CERRADO (finished_at) saca al lote de la lista. Un
-       -- batch abierto por un intento fallido NO lo oculta: se puede reintentar
-       -- (el POST de producción reutiliza ese batch abierto en vez de duplicar).
-       AND NOT EXISTS (
-         SELECT 1 FROM processing_batches b
-         WHERE b.lot_id = l.id AND b.finished_at IS NOT NULL
-       )
-     GROUP BY l.id, f.full_name, si.qq
-     HAVING COALESCE(SUM(t.quintals), 0) + COALESCE(si.qq, 0) > 0
-     ORDER BY l.created_at DESC
-     LIMIT 500`,
+    `WITH base AS (
+       -- Secados guardados (apartados), terminados y sin pilar.
+       SELECT l.*, d.id AS drying_report_id, 'secado'::text AS stock_kind, d.total_quintals::float AS quintals,
+              d.ubicacion_arianos AS ubicacion, d.tunnel_number,
+              (SELECT string_agg(DISTINCT dl.farmer_name, ', ') FROM drying_tunnel_report_lots dl WHERE dl.drying_report_id = d.id) AS agricultores
+         FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id
+        WHERE l.accionista_id = $1 AND d.status = 'COMPLETED' AND d.apartado_arianos
+          AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.status <> 'CANCELLED'
+                            AND (b.drying_report_id = d.id OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.drying_report_id = d.id))
+                            AND b.finished_at IS NOT NULL)
+       UNION ALL
+       -- Cáscara seca del saldo inicial guardada, y servicios «Solo pilada» (ya vienen secos).
+       SELECT l.*, NULL::uuid, 'lote'::text,
+              CASE WHEN l.saldo_inicial
+                   THEN COALESCE((SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.lot_id = l.id AND m.reference_type = 'saldo_inicial'), 0)
+                   ELSE COALESCE((SELECT SUM(t.quintals) FROM weighing_tickets t WHERE t.lot_id = l.id), 0) END::float,
+              l.ubicacion_arianos, NULL::int,
+              CASE WHEN l.saldo_inicial THEN l.notes ELSE (SELECT string_agg(DISTINCT f2.full_name, ', ') FROM weighing_tickets t JOIN farmers f2 ON f2.id = t.farmer_id WHERE t.lot_id = l.id) END
+         FROM lots l
+        WHERE l.accionista_id = $1 AND l.status = 'WEIGHED'
+          AND ((l.saldo_inicial AND l.apartado_arianos) OR l.operation_type = 'PILADO')
+          AND NOT EXISTS (SELECT 1 FROM drying_tunnel_reports d WHERE d.lot_id = l.id)
+          AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.status <> 'CANCELLED' AND b.finished_at IS NOT NULL
+                            AND (b.lot_id = l.id OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.lot_id = l.id)))
+     )
+     SELECT base.*, COALESCE(f.full_name, CASE WHEN base.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name
+       FROM base LEFT JOIN farmers f ON f.id = base.farmer_id
+      WHERE base.quintals > 0
+      ORDER BY base.created_at DESC
+      LIMIT 500`,
     [accionistaId]
   );
   // Herencia desde Báscula: Producción recibe si el lote es maquila (no lo pregunta).

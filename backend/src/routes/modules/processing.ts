@@ -1061,9 +1061,11 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         [processingBatchId, isMaquila]
       );
     } else {
+      // Desde Stock: el lote principal y los lotes que se pilaron junto con él.
       await client.query(
-        "UPDATE lots SET status = 'PROCESSED', is_maquila = $2 WHERE id = $1",
-        [body.lot_id, isMaquila]
+        `UPDATE lots SET status = 'PROCESSED', is_maquila = $2
+          WHERE id = $1 OR id IN (SELECT lot_id FROM processing_batch_drying_lots WHERE processing_batch_id = $3)`,
+        [body.lot_id, isMaquila, processingBatchId]
       );
     }
 
@@ -1148,6 +1150,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
     // 🔗 PILAR JUNTOS: otros túneles secos del MISMO socio cuyo arroz se mezcló antes de entrar a la piladora
     // (pedido del dueño 2026-10-19). Entran a este mismo proceso: suman su cáscara y sus lotes quedan pilados.
     drying_report_ids_extra: z.array(z.string().uuid()).max(6).default([]),
+    // 📦 Lotes guardados SIN secado (cáscara seca del saldo inicial) que se pilan en esta misma pilada (Desde Stock).
+    lot_ids_extra: z.array(z.string().uuid()).max(10).default([]),
     process_type: z.string().default("PILADO"),
     ownership: z.enum(["OWNED", "MAQUILA", "SERVICE_ONLY"]),
     input_product_id: z.string().uuid(),
@@ -1444,6 +1448,79 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
       }
       await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [lotId]);
     }
+    // 📦 Lotes guardados sin secado que entran a esta misma pilada (Desde Stock con varios lotes).
+    const lotesExtra = [...new Set(body.lot_ids_extra)].filter((x) => x !== lotId);
+    if (lotesExtra.length) {
+      const batchId = String(batch.rows[0].id);
+      const tipo = (t: unknown) => (String(t ?? "0.11").toUpperCase() === "CORRIENTE" ? "CORRIENTE" : "0.11");
+      const baseLot = (await client.query("SELECT accionista_id, rice_type, operation_type, is_maquila FROM lots WHERE id = $1", [lotId])).rows[0];
+      const baseServicio = loteEsMaquila({ operation_type: baseLot?.operation_type, is_maquila: baseLot?.is_maquila });
+      const lineaLote = async (id: string) => {
+        const st = (await client.query(
+          `SELECT m.product_id, m.warehouse_id, m.ownership, m.accionista_id, SUM(m.quantity)::float AS qq
+             FROM inventory_movements m JOIN products p ON p.id = m.product_id
+            WHERE m.lot_id = $1 AND p.product_type = 'RAW_MATERIAL'
+            GROUP BY m.product_id, m.warehouse_id, m.ownership, m.accionista_id HAVING SUM(m.quantity) > 0.0005`,
+          [id]
+        )).rows as Array<{ product_id: string; warehouse_id: string; ownership: string; accionista_id: string | null; qq: number }>;
+        return st;
+      };
+      // Sin secado, el lote principal también queda enlazado: así la pilada lista (y suma) todos sus lotes.
+      if (!body.drying_report_id) {
+        const p = (await client.query("SELECT lot_code FROM lots WHERE id = $1", [lotId])).rows[0];
+        const qqP = round3(kilogramsToQuintals(inputQuantity));
+        await client.query(
+          `INSERT INTO processing_batch_drying_lots (processing_batch_id, drying_report_id, lot_id, lot_code, farmer_name, net_weight_kg, quintals)
+           VALUES ($1, NULL, $2, $3, NULL, $4, $5)`,
+          [batchId, lotId, p?.lot_code ?? "—", inputQuantity, qqP]
+        );
+      }
+      let extraKg = 0;
+      for (const exId of lotesExtra) {
+        const ex = (await client.query("SELECT * FROM lots WHERE id = $1 FOR UPDATE", [exId])).rows[0];
+        if (!ex) throw new ApiError(404, "Uno de los lotes para pilar juntos no existe.");
+        const nombre = `el lote ${ex.lot_code}`;
+        if ((await client.query("SELECT 1 FROM drying_tunnel_reports WHERE lot_id = $1", [exId])).rowCount) {
+          throw new ApiError(400, `${nombre} tiene secado: agrégalo como secadora.`);
+        }
+        if (ex.status !== "WEIGHED") throw new ApiError(409, `${nombre} ya entró a otra pilada.`);
+        const usado = (await client.query(
+          `SELECT 1 FROM processing_batches b WHERE b.status <> 'CANCELLED' AND b.id <> $2
+              AND (b.lot_id = $1 OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.lot_id = $1)) LIMIT 1`,
+          [exId, batchId]
+        )).rowCount;
+        if (usado) throw new ApiError(409, `${nombre} ya entró a otra pilada.`);
+        if (ex.accionista_id !== baseLot?.accionista_id) throw new ApiError(409, `${nombre} es de otro socio: solo se pilan juntos lotes del mismo socio.`);
+        if (tipo(ex.rice_type) !== tipo(baseLot?.rice_type)) throw new ApiError(409, `${nombre} es de otro tipo de arroz (0.11 / corriente): no se pueden pilar juntos.`);
+        if (loteEsMaquila({ operation_type: ex.operation_type, is_maquila: ex.is_maquila }) !== baseServicio) {
+          throw new ApiError(409, `${nombre} es de servicio y el otro es propio (o al revés): no se pueden pilar juntos.`);
+        }
+        const st = await lineaLote(exId);
+        const qq = round3(st.reduce((s, r) => s + Number(r.qq), 0));
+        if (!(qq > 0)) throw new ApiError(400, `${nombre} no tiene cáscara en bodega.`);
+        await client.query(
+          `INSERT INTO processing_batch_drying_lots (processing_batch_id, drying_report_id, lot_id, lot_code, farmer_name, net_weight_kg, quintals)
+           VALUES ($1, NULL, $2, $3, NULL, $4, $5)`,
+          [batchId, exId, ex.lot_code, round3(qq * KG_PER_QUINTAL), qq]
+        );
+        if (loteAfectaInventarioPropio(ex.operation_type)) {
+          for (const r of st) {
+            await client.query(
+              `INSERT INTO inventory_movements
+               (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, created_by, accionista_id)
+               VALUES ($1, $2, $3, 'PROCESS_INPUT', $4, 'processing_batches', $5, $6, $7, $8)`,
+              [r.product_id, r.warehouse_id, exId, -Number(r.qq), batchId, r.ownership, body.created_by ?? null, r.accionista_id]
+            );
+          }
+        }
+        await client.query("UPDATE lots SET status = 'IN_PROCESS' WHERE id = $1", [exId]);
+        extraKg += qq * KG_PER_QUINTAL;
+      }
+      batch.rows[0] = (await client.query(
+        "UPDATE processing_batches SET input_quantity = input_quantity + $2 WHERE id = $1 RETURNING *", [batchId, round3(extraKg)]
+      )).rows[0];
+    }
+
     // 🌾 La cáscara que el «Proceso guardado» había apartado ya la consumió el proceso: lo apartado vuelve a 0.
     if (body.drying_report_id) {
       for (const id of new Set([body.drying_report_id, ...body.drying_report_ids_extra])) await sincronizarCascaraBorrador(client, id, body.created_by);

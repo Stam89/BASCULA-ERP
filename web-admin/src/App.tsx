@@ -2633,7 +2633,8 @@ export function App() {
   // arroz seco ya en bodega (stock). El backend acepta ambos (lote con o sin
   // drying_report). Ver finalizeMillingLot.
   const [productionSource, setProductionSource] = useState<"drying" | "stock">("drying");
-  const [productionStockLotId, setProductionStockLotId] = useState("");
+  // 📦 Desde Stock: VARIOS lotes guardados que se pilan juntos (el primero, con secado si hay, es el principal).
+  const [productionStockPick, setProductionStockPick] = useState<string[]>([]);
   // Sub-pestaña del módulo Gana: rendimiento de lotes propios vs. cobros por
   // servicio de pilada (maquila).
   const [ganaTab, setGanaTab] = useState<"propio" | "servicio">("propio");
@@ -4536,10 +4537,13 @@ export function App() {
     () => dryStorageLots.filter((lot) => Number(lot.quintals ?? 0) > 0),
     [dryStorageLots]
   );
-  const selectedStockLot = useMemo(
-    () => stockLotsDisponibles.find((lot) => lot.id === productionStockLotId) ?? null,
-    [stockLotsDisponibles, productionStockLotId]
+  // Los elegidos, con los secados primero: el principal entra como secadora y el resto se suma a la misma pilada.
+  const stockElegidos = useMemo(
+    () => stockLotsDisponibles.filter((lot) => productionStockPick.includes(lot.id))
+      .sort((a, b) => Number(Boolean(b.drying_report_id)) - Number(Boolean(a.drying_report_id))),
+    [stockLotsDisponibles, productionStockPick]
   );
+  const selectedStockLot = stockElegidos[0] ?? null;
   // Origen unificado del pilado (secadora o stock): QQ de entrada, tipo y lote.
   const millingSource = useMemo(() => {
     if (productionSource === "stock") {
@@ -4547,9 +4551,11 @@ export function App() {
       return {
         lot_id: selectedStockLot.id,
         rice_type: selectedStockLot.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11",
-        entrada_qq: Number(selectedStockLot.quintals ?? 0),
-        drying_report_id: undefined as string | undefined,
-        etiqueta: `Lote ${selectedStockLot.lot_code} · ${selectedStockLot.farmer_name ?? "s/agricultor"}`
+        entrada_qq: round2(stockElegidos.reduce((s, l) => s + Number(l.quintals ?? 0), 0)),
+        drying_report_id: (selectedStockLot.drying_report_id ?? undefined) as string | undefined,
+        etiqueta: stockElegidos.length > 1
+          ? `Lotes ${stockElegidos.map((l) => l.lot_code).join(" + ")} (pilados juntos)`
+          : `Lote ${selectedStockLot.lot_code} · ${selectedStockLot.farmer_name ?? "s/agricultor"}`
       };
     }
     if (!selectedProductionDrying) return null;
@@ -4562,7 +4568,7 @@ export function App() {
         ? `Secadoras ${[selectedProductionDrying, ...juntosElegidos].map((r) => r.tunnel_number).join(" + ")} (pilados juntos)`
         : `Secadora ${selectedProductionDrying.tunnel_number}`
     };
-  }, [productionSource, selectedStockLot, selectedProductionDrying, juntosElegidos]);
+  }, [productionSource, selectedStockLot, stockElegidos, selectedProductionDrying, juntosElegidos]);
   const millingPiladoTotalQq = useMemo(
     () => (Array.isArray(millingPiladoEntries) ? millingPiladoEntries : []).reduce((sum, entry) => sum + entry.quantityQq, 0),
     [millingPiladoEntries]
@@ -12102,7 +12108,7 @@ export function App() {
 
   function continueMillingDraft(dryingId: string) {
     setProductionSource("drying");
-    setProductionStockLotId("");
+    setProductionStockPick([]);
     updateProductionDryingId(dryingId);
   }
 
@@ -12717,12 +12723,19 @@ Motivo (obligatorio):`, ""));
     const batch = await apiPost<{ id: string }>("/processing-batches", {
       lot_id: src.lot_id,
       drying_report_id: src.drying_report_id,
-      drying_report_ids_extra: productionSource === "stock" ? [] : juntosElegidos.map((r) => r.id),
+      drying_report_ids_extra: productionSource === "stock"
+        ? stockElegidos.slice(1).filter((l) => l.drying_report_id).map((l) => String(l.drying_report_id))
+        : juntosElegidos.map((r) => r.id),
+      // 📦 Lotes guardados sin secado que se pilan junto con el principal.
+      lot_ids_extra: productionSource === "stock" ? stockElegidos.slice(1).filter((l) => !l.drying_report_id).map((l) => l.id) : [],
       process_type: "PILADO",
       ownership: "OWNED",
       input_product_id: inputProduct.id,
       input_warehouse_id: rawWarehouse.id,
-      input_quantity: inputKg
+      // Desde Stock sin secado: la cáscara del lote principal (la de los demás la suma el servidor).
+      input_quantity: productionSource === "stock" && !src.drying_report_id && selectedStockLot
+        ? Number(selectedStockLot.quintals ?? 0) * KG_PER_QQ
+        : inputKg
     });
 
     // MIX Tula/Saco por línea: todo el arroz blanco (tula + saco) entra al stock
@@ -12803,7 +12816,7 @@ Motivo (obligatorio):`, ""));
       await apiFetch(`/processing-batches/drafts/${src.drying_report_id}`, { method: "DELETE" }).catch(() => undefined);
     }
     setProductionDryingId(""); setProductionDryingExtras([]);
-    setProductionStockLotId("");
+    setProductionStockPick([]);
     setMillingDraftSavedAt(null);
     // Nómina + stock quedaron registrados en la misma transacción del cierre.
     const trabajadores = [piladorName && "pilador", estibadorName && "estibador"].filter(Boolean).join(" y ");
@@ -17323,7 +17336,7 @@ Motivo (obligatorio):`, ""));
               <div className="productionSourceToggle" role="radiogroup" aria-label="Origen de la materia prima">
                 <label className={productionSource === "drying" ? "isActive" : ""}>
                   <input type="radio" name="prodSource" checked={productionSource === "drying"} style={{ width: "auto" }}
-                    onChange={() => { setProductionSource("drying"); setProductionStockLotId(""); }} />
+                    onChange={() => { setProductionSource("drying"); setProductionStockPick([]); }} />
                   <span><strong>Desde Secadoras</strong><small>Túneles finalizados</small></span>
                 </label>
                 <label className={productionSource === "stock" ? "isActive" : ""}>
@@ -17418,38 +17431,44 @@ Motivo (obligatorio):`, ""));
                 </>
               ) : (
                 <>
-                  <label>
-                    <span>Lote de arroz seco (bodega)</span>
-                    <select value={productionStockLotId} onChange={(event) => setProductionStockLotId(event.target.value)} required disabled={stockLotsDisponibles.length === 0}>
-                      <option value="">
-                        {stockLotsDisponibles.length === 0 ? "No hay lotes de arroz seco en bodega" : "Seleccione"}
-                      </option>
-                      {stockLotsDisponibles.map((lot) => (
-                        <option key={lot.id} value={lot.id}>
-                          {lot.lot_code} · {lot.farmer_name ?? "s/agricultor"} · {riceTypeLabel(lot.rice_type)} · {Number(lot.quintals ?? 0).enReal()} QQ
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Lotes guardados <span className="muted" style={{ fontWeight: 400 }}>(uno, o varios si se pilan juntos)</span></span>
                   {stockLotsDisponibles.length === 0 ? (
                     <div className="muted" style={{ padding: 10, background: "#fef3c7", borderRadius: 8, border: "1px solid #fde68a" }}>
-                      <strong>No hay lotes de arroz seco en bodega.</strong>
+                      <strong>No hay lotes guardados.</strong>
                       <p style={{ margin: "4px 0 0" }}>
-                        Solo aparecen los lotes cuyo secado ya <strong>terminó</strong> y están guardados en bodega, sin procesar.
-                        Finaliza un secado en <strong>Secadoras</strong> para que su lote quede disponible aquí.
+                        Aquí salen solo los lotes de <strong>Reportes › Lotes guardados</strong>. Guarda un lote (con su ubicación) para pilarlo desde aquí;
+                        lo que acaba de salir de las secadoras se pila desde <strong>Desde Secadoras</strong>.
                       </p>
                     </div>
-                  ) : selectedStockLot ? (
+                  ) : (
+                    <div style={{ maxHeight: 280, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)" }}>
+                      {stockLotsDisponibles.map((lot) => {
+                        const tipoL = (l: typeof lot) => (l.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11");
+                        const base = selectedStockLot;
+                        const compatible = !base || base.id === lot.id || (tipoL(lot) === tipoL(base) && Boolean(lot.es_maquila) === Boolean(base.es_maquila));
+                        const checked = productionStockPick.includes(lot.id);
+                        return (
+                          <label key={lot.id} style={{ display: "flex", flexDirection: "row", alignItems: "flex-start", gap: 8, padding: "8px 10px", margin: 0, borderBottom: "1px solid var(--c-border)", cursor: compatible ? "pointer" : "not-allowed", opacity: compatible ? 1 : 0.55 }}>
+                            <input type="checkbox" disabled={!compatible} checked={checked}
+                              onChange={() => setProductionStockPick((x) => checked ? x.filter((y) => y !== lot.id) : [...x, lot.id])}
+                              style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
+                            <span style={{ fontSize: 13, lineHeight: 1.35 }}>
+                              <strong>{lot.lot_code}</strong>{lot.tunnel_number ? ` · Secadora ${lot.tunnel_number}` : lot.saldo_inicial ? " · Saldo inicial" : ""} · {riceTypeLabel(lot.rice_type)} · {Number(lot.quintals ?? 0).enReal()} QQ{lot.es_maquila ? " · 🔧 SERVICIO" : ""}
+                              {lot.ubicacion && <> · 📍 {lot.ubicacion}</>}
+                              {(lot.agricultores || lot.farmer_name) && <small style={{ display: "block", color: "var(--c-muted)" }}>{lot.agricultores || lot.farmer_name}</small>}
+                              {!compatible && <small style={{ display: "block", color: "#b45309" }}>No se puede juntar: es de otro tipo de arroz o de otra clase (propio / servicio)</small>}
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {selectedStockLot && (
                     <div className="totalBox dryerTotalBox">
                       <span>Total cascara desde Stock</span>
-                      <strong>{Number(selectedStockLot.quintals ?? 0).enReal()} QQ</strong>
-                      <small>Lote {selectedStockLot.lot_code} · {selectedStockLot.farmer_name ?? "Sin agricultor"}</small>
+                      <strong>{Number(millingSource?.entrada_qq ?? 0).enReal()} QQ</strong>
+                      <small>{stockElegidos.length} lote(s){stockElegidos.length > 1 ? " · 🔗 se pilan juntos en una sola pilada" : ` · ${selectedStockLot.farmer_name ?? "Sin agricultor"}`}</small>
                       <small>{riceTypeLabel(selectedStockLot.rice_type)}</small>
-                    </div>
-                  ) : (
-                    <div className="muted" style={{ padding: 10, background: "#eff6ff", borderRadius: 8, border: "1px solid #bfdbfe" }}>
-                      <strong>Elige un lote de arroz seco de la bodega.</strong>
-                      <p style={{ margin: "4px 0 0" }}>Se listan los lotes con quintales registrados. Al finalizar se pila directo, sin pasar por secadora.</p>
                     </div>
                   )}
                 </>
@@ -25607,7 +25626,7 @@ Motivo (obligatorio):`, ""));
               <div style={{ display: "grid", gap: 16 }}>
                 <div className="tablePanel">
                   <h2>Arroz seco sin procesar (pendiente)</h2>
-                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Secados terminados que aún no entran a producción. Escribe dónde lo vas a guardar y dale «Guardar»: deja de contar como pendiente y sale del selector de Producción. Es reversible.</p>
+                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Arroz seco que aún no entra a producción. Escribe dónde lo vas a guardar y dale «Guardar»: pasa a «Lotes guardados» y se pila desde Producción › Desde Stock (puedes elegir varios y pilarlos juntos). Es reversible.</p>
                   {pend.length === 0 ? (
                     <div className="emptyState" style={{ padding: "26px 20px" }}><p>No hay arroz seco pendiente de procesar</p></div>
                   ) : (
@@ -25636,7 +25655,7 @@ Motivo (obligatorio):`, ""));
                 </div>
                 <div className="tablePanel">
                   <h2>Lotes guardados</h2>
-                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Arroz seco apartado, con la fecha en que terminó el secado y dónde está guardado. Puedes devolverlo a proceso cuando quieras.</p>
+                  <p className="muted" style={{ marginTop: -4, marginBottom: 8 }}>Arroz seco guardado y dónde está. Estos son los que aparecen en Producción › Desde Stock. «Quitar de guardados» lo devuelve a la lista de arriba.</p>
                   {apart.length === 0 ? (
                     <div className="emptyState" style={{ padding: "26px 20px" }}><p>Nada guardado todavía</p></div>
                   ) : (
@@ -25654,7 +25673,7 @@ Motivo (obligatorio):`, ""));
                               <td className="num" style={{ whiteSpace: "nowrap" }}>
                                 <button type="button" className="btnSecondary" onClick={() => actualizarUbicArianos(r.id, arianosUbic[r.id] ?? r.ubicacion_arianos).catch((e) => addToast(e.message, "error"))}>Actualizar</button>
                                 {" "}
-                                <button type="button" className="btnSecondary" onClick={() => apartarArianos(r.id, false).catch((e) => addToast(e.message, "error"))}>Devolver a proceso</button>
+                                <button type="button" className="btnSecondary" onClick={() => apartarArianos(r.id, false).catch((e) => addToast(e.message, "error"))}>Quitar de guardados</button>
                               </td>
                             </tr>
                           ))}

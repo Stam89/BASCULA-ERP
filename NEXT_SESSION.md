@@ -2,7 +2,19 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📦 Lotes guardados con la cáscara del saldo inicial (2026-10-29)
+## Último cambio: 📦 Producción › Desde Stock = solo LOTES GUARDADOS, con varios lotes por pilada (2026-10-29)
+
+- /lots/dry-in-storage devuelve SOLO lo guardado (Reportes › Lotes guardados): secados apartados (`stock_kind:
+  'secado'`, drying_report_id, tunnel_number, ubicación, agricultores) y saldo inicial apartado (`'lote'`), más los
+  servicios «Solo pilada» (PILADO, ya vienen secos). Lo que sale de secadoras sin guardar se pila «Desde Secadoras».
+- POST /processing-batches acepta `lot_ids_extra` (lotes sin secado): valida mismo socio/tipo/clase, sin otra pilada;
+  enlaza en processing_batch_drying_lots con drying_report_id NULL (migración 20261127 quita el NOT NULL), consume su
+  cáscara (PROCESS_INPUT) y suma su entrada. Sin secado, el lote principal también queda enlazado. Al cerrar, todos
+  los lotes enlazados quedan PROCESSED; anular los devuelve (ya usaba processing_batch_drying_lots).
+- Frontend: Desde Stock con casillas (productionStockPick; los secados primero = principal, el resto como
+  drying_report_ids_extra / lot_ids_extra). Simulacros `stock_varios_lotes` y `lotes_guardados_saldo` (regla nueva).
+
+## Cambio anterior: 📦 Lotes guardados con la cáscara del saldo inicial (2026-10-29)
 
 - Migración 20261126: lots.apartado_arianos / apartado_at / ubicacion_arianos. /reports/arianos agrega los lotes
   SI-… (saldo_inicial, WEIGHED, sin proceso) con `saldo_inicial: true` y `detalle` (notas); apartar/ubicación también

@@ -13,17 +13,19 @@ try {
   const acc = lote.accionista_id;
   const ver = async () => exigir(await api("GET", "/reports/arianos", undefined, acc), "lista");
   const stock = async () => exigir(await api("GET", "/lots/dry-in-storage", undefined, acc), "stock").some((l) => l.id === lote.id);
+  // Se parte con el lote sin guardar (en la copia puede venir ya guardado).
+  exigir(await api("POST", "/reports/arianos/apartar", { ids: [lote.id], apartar: false }, acc), "0. dejarlo sin guardar");
   const a0 = await ver();
   check(a0.pendientes.some((r) => r.id === lote.id && r.saldo_inicial && Number(r.quintals) > 0), `1. ${lote.lot_code} aparece en «Arroz seco sin procesar»`);
-  check(await stock(), "2. y está en Producción › Desde Stock");
+  check(!(await stock()), "2. sin guardar NO está en Producción › Desde Stock (solo van los guardados)");
   exigir(await api("POST", "/reports/arianos/apartar", { ids: [lote.id], apartar: true, ubicacion: "Bodega 2 fondo" }, acc), "3. guardarlo con ubicación");
   const a1 = await ver();
   check(a1.apartados.some((r) => r.id === lote.id && r.ubicacion_arianos === "Bodega 2 fondo"), "4. pasa a «Lotes guardados» con su ubicación");
-  check(!(await stock()), "5. sale de Producción › Desde Stock");
+  check(await stock(), "5. guardado, aparece en Producción › Desde Stock");
   exigir(await api("POST", "/reports/arianos/ubicacion", { id: lote.id, ubicacion: "Galpón" }, acc), "6. cambiar la ubicación");
   check((await ver()).apartados.some((r) => r.id === lote.id && r.ubicacion_arianos === "Galpón"), "7. ubicación actualizada");
   exigir(await api("POST", "/reports/arianos/apartar", { ids: [lote.id], apartar: false }, acc), "8. devolver a proceso");
-  check(await stock(), "9. vuelve a Producción › Desde Stock");
+  check(!(await stock()), "9. devuelto, sale de Producción › Desde Stock");
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
   check(h.length === 0, "Z. integridad sin hallazgos", h.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); check(false, "excepción"); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
