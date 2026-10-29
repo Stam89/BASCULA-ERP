@@ -2,7 +2,14 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 🔀 Cambiar de secadora antes de encender el motor (2026-10-29)
+## Último cambio: 🗓️ Jornada del secador al corregir la fecha de la corrida (2026-10-29)
+
+- sync-run (fecha/hora/secador de la corrida) ahora también RECUENTA el (secador, día) que la corrida deja
+  (`recontarJornadasSecador`): antes la jornada se movía al día nuevo, pero el día viejo seguía con los túneles de
+  antes. Caso real: la secadora 3 tenía llenado 27/10 (arrancó el 28) → HUGO el 27 con 3 y el 28 con 2; se corrigió la
+  corrida del motor 2 a 28/10 → 27 con 2, 28 con 3. Simulacro `secador_cambio_fecha`.
+
+## Cambio anterior: 🔀 Cambiar de secadora antes de encender el motor (2026-10-29)
 
 - Tarjeta roja de un túnel ocupado sin hora de inicio: «→ Pasar a Secadora X» / «⇄ Intercambiar con Secadora X».
   POST /process-flow/drying/:id/cambiar-secadora {tunnel_number}: mueve TODO lo del túnel (y si el destino está lleno,

@@ -322,6 +322,22 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
   );
 }
 
+// Vuelve a contar la jornada del secador de los (secador, día) dados con un secado que siga en ese día (iniciado o
+// finalizado). Se usa cuando una corrida se cambia de fecha o de secador: el día que deja tenía contados sus túneles.
+async function recontarJornadasSecador(client: PoolClient, dias: Array<{ worker: string; dia: unknown }>): Promise<void> {
+  for (const d of dias) {
+    if (!d.worker) continue;
+    const ref = (await client.query(
+      `SELECT id FROM drying_tunnel_reports
+        WHERE btrim(COALESCE(operator_name, '')) = $1 AND COALESCE(filled_at, dry_start_at::date, created_at::date) = $2::date
+          AND (status = 'COMPLETED' OR dry_start_at IS NOT NULL) AND COALESCE(dry_method, 'TUNEL') = 'TUNEL'
+        ORDER BY created_at LIMIT 1`,
+      [d.worker, toDateOnly(d.dia)]
+    )).rows[0];
+    if (ref) await autoGenerarPagoSecador(client, String(ref.id));
+  }
+}
+
 // Devuelve YYYY-MM-DD de un valor que puede venir como Date (de la BD) o string
 // (del body), o null si no hay fecha válida. Para fechar la nómina de cuadrilla.
 function toDateOnly(value: unknown): string | null {
@@ -533,6 +549,13 @@ processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, r
   const operator = body.operator_name !== undefined ? (body.operator_name.trim() || null) : null;
 
   const result = await inTransaction(async (client) => {
+    // Secador y día de la jornada ANTES del cambio: si la corrida se pasa a otro día, el día de antes se vuelve a
+    // contar (p. ej. el 27 quedaba con 3 secadoras aunque la 3 ya era del 28).
+    const diasAntes = (await client.query(
+      `SELECT DISTINCT btrim(COALESCE(operator_name, '')) AS worker, COALESCE(filled_at, dry_start_at::date, created_at::date) AS dia
+         FROM drying_tunnel_reports WHERE motor_number = $1 AND motor_fuel_id IS NULL`,
+      [motor]
+    )).rows;
     // Los túneles de la corrida (mismo motor, combustible aún no cerrado).
     const updated = await client.query(
       `UPDATE drying_tunnel_reports d SET
@@ -564,6 +587,7 @@ processFlowRouter.post("/drying/motor/:motor/sync-run", asyncRoute(async (req, r
     // aquí se fijó la hora de inicio, y REUBICA la fila pendiente si se corrigió la
     // fecha o el secador (idempotente: un solo registro por secador y día).
     for (const row of updated.rows) await autoGenerarPagoSecador(client, row.id);
+    await recontarJornadasSecador(client, diasAntes);
     return { sincronizados: updated.rowCount, cuadrilla_refechada: refechados };
   });
 
