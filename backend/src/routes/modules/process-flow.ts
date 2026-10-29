@@ -1743,17 +1743,162 @@ export async function createDryingBatch(client: PoolClient, body: z.infer<typeof
   }
 
   const groups = groupDryingEntries(entries.rows);
-  if (compartir) await assertTunnelCompartible(client, body.tunnel_number!, entries.rows);
+  if (compartir) await assertTunnelCompartible(client, body.tunnel_number!);
+  const porId = new Map(entries.rows.map((e) => [e.id, e]));
   const reports = [];
+  let sumados = 0;
   const separated = groups.length > 1;
   for (const entryIds of groups) {
+    // ➕ Faltó un peso: si el túnel ya tiene el secado de este mismo dueño y tipo, los tickets se SUMAN a ese secado.
+    if (compartir) {
+      const mismo = await secadoMismoDuenoEnTunel(client, body.tunnel_number!, porId.get(entryIds[0])!);
+      if (mismo) {
+        reports.push(await sumarTicketsASecado(client, mismo, entryIds, body.created_by ?? null));
+        sumados++;
+        continue;
+      }
+    }
     reports.push(await createDryingReport(
       client,
       { ...body, entry_ids: entryIds, lot_code: separated ? undefined : body.lot_code },
       { skipTunnelOccupancyCheck: body.dry_method !== "TENDAL" }
     ));
   }
-  return { reports, separated };
+  return { reports, separated, sumados };
+}
+
+// El secado EN PROCESO de un túnel que es del mismo dueño y tipo que el ticket (para sumarle el peso que faltó).
+async function secadoMismoDuenoEnTunel(
+  client: PoolClient,
+  tunnelNumber: number,
+  e: { accionista_id: string | null; operation_type: string | null; is_maquila: boolean }
+): Promise<string | null> {
+  const r = await client.query(
+    `SELECT d.id, l.accionista_id, l.operation_type, l.is_maquila
+       FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id
+      WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS'`,
+    [tunnelNumber]
+  );
+  const clave = (acc: string | null, op: unknown, maq: boolean) => `${acc ?? "SIN_SOCIO"}|${normalizeDryingOperationType(op, Boolean(maq))}`;
+  const buscada = clave(e.accionista_id, e.operation_type, e.is_maquila);
+  const fila = r.rows.find((x) => clave(x.accionista_id, x.operation_type, x.is_maquila) === buscada);
+  return fila ? String(fila.id) : null;
+}
+
+// ➕ SUMAR TICKETS a un secado ya registrado (pedido del dueño 2026-10-29: «faltó agregar un peso y el motor aún no
+// se enciende»). Solo mientras el motor NO arranca (sin hora de inicio) y sin combustible cerrado. Los tickets pasan
+// al lote del secado, suben los QQ/kg del túnel y del informe, y el pago del llenado de la cuadrilla se ajusta a los
+// QQ nuevos (si ya se pagó, no se deja).
+export async function sumarTicketsASecado(client: PoolClient, dryingId: string, entryIdsIn: string[], createdBy: string | null) {
+  const rep = (await client.query(
+    `SELECT d.*, l.accionista_id, l.operation_type, l.is_maquila, l.lot_code
+       FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id
+      WHERE d.id = $1 FOR UPDATE OF d`,
+    [dryingId]
+  )).rows[0];
+  if (!rep) throw new ApiError(404, "Secado no encontrado");
+  const t = rep.tunnel_number;
+  if (rep.status !== "IN_PROGRESS" || rep.dry_end_at || rep.motor_fuel_id) {
+    throw new ApiError(409, `El secado del túnel ${t} ya terminó: no se le puede sumar arroz.`);
+  }
+  if (rep.dry_start_at) {
+    throw new ApiError(409, `El motor del túnel ${t} ya arrancó (tiene hora de inicio): ya no se le puede sumar peso a ese secado. Si de verdad no ha arrancado, borra primero la hora de inicio de la corrida.`);
+  }
+  if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") throw new ApiError(400, "A un secado en tendal no se le suman tickets así.");
+  const pagado = await client.query(
+    "SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND momento = 'LLENADO' AND paid_at IS NOT NULL LIMIT 1",
+    [dryingId]
+  );
+  if (pagado.rowCount) throw new ApiError(409, `La cuadrilla del llenado del túnel ${t} ya se pagó: no se le puede sumar peso.`);
+
+  const entryIds = [...new Set(entryIdsIn)];
+  const entries = (await client.query(
+    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.operation_type, w.accionista_id, w.lot_id,
+            COALESCE(w.net_weight, 0)::float AS net_weight_kg, COALESCE(w.quintals, 0)::float AS quintals,
+            f.full_name AS farmer_name, m.raw_payload->>'numeroTicket' AS numero_bascula, used.id AS used_id
+       FROM weighing_tickets w
+       LEFT JOIN farmers f ON f.id = w.farmer_id
+       LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
+       LEFT JOIN drying_tunnel_report_lots used ON used.weighing_ticket_id = w.id
+      WHERE w.id = ANY($1::uuid[])
+      ORDER BY w.created_at`,
+    [entryIds]
+  )).rows;
+  if (entries.length !== entryIds.length) throw new ApiError(404, "Uno o más ingresos de materia prima no existen");
+  const yaUsados = entries.filter((e) => e.used_id || e.lot_id);
+  if (yaUsados.length) throw new ApiError(409, `Estos ingresos ya están en un lote: ${yaUsados.map((e) => e.ticket_number).join(", ")}`);
+  const claveLote = `${rep.accionista_id ?? "-"}|${normalizeDryingOperationType(rep.operation_type, Boolean(rep.is_maquila))}`;
+  if (entries.some((e) => `${e.accionista_id ?? "-"}|${normalizeDryingOperationType(e.operation_type, Boolean(e.is_maquila))}` !== claveLote)) {
+    throw new ApiError(400, "Solo se suman tickets del mismo dueño y del mismo tipo (propio o servicio) que ese secado.");
+  }
+
+  const lotId = String(rep.lot_id);
+  await client.query("UPDATE weighing_tickets SET lot_id = $1 WHERE id = ANY($2::uuid[])", [lotId, entryIds]);
+  await client.query(
+    `UPDATE inventory_movements SET lot_id = $1
+      WHERE reference_type = 'weighing_tickets' AND reference_id = ANY($2::uuid[]) AND lot_id IS NULL`,
+    [lotId, entryIds]
+  );
+  const etiqueta = (e: { numero_bascula: string | null; ticket_number: string }) => e.numero_bascula ? `Ticket #${e.numero_bascula}` : e.ticket_number;
+  for (const e of entries) {
+    await client.query(
+      `INSERT INTO drying_tunnel_report_lots
+       (drying_report_id, weighing_ticket_id, lot_id, process_report_id, lot_code, farmer_name, net_weight_kg, quintals)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [dryingId, e.id, lotId, rep.process_report_id, etiqueta(e), e.farmer_name, e.net_weight_kg, e.quintals]
+    );
+  }
+  const masKg = entries.reduce((s, e) => s + Number(e.net_weight_kg), 0);
+  const masQq = entries.reduce((s, e) => s + Number(e.quintals), 0);
+  const antesQq = Number(rep.total_quintals) || 0;
+  const nuevo = (await client.query(
+    `UPDATE drying_tunnel_reports SET input_weight_kg = input_weight_kg + $2, total_quintals = total_quintals + $3
+      WHERE id = $1 RETURNING total_quintals::float AS qq, input_weight_kg::float AS kg`,
+    [dryingId, masKg, masQq]
+  )).rows[0];
+  // Varios agricultores = el lote ya no tiene un dueño único.
+  await client.query(
+    `UPDATE lots l SET farmer_id = CASE WHEN (SELECT count(DISTINCT w.farmer_id) FROM weighing_tickets w WHERE w.lot_id = l.id) = 1
+                                        THEN (SELECT min(w.farmer_id::text)::uuid FROM weighing_tickets w WHERE w.lot_id = l.id) ELSE NULL END
+      WHERE l.id = $1`,
+    [lotId]
+  );
+  const snapshot = entries.map((e) => ({
+    weighing_ticket_id: e.id, ticket_number: etiqueta(e), numero_bascula: e.numero_bascula,
+    farmer_name: e.farmer_name, net_weight_kg: Number(e.net_weight_kg), quintals: Number(e.quintals)
+  }));
+  if (rep.process_report_id) {
+    await client.query(
+      `UPDATE lot_process_reports
+          SET report_data = report_data || jsonb_build_object('total_quintals', $2::numeric, 'total_weight_kg', $3::numeric,
+                'lots', COALESCE(report_data->'lots', '[]'::jsonb) || $4::jsonb)
+        WHERE id = $1`,
+      [rep.process_report_id, nuevo.qq, nuevo.kg, JSON.stringify(snapshot)]
+    );
+  }
+
+  // Cuadrilla del llenado: las asignaciones por QQ suben en la misma proporción (en sacos se corrigen a mano).
+  if (!rep.cuadrilla_pagada_fuera) {
+    const asig = (await client.query(
+      "SELECT id, worker_name, activity_id, quintals::float AS quintals FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1 AND momento = 'LLENADO'",
+      [dryingId]
+    )).rows;
+    if (!asig.length) {
+      await autoGenerarPagosCuadrillaDeSecado(client, dryingId, createdBy);
+    } else if (rep.recepcion_empaque !== "SACOS" && antesQq > 0) {
+      const factor = nuevo.qq / antesQq;
+      const workDate = toDateOnly(rep.filled_at) ?? null;
+      for (const a of asig) {
+        const qq = Math.round(Number(a.quintals) * factor * 1000) / 1000;
+        await client.query("UPDATE drying_tunnel_cuadrilla SET quintals = $2 WHERE id = $1", [a.id, qq]);
+        await upsertCuadrillaSecadoraEntry(client, {
+          referencia_id: dryingId, tunnel_number: Number(t), momento: "LLENADO", activity_id: a.activity_id,
+          worker_name: a.worker_name, quantity: qq, work_date: workDate, created_by: createdBy, accionista_id: rep.accionista_id
+        });
+      }
+    }
+  }
+  return getDryingReportById(client, dryingId);
 }
 
 async function createDryingReport(
@@ -2305,31 +2450,15 @@ function calculateDryingHours(start?: string | Date | null, end?: string | Date 
   return Number(((endTime - startTime) / 3_600_000).toFixed(2));
 }
 
-// 🤝 Secadora compartida: solo se suma a un túnel que SIGUE secando (sin hora final) y sin repetir el registro de
-// un mismo dueño y tipo (ese se completa editándolo). Si el túnel está libre, se guarda como un llenado normal.
-async function assertTunnelCompartible(
-  client: PoolClient,
-  tunnelNumber: number,
-  nuevos: Array<{ accionista_id: string | null; operation_type: string | null; is_maquila: boolean }>
-) {
+// 🤝 Secadora compartida: solo se suma a un túnel que SIGUE secando (sin hora final). Si el arroz es del mismo dueño
+// y tipo que un secado del túnel, se SUMA a ese secado (sumarTicketsASecado, solo antes de encender el motor).
+async function assertTunnelCompartible(client: PoolClient, tunnelNumber: number) {
   const activos = await client.query(
-    `SELECT d.dry_end_at, l.accionista_id, l.operation_type, l.is_maquila, COALESCE(a.name, 'servicio') AS accionista_name
-     FROM drying_tunnel_reports d
-     JOIN lots l ON l.id = d.lot_id
-     LEFT JOIN accionistas a ON a.id = l.accionista_id
-     WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS'`,
+    `SELECT d.dry_end_at FROM drying_tunnel_reports d WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS'`,
     [tunnelNumber]
   );
-  if (!activos.rowCount) return;
   if (activos.rows.some((r) => r.dry_end_at)) {
     throw new ApiError(409, `El túnel ${tunnelNumber} ya terminó de secar (tiene hora final): no se le puede sumar arroz. Usa otro túnel.`);
-  }
-  const clave = (acc: string | null, op: unknown, maq: boolean) => `${acc ?? "SIN_SOCIO"}|${normalizeDryingOperationType(op, Boolean(maq))}`;
-  const ya = new Map(activos.rows.map((r) => [clave(r.accionista_id, r.operation_type, r.is_maquila), String(r.accionista_name)]));
-  const repetido = nuevos.find((n) => ya.has(clave(n.accionista_id, n.operation_type, n.is_maquila)));
-  if (repetido) {
-    const op = normalizeDryingOperationType(repetido.operation_type, repetido.is_maquila) === "COMPRA" ? "arroz propio" : "servicio";
-    throw new ApiError(409, `El túnel ${tunnelNumber} ya tiene el ${op} de ${ya.get(clave(repetido.accionista_id, repetido.operation_type, repetido.is_maquila))}: agrégale los tickets editando ese secado.`);
   }
 }
 

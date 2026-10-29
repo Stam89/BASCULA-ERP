@@ -11206,6 +11206,7 @@ export function App() {
     // 1) El lote de cada secadora llena.
     let creados = 0;
     let sublotesCreados = 0;
+    let sumadosASecado = 0;
     if (secadorMotor) {
       saveSecadorName(secadorMotor);
       setSecadorSemana(secadorMotor.toUpperCase());
@@ -11217,7 +11218,7 @@ export function App() {
       const t = tunelDeSecadora(secadora);
       // El secador es de la corrida (motor), igual para todas las secadoras.
       const operatorName = secadorMotor;
-      const saved = await apiPost<{ reports: DryingTunnelReport[]; separated: boolean }>("/process-flow/drying/batch", {
+      const saved = await apiPost<{ reports: DryingTunnelReport[]; separated: boolean; sumados?: number }>("/process-flow/drying/batch", {
         entry_ids: seleccionFinal(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
         tunnel_number: t,
@@ -11236,6 +11237,7 @@ export function App() {
       });
       creados++;
       sublotesCreados += saved.reports.length;
+      sumadosASecado += saved.sumados ?? 0;
     }
     if (conIngresos.length > 0) {
       setSecadoraCompartida((cur) => {
@@ -11313,7 +11315,7 @@ export function App() {
       addToast(`Corrida del Motor ${motorActivo} actualizada: fecha/hora aplicada a ${sincronizados} túnel(es).`, "success");
     } else {
       addToast(
-        `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${sublotesCreados > creados ? ` · ${sublotesCreados} sublotes separados por destino` : ""}${sincronizados > 0 ? ` · fecha/hora sincronizada (${sincronizados})` : ""}${msgFuel}`,
+        `Informe del Motor ${motorActivo} guardado: ${creados} secadora(s)${sublotesCreados > creados ? ` · ${sublotesCreados} sublotes separados por destino` : ""}${sumadosASecado > 0 ? ` · ➕ peso sumado al secado que ya estaba (${sumadosASecado})` : ""}${sincronizados > 0 ? ` · fecha/hora sincronizada (${sincronizados})` : ""}${msgFuel}`,
         "success"
       );
     }
@@ -15732,11 +15734,12 @@ Motivo (obligatorio):`, ""));
                             <p className="muted" style={{ fontSize: 13, margin: "4px 0" }}>Ya terminó de secar: finaliza ese secado antes de usar este túnel.</p>
                           ) : (
                             <>
-                              <p className="muted" style={{ fontSize: 13, margin: "4px 0 8px" }}>Finaliza ese secado antes de usar este túnel, o si tu arroz se echó en esta misma secadora:</p>
+                              <p className="muted" style={{ fontSize: 13, margin: "4px 0 8px" }}>Finaliza ese secado antes de usar este túnel, o si se echó más arroz en esta misma secadora:</p>
                               <button type="button" className="btnSecondary" style={{ fontWeight: 700 }}
                                 onClick={() => setSecadoraCompartida((cur) => ({ ...cur, [secadora]: true }))}>
-                                🤝 Mi arroz se echó en esta misma secadora
+                                ➕ Agregar más arroz a esta secadora
                               </button>
+                              <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Un peso que faltó del mismo dueño (antes de encender el motor) o el arroz de otro dueño / un servicio.</p>
                             </>
                           )}
                         </div>
@@ -15748,7 +15751,7 @@ Motivo (obligatorio):`, ""));
                         <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}{compartida ? <> <span className="chip warn">🤝 Compartida</span></> : null}</h3>
                         {compartida && (
                           <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "8px 12px", margin: "0 0 12px", fontSize: 13 }}>
-                            Ya está secando: <strong>{ocupadoPor}</strong>. Lo que agregues aquí queda como <strong>otro registro en la misma secadora</strong>: las mismas horas, el combustible se reparte por QQ y al pilar cada uno va por su lado.{" "}
+                            Ya tiene: <strong>{ocupadoPor}</strong>. Si lo que marques es <strong>del mismo dueño y tipo</strong>, se <strong>suma a ese secado</strong> (solo mientras el motor no tenga hora de inicio). Si es de <strong>otro dueño o un servicio</strong>, queda como otro registro en la misma secadora: las mismas horas, el combustible se reparte por QQ y al pilar cada uno va por su lado.{" "}
                             <button type="button" className="btnGhost" style={{ padding: "2px 8px" }}
                               onClick={() => setSecadoraCompartida((cur) => { const next = { ...cur }; delete next[secadora]; return next; })}>
                               Cancelar

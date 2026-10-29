@@ -1,8 +1,24 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-28
+Actualizado: 2026-10-29
 
-## Último cambio: 🧮 Cuadre del día sin cerrar la caja (mejora 5 de la caja)
+## Último cambio: ➕ Sumar un peso que faltó a una secadora ya llena (2026-10-29)
+
+- Secadoras: la tarjeta de un túnel ocupado (sin hora final) ofrece «➕ Agregar más arroz a esta secadora» (antes «🤝 Mi
+  arroz se echó…»). Guarda con `compartir_secadora: true`. En `createDryingBatch`, cada grupo cuyo dueño+tipo ya tiene un
+  secado EN PROCESO en ese túnel se SUMA a él (`sumarTicketsASecado`); los demás quedan como registro compartido.
+- `sumarTicketsASecado`: solo sin `dry_start_at` (motor sin arrancar), sin hora final ni combustible, no tendal y con el
+  llenado de la cuadrilla sin pagar (409 si no). Tickets → lote (y sus inventory_movements), drying_tunnel_report_lots,
+  QQ/kg del túnel y del informe (`report_data.lots`), farmer del lote (NULL si son varios) y asignaciones LLENADO por QQ
+  escaladas + `upsertCuadrillaSecadoraEntry` (en SACOS no se escalan). Respuesta del batch trae `sumados`.
+- `assertTunnelCompartible` ya solo bloquea un túnel con hora final. Simulacro `sumar_peso_secado` (usa la secadora 1
+  real de la copia con `liberarTuneles: false`); `secadora_compartida` aparta en la copia los secados reales sin combustible.
+- Datos del 2026-10-29 (reales, vía API): caja del miércoles 28 (saldo $567.70; categorías nuevas de ingreso de la Matriz
+  RETIRO_BANCO y DEVOLUCION_FOMENTO: el banco de CEYRO no se lleva en el ERP); préstamos: STALYN Pichincha 0628395400 y
+  0610359600, CEYRO Banco Guayaquil 164306 (desde la cuota pendiente, «otros» = seguros); el combustible del secado de
+  ROVINSON del 24/10 quedó completado con costo $0 a pedido del dueño.
+
+## Cambio anterior: 🧮 Cuadre del día sin cerrar la caja (mejora 5 de la caja)
 
 - Caja › Otros registros › «🧮 Cuadre del día» (no sale en cajas de BANCO): contador de billetes ($100…$1) y monedas
   ($1, 50¢…1¢; clave «1m» = moneda de $1), comparado con el EFECTIVO del sistema. La caja sigue abierta.

@@ -16,6 +16,8 @@ try {
   if (pend.length < 4) throw new Error(`la copia no tiene 4 tickets pendientes (${pend.length})`);
   // Motor 1 = secadoras 1 y 2. Se usa el túnel 2, libre en la copia.
   const tunel = 2, motor = 1;
+  // En la copia: los secados reales del motor (liberados por sim_base, sin combustible) se apartan del motor.
+  await q("UPDATE drying_tunnel_reports SET motor_number = NULL WHERE motor_number = $1 AND motor_fuel_id IS NULL AND status = 'COMPLETED'", [motor]);
   const ocupados = await q("SELECT count(*)::int n FROM drying_tunnel_reports WHERE motor_number = $1 AND motor_fuel_id IS NULL", [motor]);
   if (ocupados[0].n > 0) throw new Error("el motor 1 tiene secados pendientes en la copia");
 
@@ -48,7 +50,7 @@ try {
   check(filas.find((f) => f.id === repServ.id)?.accionista_id === matriz && filas.find((f) => f.id === repServ.id)?.operation_type === "SECADO_PILADO"
     && filas.find((f) => f.id === repSocio.id)?.accionista_id === socio.id, "A7. cada registro conserva su dueño y su tipo (no se mezclan)");
   const repetido = await llenar([extra.id], socio.id, true);
-  check(repetido.status === 409 && /editando/.test(JSON.stringify(repetido.data)), "A8. el mismo dueño y tipo no se repite: se agrega editando su secado", mostrar(repetido));
+  check(repetido.status === 409 && /arranc/.test(JSON.stringify(repetido.data)), "A8. el mismo dueño y tipo: con el motor encendido ya no se suma", mostrar(repetido));
   const verSocio = exigir(await api("GET", "/process-flow/drying/reports", undefined, socio.id), `A9. secados de ${socio.name}`);
   const verMatriz = exigir(await api("GET", "/process-flow/drying/reports", undefined, matriz), "A10. secados de la Matriz");
   check(verSocio.some((r) => r.id === repSocio.id) && !verSocio.some((r) => r.id === repServ.id) && verMatriz.some((r) => r.id === repServ.id) && !verMatriz.some((r) => r.id === repSocio.id),
