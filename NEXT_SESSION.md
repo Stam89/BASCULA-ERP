@@ -2,7 +2,18 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📅 Fecha de pilado en Producción + botón ⏻ Salir arriba (2026-10-29)
+## Último cambio: 📅 Fomento: «Cobrar desde» por entrega + Procesos guardados con pilar juntos (2026-10-29)
+
+- Migración 20261124: `fomento_entregas.fecha_interes` (NULL = desde la fecha de la entrega). Los 7 cálculos del gasto
+  administrativo «por días» usan `COALESCE(fe.fecha_interes, fe.fecha)` (fomentos.ts listado/detalle/intereses/cartera,
+  liquidations.ts, fomento-liquidacion.ts SALDO_FOMENTO_SQL, resultado-mensual.ts). PATCH
+  /fomentos/:id/entregas/:entregaId/fecha-interes {fecha|null} (EDITAR_PRECIOS; no en meses fijos ni fomento ya
+  liquidado). Modal «Gasto administrativo por entrega»: «Cobrar desde» (guarda al salir del campo) y ↺. Simulacro
+  `fomento_fecha_interes`.
+- /processing-batches/drafts suma los QQ de `report.juntos` y devuelve tuneles_juntos / lotes_juntos; la tabla los
+  muestra y la secadora juntada no reaparece en el selector mientras esté en un borrador.
+
+## Cambio anterior: 📅 Fecha de pilado en Producción + botón ⏻ Salir arriba (2026-10-29)
 
 - Producción › «📅 ¿Qué día se piló?» (desde 15/10 hasta hoy; por defecto hoy, vuelve a hoy al finalizar; pide
   confirmación si no es hoy). finish-production acepta `fecha_pilado`; `services/fecha-pilado.ts` (fecharProcesoEn)

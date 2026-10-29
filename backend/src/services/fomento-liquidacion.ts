@@ -16,7 +16,7 @@ const SALDO_FOMENTO_SQL = `
              THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
              ELSE fe.valor * f.renta / 30.0 * GREATEST(
                (CASE WHEN f.status = 'CERRADO_LIQUIDACION' AND f.liquidado_at IS NOT NULL
-                     THEN f.liquidado_at::date ELSE CURRENT_DATE END) - fe.fecha, 0)
+                     THEN f.liquidado_at::date ELSE CURRENT_DATE END) - COALESCE(fe.fecha_interes, fe.fecha), 0)
         END)
                 FROM fomento_entregas fe WHERE fe.fomento_id = f.id), 0)
     - COALESCE((SELECT SUM(fp.valor) FROM fomento_pagos fp WHERE fp.fomento_id = f.id), 0)
