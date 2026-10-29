@@ -17309,6 +17309,15 @@ Motivo (obligatorio):`, ""));
                     const libresProd = productionDryingReports.filter((r) => !usadas.some((u) => u.id === r.id));
                     const base = selectedProductionDrying;
                     const tipoTxt = (r: DryingTunnelReport) => (tipoArrozSecado(r) === "CORRIENTE" ? "Corriente" : "0.11");
+                    // Agricultores de la secadora con su peso (sin el número de ticket); varios tickets del mismo se suman.
+                    const agricultoresTxt = (r: DryingTunnelReport) => {
+                      const porAgricultor = new Map<string, number>();
+                      for (const l of r.lots ?? []) {
+                        const n = (l.farmer_name ?? "").trim() || "Sin agricultor";
+                        porAgricultor.set(n, (porAgricultor.get(n) ?? 0) + Number(l.quintals ?? 0));
+                      }
+                      return [...porAgricultor].map(([n, qq]) => `${n} ${qq.enReal()} QQ`).join(" + ");
+                    };
                     return (
                       <>
                         <div>
@@ -17330,7 +17339,7 @@ Motivo (obligatorio):`, ""));
                                       style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                                     <span style={{ fontSize: 13, lineHeight: 1.35 }}>
                                       <strong>Secadora {r.tunnel_number}</strong> · {tipoTxt(r)} · {Number(r.total_quintals ?? 0).enReal()} QQ{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}
-                                      <small style={{ display: "block", color: "var(--c-muted)" }}>{(r.lots ?? []).map((l) => `${l.lot_code ?? ""} ${l.farmer_name ?? ""}`.trim()).join(" + ")}</small>
+                                      <small style={{ display: "block", color: "var(--c-muted)" }}>{agricultoresTxt(r)}</small>
                                       {!compatible && <small style={{ display: "block", color: "#b45309" }}>No se puede juntar: es de otro tipo de arroz o de otra clase (propio / servicio)</small>}
                                     </span>
                                   </label>
@@ -17351,7 +17360,7 @@ Motivo (obligatorio):`, ""));
                             <div className="usedLotRow" key={r.id}>
                               <div>
                                 <strong>Secadora {r.tunnel_number} · {tipoTxt(r)}{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}</strong>
-                                <small>{(r.lots ?? []).map((l) => `${l.lot_code ?? ""} · ${l.farmer_name ?? "Sin agricultor"} (${Number(l.quintals ?? 0).enReal()} QQ)`).join(" + ")}</small>
+                                <small>{agricultoresTxt(r)}</small>
                               </div>
                               <button type="button" onClick={() => quitarSecadoraProduccion(r.id)}>Quitar</button>
                             </div>
