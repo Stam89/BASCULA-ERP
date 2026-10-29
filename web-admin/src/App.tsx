@@ -17338,7 +17338,7 @@ Motivo (obligatorio):`, ""));
                                       onChange={() => setProdPick((x) => checked ? x.filter((y) => y !== r.id) : [...x, r.id])}
                                       style={{ width: 18, height: 18, marginTop: 1, flex: "0 0 auto" }} />
                                     <span style={{ fontSize: 13, lineHeight: 1.35 }}>
-                                      <strong>Secadora {r.tunnel_number}</strong> · {tipoTxt(r)} · {Number(r.total_quintals ?? 0).enReal()} QQ{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}
+                                      <strong>{r.tunnel_number ? `Secadora ${r.tunnel_number}` : "Tendal"}</strong> · {tipoTxt(r)} · {Number(r.total_quintals ?? 0).enReal()} QQ{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}
                                       <small style={{ display: "block", color: "var(--c-muted)" }}>{agricultoresTxt(r)}</small>
                                       {!compatible && <small style={{ display: "block", color: "#b45309" }}>No se puede juntar: es de otro tipo de arroz o de otra clase (propio / servicio)</small>}
                                     </span>
@@ -17359,7 +17359,7 @@ Motivo (obligatorio):`, ""));
                           {usadas.map((r) => (
                             <div className="usedLotRow" key={r.id}>
                               <div>
-                                <strong>Secadora {r.tunnel_number} · {tipoTxt(r)}{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}</strong>
+                                <strong>{r.tunnel_number ? `Secadora ${r.tunnel_number}` : "Tendal"} · {tipoTxt(r)}{esServicioDeSecado(r) ? " · 🔧 SERV. PILADA" : ""}</strong>
                                 <small>{agricultoresTxt(r)}</small>
                               </div>
                               <button type="button" onClick={() => quitarSecadoraProduccion(r.id)}>Quitar</button>
