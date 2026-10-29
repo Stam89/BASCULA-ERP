@@ -2,7 +2,19 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 🗓️ El secador se paga por el día de la HORA DE INICIO (2026-10-29)
+## Último cambio: 📅 Fecha de pilado en Producción + botón ⏻ Salir arriba (2026-10-29)
+
+- Producción › «📅 ¿Qué día se piló?» (desde 15/10 hasta hoy; por defecto hoy, vuelve a hoy al finalizar; pide
+  confirmación si no es hoy). finish-production acepta `fecha_pilado`; `services/fecha-pilado.ts` (fecharProcesoEn)
+  pasa a ese día (hora actual): processing_batches (finished/started/created), inventory_movements del proceso y del
+  «Proceso guardado» (milling_draft) de sus túneles, processing_batch_drying_lots, worker_payments PENDIENTES del proceso
+  (work_date), pilado_services.service_date y las filas creadas en el cierre (created_at = now(): custodia, insumos,
+  maquila, CxC/CxP, rendimiento, informes, sacos). Simulacro `fecha_pilado`.
+- Barra superior: botón «⏻ Salir» (con confirmación). En el celular el de la barra lateral quedaba al final del menú.
+- Datos 2026-10-29: FRANCISCO ALVARADO (#394, 2.30 QQ, STALYN) como tendal finalizado «ya venía seco» sin pago de
+  cuadrilla; agricultor JOSE SALTOS → JOFRE SALTOS (ticket #457; los nombres de báscula no llegan a tickets ingresados).
+
+## Cambio anterior: 🗓️ El secador se paga por el día de la HORA DE INICIO (2026-10-29)
 
 - Regla del dueño: la FECHA DE LLENADO fecha el pago de la CUADRILLA (sin cambios) y la HORA DE INICIO el del SECADOR.
   `diaSecadorSql()` (utils/secador-workday.ts) = día de dry_start_at en hora de Ecuador, si no filled_at, si no created_at.

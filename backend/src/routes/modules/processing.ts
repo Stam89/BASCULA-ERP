@@ -17,6 +17,7 @@ import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory
 import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
 import { sincronizarInventarioBorrador } from "../../services/borrador-pilado-inventario.js";
+import { fechaPiladoValida, fecharProcesoEn } from "../../services/fecha-pilado.js";
 
 export const processingRouter = Router();
 
@@ -354,6 +355,8 @@ const finishProductionSchema = z.object({
     sack_id: z.string().uuid(),
     cantidad: z.number().int().positive()
   })).optional(),
+  // 📅 Día en que de verdad se piló (producción de días anteriores registrada después). Sin dato = hoy.
+  fecha_pilado: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -516,6 +519,7 @@ async function exigirLoteDelProceso(client: PoolClient, processingBatchId: strin
 }
 
 export async function cerrarProcesoProduccion(processingBatchId: string, body: FinishProductionInput) {
+  const fechaPilado = fechaPiladoValida(body.fecha_pilado);
   return inTransaction(async (client) => {
     const batchResult = await client.query(
       `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila,
@@ -1041,6 +1045,12 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
         "UPDATE lots SET status = 'PROCESSED', is_maquila = $2 WHERE id = $1",
         [body.lot_id, isMaquila]
       );
+    }
+
+    // 📅 Producción de un día anterior: todo lo de este cierre pasa a esa fecha.
+    if (fechaPilado) {
+      await fecharProcesoEn(client, processingBatchId, fechaPilado);
+      updatedBatch.rows[0] = (await client.query("SELECT * FROM processing_batches WHERE id = $1", [processingBatchId])).rows[0];
     }
 
     // El cobro de pilado se informa SIEMPRE que se haya generado, no solo en

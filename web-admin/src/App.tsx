@@ -2715,6 +2715,8 @@ export function App() {
   // Peso personalizado (lb) para la opción "Pico" del selector de presentaciones.
   const [millingCustomLb, setMillingCustomLb] = useState("");
   const [millingDraftSavedAt, setMillingDraftSavedAt] = useState<string | null>(null);
+  // 📅 Día en que se piló (producción de días anteriores registrada después). Vuelve a hoy al finalizar.
+  const [fechaPilado, setFechaPilado] = useState<string>(() => hoyLocal());
   const [millingYields, setMillingYields] = useState<MillingYieldResult | null>(null);
 
   const [toasts, setToasts] = useState<Array<{ id: number; text: string; type?: "success" | "error" | "warn" }>>([]);
@@ -12663,6 +12665,8 @@ Motivo (obligatorio):`, ""));
       return;
     }
     if (effTotalQq <= 0 && !(await confirmar(`⚠️ No ha registrado arroz pilado.\n\nSolo constan ${effSubproductosQq.enReal()} QQ de subproductos. Si finaliza, el lote quedará cerrado con 0 QQ de arroz blanco.\n\n¿Confirma que este resultado es correcto?`))) return;
+    const fechaPiladoEnvio = fechaPilado && fechaPilado !== hoyLocal() ? fechaPilado : undefined;
+    if (fechaPiladoEnvio && !(await confirmar(`📅 Esta producción se registrará con fecha ${fechaPiladoEnvio.split("-").reverse().join("/")} (no hoy).\n\nEl inventario, el pago del pilador/estibador y el servicio de pilado quedan en ese día. ¿Continuar?`))) return;
 
     const inputProduct = src.rice_type === "CORRIENTE" ? rawProductCorriente : rawProduct011;
     const outputProduct = src.rice_type === "CORRIENTE" ? whiteRiceCorrienteProduct : whiteRiceProduct;
@@ -12761,8 +12765,10 @@ Motivo (obligatorio):`, ""));
       tulas: effMix.tulasCount,
       qq_de_tulas: effMix.tulaQq,
       // Sacos de la planta para el cliente del servicio (solo maquila).
-      sacos_servicio: millingEsServicio && millingSacosServicio.length ? millingSacosServicio : undefined
+      sacos_servicio: millingEsServicio && millingSacosServicio.length ? millingSacosServicio : undefined,
+      fecha_pilado: fechaPiladoEnvio
     });
+    setFechaPilado(hoyLocal());
 
     setMillingYields(result);
     setMillingSacosServicio([]);
@@ -14551,6 +14557,10 @@ Motivo (obligatorio):`, ""));
             {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
             <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null}
               onAbrir={(n) => { if (n.referencia_tipo === "sales_orders" && visibleTabs.includes("Ventas")) { setVentasView("despachos"); irATab("Ventas"); } }} />
+            <button type="button" className="btnSecondary" title="Cerrar sesión" aria-label="Cerrar sesión"
+              onClick={() => { confirmar("¿Cerrar sesión en este equipo?").then((ok) => { if (ok) logout(); }).catch(() => undefined); }}>
+              ⏻ <span className="topbarBtnTxt">Salir</span>
+            </button>
             <span className={apiOnline && !conexionServidor.sinConexion ? "pill online" : "pill offline"}>
               API {apiOnline && !conexionServidor.sinConexion ? "conectada" : "sin conexión"}
             </span>
@@ -17718,6 +17728,14 @@ Motivo (obligatorio):`, ""));
                 </div>
               ) : null}
 
+              <label style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "8px 0 4px" }}>
+                <span style={{ fontWeight: 700 }}>📅 ¿Qué día se piló?</span>
+                <input type="date" value={fechaPilado} min="2026-10-15" max={hoyLocal()}
+                  onChange={(e) => setFechaPilado(e.target.value || hoyLocal())} style={{ maxWidth: 170 }} />
+                {fechaPilado !== hoyLocal() && (
+                  <small style={{ color: "#b45309", fontWeight: 600 }}>Producción de un día anterior: queda con fecha {fechaPilado.split("-").reverse().join("/")}</small>
+                )}
+              </label>
               <div className="productionActionBar">
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
                   disabled={!selectedProductionDrying || !millingPuedeGuardar}
