@@ -916,14 +916,18 @@ async function guardarSacoRecuperado(
 
 cuadrillaRouter.get("/entries", asyncRoute(async (req, res) => {
   const { from, to } = parseRange(req.query);
+  // Solo lo que hace la CUADRILLA (pedido del dueño 2026-10-30): la bajada de carro (origen BASCULA) tiene su propia
+  // pestaña y se paga aparte. ?incluir_bajada=1 la trae igual.
+  const incluirBajada = String(req.query.incluir_bajada ?? "") === "1";
   const result = await pool.query(
     `SELECT id, work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes,
             origen, referencia_id, tunnel_number, momento,
             saco_recuperado_id, marca_saco_recuperado, destino_saco
      FROM cuadrilla_entries
      WHERE work_date BETWEEN $1 AND $2
+       AND ($3::boolean OR origen IS DISTINCT FROM 'BASCULA')
      ORDER BY work_date DESC, created_at DESC`,
-    [from, to]
+    [from, to, incluirBajada]
   );
   const total = result.rows.reduce((s, r) => s + Number(r.subtotal), 0);
   res.json({ range: { from, to }, rows: result.rows, total: round2(total) });
