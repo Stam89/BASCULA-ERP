@@ -33,6 +33,8 @@ try {
   const enEr = (await q(`SELECT count(*)::int n FROM campo_cxp WHERE id=$1 AND COALESCE(origen,'') NOT IN ('SALDO_INICIAL','ANTICIPO_MATRIZ')`, [r.cxp_id]))[0].n;
   check(enEr === 0, "9. el anticipo no entra como gasto en el Estado de Resultados de Transporte");
 
+  const h0 = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
+  check(h0.length === 0, "9b. integridad con el anticipo vivo", h0.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));
   const movId = (await q("SELECT id FROM cash_movements WHERE reference_type='campo_cxp' AND reference_id=$1", [r.cxp_id]))[0].id;
   exigir(await api("POST", `/cash/movements/${movId}/reverse`, { reason: "Simulacro: anticipo mal registrado" }, matriz), "10. anular el anticipo en la Caja");
   const quedan = Number((await q("SELECT count(*)::int n FROM campo_movimientos WHERE par_id=$1", [r.cxp_id]))[0].n);

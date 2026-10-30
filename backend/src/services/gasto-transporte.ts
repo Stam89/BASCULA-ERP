@@ -106,14 +106,14 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
     const puente = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = $1", [CRUCE])).rows[0];
     if (!puente) throw new ApiError(409, "Falta la cuenta interna CRUCE PILADORA en Transporte.");
     await client.query(
-      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, naturaleza, par_id, created_by)
-       VALUES ($1, $2, 'entrada', $3, $4, 'anticipo_matriz', $5, $6)`,
-      [fecha, puente.id, total, `${matriz.name} entregó el anticipo a ${operador} (Transporte se lo debe)`, cxp.id, i.userId ?? null]
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, naturaleza, par_id, cliente_id, created_by)
+       VALUES ($1, $2, 'entrada', $3, $4, 'anticipo_matriz', $5, $6, $7)`,
+      [fecha, puente.id, total, `${matriz.name} entregó el anticipo a ${operador} (Transporte se lo debe)`, cxp.id, clienteId, i.userId ?? null]
     );
     await client.query(
-      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, estado, par_id, created_by)
-       VALUES ($1, $2, 'salida', $3, $4, 'PENDIENTE_RENDICION', $5, $6)`,
-      [fecha, puente.id, total, `${concepto} (lo dio ${matriz.name})`.slice(0, 400), cxp.id, i.userId ?? null]
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, estado, par_id, cliente_id, created_by)
+       VALUES ($1, $2, 'salida', $3, $4, 'PENDIENTE_RENDICION', $5, $6, $7)`,
+      [fecha, puente.id, total, `${concepto} (lo dio ${matriz.name})`.slice(0, 400), cxp.id, clienteId, i.userId ?? null]
     );
   }
   // 2) Hoja de vida de la máquina en Transporte (solo si es un trabajo en una máquina).
