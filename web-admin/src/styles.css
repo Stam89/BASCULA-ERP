@@ -5488,6 +5488,38 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .invxModal__marcaFila strong { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .invxModal__marcaPie { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
 .invxModal__pres { display: flex; flex-wrap: wrap; gap: 4px; }
+/* 📱 Transporte y Cosechadora en celular / tablet angosta: cada fila de tabla es una tarjeta «Etiqueta: valor».
+   Las etiquetas las pone campo/tablasMovil.ts desde el encabezado de cada columna. */
+@media (max-width: 700px) {
+  body.campoActivo table.tablaTarjeta { min-width: 0 !important; width: 100% !important; border: 0; background: transparent; }
+  body.campoActivo table.tablaTarjeta > thead { display: none; }
+  body.campoActivo table.tablaTarjeta > tbody, body.campoActivo table.tablaTarjeta > tfoot { display: block; width: 100%; }
+  body.campoActivo table.tablaTarjeta > tbody > tr, body.campoActivo table.tablaTarjeta > tfoot > tr {
+    display: block; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--c-border, #e5e7eb); border-radius: 12px;
+    background: var(--c-surface, #fff); box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
+  }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td, body.campoActivo table.tablaTarjeta > tfoot > tr > td {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0; border: 0;
+    min-width: 0 !important; max-width: none !important; width: auto !important; white-space: normal !important;
+    text-align: right; font-size: 14px; overflow-wrap: anywhere;
+  }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td + td { border-top: 1px dashed #eef2f7; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td::before {
+    content: attr(data-label); flex: 0 0 auto; max-width: 45%; text-align: left; color: #64748b; font-size: 12px; font-weight: 600;
+  }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""]::before { content: none; }
+  /* Primera celda = título de la tarjeta; celdas que abarcan columnas y botones = a lo ancho */
+  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child { font-weight: 700; font-size: 15px; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-ancha,
+  body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""] { display: block; text-align: left; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td:has(button) { flex-wrap: wrap; }
+  body.campoActivo table.tablaTarjeta td button { min-height: 38px; }
+  body.campoActivo table.tablaTarjeta td input, body.campoActivo table.tablaTarjeta td select { max-width: 60%; }
+  body.campoActivo table.tablaTarjeta td .chip { white-space: normal; }
+  /* Tabla dentro de una tarjeta (detalle expandido, recibo): también en tarjetitas, sin sombra */
+  body.campoActivo table.tablaTarjeta table.tablaTarjeta > tbody > tr { box-shadow: none; background: #f8fafc; margin-bottom: 6px; }
+  body.campoActivo table.tablaTarjeta td > table { width: 100%; }
+}
 /* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
 .nomMatriz__recibo summary { cursor: pointer; color: #1d4ed8; font-weight: 600; }

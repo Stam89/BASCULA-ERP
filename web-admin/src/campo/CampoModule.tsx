@@ -6,6 +6,7 @@ import { ventanaDeImpresion } from "../impresion";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useTablasEnTarjetas } from "./tablasMovil";
 import { apiFetch, apiGet, apiOk, apiPost, apiPut, esAdministrador } from "../api";
 
 // PATCH a la maquinaria (campo_activos): el endpoint es PATCH (no PUT).
@@ -3527,6 +3528,8 @@ export function CampoWorkspace({ operationSelector, userName, roleName, apiOnlin
   // Celular: el menú lateral es un cajón que se abre con ☰ (en PC no cambia nada).
   const [menuMovilAbierto, setMenuMovilAbierto] = useState(false);
   useEffect(() => { setMenuMovilAbierto(false); }, [seccion]);
+  // 📱 En el celular las tablas se ven como tarjetas (sin deslizar de lado).
+  useTablasEnTarjetas();
   const activa = CAMPO_SECCIONES.find((s) => s.id === seccion) ?? secciones[0] ?? CAMPO_SECCIONES[0];
   const iniciales = userName.split(/\s+/).slice(0, 2).map((p) => p[0]?.toUpperCase() ?? "").join("");
   return (
