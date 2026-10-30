@@ -36,6 +36,8 @@ type FilaMatriz = {
   vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
   /** 📄 Recibo: cada parte pendiente con su fecha, agricultor y QQ. */
   detalle?: Array<{ fecha: string; qq: number; agricultor: string | null }>;
+  /** La tarifa es la del operador en OTRA máquina del mismo tipo (no tiene tarifa en esta). */
+  tarifa_de_maquina?: string | null;
 };
 // Lo que el usuario escribió en la fila (vacío = valor sugerido).
 type Edicion = { base?: string; extras?: string; descuentos?: string; nota?: string; excluir?: boolean };
@@ -264,7 +266,7 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
           ? <small className="nomMatriz__sub">Pago fijo semanal</small>
           : f.sin_tarifa
             ? <small className="nomMatriz__alerta">⚠️ sin tarifa</small>
-            : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}</small>}</>
+            : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}{f.tarifa_de_maquina ? ` (tarifa de ${f.tarifa_de_maquina})` : ""}</small>}</>
           : <span className="muted">—</span>}
         {f.modalidad_fija && f.produccion_sugerida != null && <small className="nomMatriz__sub">Referencia por producción: {money(f.produccion_sugerida)}</small>}
         {(f.detalle?.length ?? 0) > 0 && (

@@ -1719,6 +1719,8 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
 }) {
   const [f, setF] = useState({
     fecha: hoy(), activo_sel: ACTIVO_GENERAL, categoria_id: "", concepto: "", monto: "", cuenta_id: "", es_anticipo: false,
+    // 👷 Anticipo: a qué operador (su nombre va en el concepto y la nómina lo propone como descuento).
+    operador: "",
     // Desgaste de la máquina (opcional): lectura y su unidad ("" = la de la familia).
     lectura: "", unidad: "" as "" | "KM" | "HORAS",
     // Solo REPARACION_MANT: tipo de mantenimiento, repuesto/trabajo y descripción.
@@ -1729,6 +1731,12 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
     factura: ""
   });
   const [busy, setBusy] = useState(false);
+  // 👷 Operadores activos (para el anticipo de un operador).
+  const [operadoresVale, setOperadoresVale] = useState<string[]>([]);
+  useEffect(() => {
+    if (!f.es_anticipo || operadoresVale.length) return;
+    apiGet<Array<{ nombre: string }>>("/campo/operadores?solo_activos=1").then((r) => setOperadoresVale(r.map((x) => x.nombre))).catch(() => undefined);
+  }, [f.es_anticipo, operadoresVale.length]);
   // 🧾 Nota del taller (2026-10-26): repuestos y mano de obra de una misma nota; un solo pago por el total.
   type LineaNota = { cantidad: string; descripcion: string; clase: "REPUESTO" | "MANO_OBRA"; valor: string };
   const lineaVacia = (): LineaNota => ({ cantidad: "1", descripcion: "", clase: "REPUESTO", valor: "" });
@@ -1829,7 +1837,8 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
       } else {
         await apiPost("/campo/movimientos", {
           fecha: f.fecha, cuenta_id: aCredito ? undefined : f.cuenta_id, signo: "salida", monto,
-          concepto: f.concepto.trim() || undefined, categoria_id: f.categoria_id,
+          concepto: (f.es_anticipo && f.operador ? [`Anticipo a ${f.operador}`, f.concepto.trim()].filter(Boolean).join(" · ") : f.concepto.trim()) || undefined,
+          categoria_id: f.categoria_id,
           activo_id: activoSel?.id,
           es_anticipo: f.es_anticipo || undefined,
           proveedor: f.proveedor.trim() || undefined,
@@ -1838,7 +1847,7 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
           lectura: lectura ?? undefined, unidad_lectura: lectura != null ? unidad : undefined
         });
       }
-      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, lectura: "", unidad: "",
+      setF({ ...f, concepto: "", monto: "", categoria_id: "", es_anticipo: false, operador: "", lectura: "", unidad: "",
         tipo_mant: "CORRECTIVO", repuesto: "", descripcion: "", proveedor: "", modalidad: "CONTADO", vence: "" });
       await onSaved();
     } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
@@ -2007,7 +2016,15 @@ function EgresoForm({ cuentas, categorias, activos, onSaved, onError }: {
           <input type="checkbox" checked={f.es_anticipo} onChange={(e) => setF({ ...f, es_anticipo: e.target.checked, modalidad: e.target.checked ? "CONTADO" : f.modalidad })} style={{ width: "auto" }} />
           <span style={{ margin: 0 }}>Rendir cuentas · dinero entregado por rendir (Anticipo)</span>
         </label>
-        {f.es_anticipo && <p className="muted" style={{ margin: 0, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>. Podrás liquidarlo en 📋 Vales / Anticipos.</p>}
+        {f.es_anticipo && (
+          <label style={{ margin: 0 }}><span>👷 ¿Es anticipo de un operador? <span className="muted" style={{ fontWeight: 400 }}>(se le descuenta en su nómina)</span></span>
+            <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
+              <option value="">— No, es otro vale —</option>
+              {operadoresVale.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </label>
+        )}
+        {f.es_anticipo && <p className="muted" style={{ margin: 0, fontSize: 12 }}>Se guardará como <strong>vale pendiente</strong>{f.operador ? <> de <strong>{f.operador}</strong>: la nómina lo propone como descuento</> : <>. Podrás liquidarlo en 📋 Vales / Anticipos</>}.</p>}
       </section>
       <button className="primary" disabled={busy}>{busy ? "Guardando…" : notaActiva ? `Registrar nota $${totalNota.toFixed(2)}${aCredito ? " a crédito" : ""}` : f.es_anticipo ? "Registrar anticipo" : aCredito ? "Registrar egreso a crédito" : "Registrar egreso"}</button>
     </form>

@@ -55,6 +55,9 @@ export type GastoTransporteInput = {
   items: Array<{ nombre: string; cantidad: number; costo_unitario: number; tipo?: "REPUESTO" | "INSUMO" }>;
   factura?: string | null;
   userId?: string | null;
+  /** 👷 Anticipo a un operador de Transporte (pedido del dueño 2026-10-29): no es gasto, queda como VALE del
+   *  operador (se descuenta en su nómina) y Transporte le debe a la Matriz lo que ella entregó. */
+  anticipoOperador?: string | null;
 };
 
 export async function registrarGastoTransporte(client: PoolClient, i: GastoTransporteInput) {
@@ -62,7 +65,9 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
   const totalItems = round2(items.reduce((s, x) => s + x.cantidad * x.costo_unitario, 0));
   const total = round2((Number(i.manoObra) || 0) + totalItems + (Number(i.monto) || 0));
   if (!(total > 0)) throw new ApiError(400, "El gasto de Transporte necesita un monto (mano de obra o lo comprado).");
-  if (!i.activoId && !i.categoria) throw new ApiError(400, "Elige la máquina o la categoría del gasto de Transporte.");
+  const operador = (i.anticipoOperador ?? "").trim().toUpperCase();
+  if (operador && (i.activoId || items.length > 0 || Number(i.manoObra) > 0)) throw new ApiError(400, "El anticipo a un operador es solo un monto, sin máquina ni cosas compradas.");
+  if (!operador && !i.activoId && !i.categoria) throw new ApiError(400, "Elige la máquina o la categoría del gasto de Transporte.");
 
   const matriz = (await client.query("SELECT id, name, tipo FROM accionistas WHERE id = $1", [i.matrizId])).rows[0];
   if (matriz?.tipo !== "MATRIZ") throw new ApiError(403, "Solo la caja de la Matriz paga gastos de Transporte.");
@@ -76,22 +81,41 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
 
   const fecha = hoyEc();
   const clienteId = await clienteCampoDe(client, matriz.name);
-  const nombreCategoria = (i.categoria ?? "").trim().toUpperCase() || "REPARACION_MANT";
-  const categoria = (await client.query("SELECT id FROM campo_categorias_gasto WHERE nombre = $1 LIMIT 1", [nombreCategoria])).rows[0]?.id ?? null;
-  if (!categoria && !activo) throw new ApiError(400, `No existe la categoría «${nombreCategoria}» en Transporte y Cosechadora.`);
+  const nombreCategoria = operador ? "ANTICIPO OPERADOR" : (i.categoria ?? "").trim().toUpperCase() || "REPARACION_MANT";
+  const categoria = operador ? null : (await client.query("SELECT id FROM campo_categorias_gasto WHERE nombre = $1 LIMIT 1", [nombreCategoria])).rows[0]?.id ?? null;
+  if (!operador && !categoria && !activo) throw new ApiError(400, `No existe la categoría «${nombreCategoria}» en Transporte y Cosechadora.`);
   const conTrabajo = !!activo && (Number(i.manoObra) > 0 || items.length > 0);
   const tipoTxt = !conTrabajo ? nombreCategoria.replace(/_/g, " ").toLowerCase().replace(/^./, (c) => c.toUpperCase())
     : i.tipo === "CORRECTIVO" ? "Reparación" : i.tipo === "PREVENTIVO" ? "Mantenimiento" : "Compra de repuesto";
   const detalleItems = items.map((x) => `${Number.isInteger(x.cantidad) ? x.cantidad : x.cantidad.toFixed(2)} ${x.nombre.toUpperCase()}${x.tipo === "INSUMO" ? " (insumo)" : ""} $${round2(x.cantidad * x.costo_unitario).toFixed(2)}`).join(", ");
   const pagadoA = (i.pagadoA ?? "").trim();
-  const concepto = `${tipoTxt}${activo ? ` ${activo.nombre}` : ""}: ${i.descripcion}${pagadoA ? ` (a ${pagadoA})` : ""}`.slice(0, 400);
+  const concepto = operador
+    ? `Anticipo a ${operador}${i.descripcion && !/^anticipo/i.test(i.descripcion) ? `: ${i.descripcion}` : ""}`.slice(0, 400)
+    : `${tipoTxt}${activo ? ` ${activo.nombre}` : ""}: ${i.descripcion}${pagadoA ? ` (a ${pagadoA})` : ""}`.slice(0, 400);
 
   // 1) Transporte: su gasto y su deuda con la Matriz.
   const cxp = (await client.query(
     `INSERT INTO campo_cxp (fecha, acreedor, concepto, monto, created_by, categoria_id, activo_id, origen, cliente_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 'GASTO_PAGADO_MATRIZ', $8) RETURNING id`,
-    [fecha, matriz.name, `Pagado por la caja de ${matriz.name} · ${concepto}`, total, i.userId ?? null, categoria, activo?.id ?? null, clienteId]
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $9, $8) RETURNING id`,
+    [fecha, matriz.name, `Pagado por la caja de ${matriz.name} · ${concepto}`, total, i.userId ?? null, categoria, activo?.id ?? null, clienteId,
+     operador ? "ANTICIPO_MATRIZ" : "GASTO_PAGADO_MATRIZ"]
   )).rows[0];
+  // 👷 El anticipo queda como VALE del operador en Transporte (por la cuenta interna, sin mover su caja): entra lo que
+  // dio la Matriz y sale el vale pendiente, que la nómina del operador propone descontar. Los dos llevan par_id = cxp.
+  if (operador) {
+    const puente = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = $1", [CRUCE])).rows[0];
+    if (!puente) throw new ApiError(409, "Falta la cuenta interna CRUCE PILADORA en Transporte.");
+    await client.query(
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, naturaleza, par_id, created_by)
+       VALUES ($1, $2, 'entrada', $3, $4, 'anticipo_matriz', $5, $6)`,
+      [fecha, puente.id, total, `${matriz.name} entregó el anticipo a ${operador} (Transporte se lo debe)`, cxp.id, i.userId ?? null]
+    );
+    await client.query(
+      `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, estado, par_id, created_by)
+       VALUES ($1, $2, 'salida', $3, $4, 'PENDIENTE_RENDICION', $5, $6)`,
+      [fecha, puente.id, total, `${concepto} (lo dio ${matriz.name})`.slice(0, 400), cxp.id, i.userId ?? null]
+    );
+  }
   // 2) Hoja de vida de la máquina en Transporte (solo si es un trabajo en una máquina).
   const mant = !conTrabajo ? null : (await client.query(
     `INSERT INTO campo_mantenimientos (fecha, activo_id, tipo, detalle, proveedor, factura, costo, observaciones, created_by, cxp_id)
@@ -168,6 +192,12 @@ export async function anularGastoTransporte(client: PoolClient, cxpId: string, m
     [cxpId, compensacionId]
   )).rows[0].n);
   if (otros > 0) throw new ApiError(409, "Transporte ya pagó parte de este gasto: anula primero ese pago en Transporte y Cosechadora.");
+  // 👷 Anticipo a operador: su vale se borra solo si todavía no se descontó en la nómina.
+  const valeUsado = (await client.query(
+    "SELECT 1 FROM campo_movimientos WHERE par_id = $1 AND signo = 'salida' AND estado IS DISTINCT FROM 'PENDIENTE_RENDICION'", [cxpId]
+  )).rowCount;
+  if (valeUsado) throw new ApiError(409, "Ese anticipo ya se descontó en la nómina del operador: anula primero ese pago de nómina en Transporte.");
+  await client.query("DELETE FROM campo_movimientos WHERE par_id = $1 AND naturaleza IN ('anticipo_matriz', 'operativo') AND cxp_id IS NULL", [cxpId]);
   if (compensacionId) {
     if (mant) await client.query("UPDATE campo_mantenimientos SET compensacion_id = NULL WHERE id = $1", [mant.id]);
     await client.query("UPDATE campo_cxp SET compensacion_id = NULL WHERE id = $1", [cxpId]);

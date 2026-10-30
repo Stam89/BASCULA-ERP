@@ -1685,7 +1685,7 @@ async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
             COUNT(DISTINCT p.fecha)::int AS dias,
             SUM(p.qq)::float AS qq,
             MIN(p.fecha) AS desde, MAX(p.fecha) AS hasta,
-            t.tarifa::float AS tarifa, t.unidad AS unidad,
+            t.tarifa::float AS tarifa, t.unidad AS unidad, t.maquina_tarifa,
             array_agg(p.id) AS parte_ids,
             -- 📄 Recibo: cada parte con su fecha, agricultor (o cliente) y QQ.
             json_agg(json_build_object('fecha', to_char(p.fecha, 'YYYY-MM-DD'), 'qq', p.qq::float,
@@ -1695,10 +1695,18 @@ async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
        LEFT JOIN farmers fp ON fp.id = p.farmer_id
        LEFT JOIN weighing_tickets wt ON p.origen_uid LIKE 'weighing_ticket:%' AND wt.id::text = substring(p.origen_uid FROM 17)
        LEFT JOIN farmers ft ON ft.id = wt.farmer_id
-       LEFT JOIN campo_tarifas_operador t
-         ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
+       -- Tarifa del operador en ESTA máquina; si no tiene, la suya de otra máquina del mismo tipo (pedido del dueño
+       -- 2026-10-29: LEONEL manejó la COS.8 un día y su tarifa está en la COS.10).
+       LEFT JOIN LATERAL (
+         SELECT t.tarifa, t.unidad, CASE WHEN t.activo_id = p.activo_id THEN NULL ELSE a2.nombre END AS maquina_tarifa
+           FROM campo_tarifas_operador t JOIN campo_activos a2 ON a2.id = t.activo_id
+          WHERE lower(t.operador) = lower(p.operador) AND t.activo = true
+            AND (t.activo_id = p.activo_id OR a2.tipo = a.tipo)
+          ORDER BY (t.activo_id = p.activo_id) DESC, a2.nombre
+          LIMIT 1
+       ) t ON true
       WHERE ${conds.join(" AND ")}
-      GROUP BY p.operador, p.activo_id, a.nombre, a.tipo, t.tarifa, t.unidad
+      GROUP BY p.operador, p.activo_id, a.nombre, a.tipo, t.tarifa, t.unidad, t.maquina_tarifa
       ORDER BY p.operador, a.nombre`,
     params
   )).rows;
@@ -1714,6 +1722,7 @@ async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
       operador: r.operador, activo_id: r.activo_id, activo_nombre: r.activo_nombre, activo_tipo: r.activo_tipo,
       viajes: r.viajes, qq: Number(r.qq || 0), dias: r.dias, desde: r.desde, hasta: r.hasta,
       unidad, tarifa, base, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[],
+      tarifa_de_maquina: (r.maquina_tarifa ?? null) as string | null,
       detalle: (r.detalle ?? []) as Array<{ fecha: string; qq: number; agricultor: string | null }>
     };
   });
@@ -1783,6 +1792,7 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
     sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
     vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
     detalle: Array<{ fecha: string; qq: number; agricultor: string | null }>;
+    tarifa_de_maquina?: string | null;
   };
   type OperadorNomina = { id: string; nombre: string; cargo: string | null; sueldo_semanal: number };
   const operadoresNomina = operadores.rows as OperadorNomina[];
@@ -1795,7 +1805,7 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
     sueldo_semanal: 0, modalidad_fija: false, sueldo_semanal_principal: false,
     sueldo_semanal_pagado: false, periodo_semanal: periodoSemanal,
     sin_tarifa: g.sin_tarifa, parte_ids: g.parte_ids,
-    desde: g.desde, hasta: g.hasta, vales: [], detalle: g.detalle
+    desde: g.desde, hasta: g.hasta, vales: [], detalle: g.detalle, tarifa_de_maquina: g.tarifa_de_maquina
   }));
   const conFilas = new Set(filas.map((f) => f.operador.trim().toLowerCase()));
   const habitual = new Map(habituales.rows.map((h) => [String(h.operador).trim().toLowerCase(), h]));
@@ -1934,8 +1944,14 @@ campoRouter.post("/nomina-operadores/lote", asyncRoute(async (req, res) => {
                 t.tarifa::float AS tarifa, t.unidad
            FROM campo_partes p
            JOIN campo_activos a ON a.id = p.activo_id
-           LEFT JOIN campo_tarifas_operador t
-             ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
+           LEFT JOIN LATERAL (
+             SELECT t.tarifa, t.unidad
+               FROM campo_tarifas_operador t JOIN campo_activos a2 ON a2.id = t.activo_id
+              WHERE lower(t.operador) = lower(p.operador) AND t.activo = true
+                AND (t.activo_id = p.activo_id OR a2.tipo = a.tipo)
+              ORDER BY (t.activo_id = p.activo_id) DESC, a2.nombre
+              LIMIT 1
+           ) t ON true
           WHERE p.id = ANY($1::uuid[]) AND p.operador_pagado_at IS NULL
           ORDER BY p.fecha, p.id
           FOR UPDATE OF p`,
@@ -2053,8 +2069,16 @@ campoRouter.post("/nomina-operadores/liquidar", asyncRoute(async (req, res) => {
               t.tarifa::float AS tarifa, t.unidad
        FROM campo_partes p
        JOIN campo_activos a ON a.id = p.activo_id
-       LEFT JOIN campo_tarifas_operador t
-         ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
+       -- Tarifa del operador en ESTA máquina; si no tiene, la suya de otra máquina del mismo tipo (pedido del dueño
+       -- 2026-10-29: LEONEL manejó la COS.8 un día y su tarifa está en la COS.10).
+       LEFT JOIN LATERAL (
+         SELECT t.tarifa, t.unidad, CASE WHEN t.activo_id = p.activo_id THEN NULL ELSE a2.nombre END AS maquina_tarifa
+           FROM campo_tarifas_operador t JOIN campo_activos a2 ON a2.id = t.activo_id
+          WHERE lower(t.operador) = lower(p.operador) AND t.activo = true
+            AND (t.activo_id = p.activo_id OR a2.tipo = a.tipo)
+          ORDER BY (t.activo_id = p.activo_id) DESC, a2.nombre
+          LIMIT 1
+       ) t ON true
        WHERE p.id = ANY($1::uuid[]) AND p.operador_pagado_at IS NULL
        ORDER BY p.fecha, p.id
        FOR UPDATE OF p`,
@@ -2674,7 +2698,7 @@ campoRouter.delete("/cxp/:id", requireAdmin, asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     const cxp = (await client.query("SELECT origen FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
-    if (cxp.origen === "GASTO_PAGADO_MATRIZ") throw new ApiError(409, "Este gasto lo pagó la caja de la piladora: se anula desde esa Caja.");
+    if (cxp.origen === "GASTO_PAGADO_MATRIZ" || cxp.origen === "ANTICIPO_MATRIZ") throw new ApiError(409, "Este gasto lo pagó la caja de la piladora: se anula desde esa Caja.");
     const pagos = Number((await client.query(
       "SELECT COUNT(*)::int AS n FROM campo_movimientos WHERE cxp_id = $1", [req.params.id]
     )).rows[0].n);

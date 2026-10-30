@@ -189,7 +189,7 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
      SELECT 'gasto', COALESCE(cat.nombre, 'COMPRA_CREDITO'), c.activo_id, c.monto::float, NULL
        FROM campo_cxp c
        LEFT JOIN campo_categorias_gasto cat ON cat.id = c.categoria_id
-      WHERE c.fecha BETWEEN $1 AND $2 AND COALESCE(c.origen, '') <> 'SALDO_INICIAL'`,
+      WHERE c.fecha BETWEEN $1 AND $2 AND COALESCE(c.origen, '') NOT IN ('SALDO_INICIAL', 'ANTICIPO_MATRIZ')`,
     [desde, hasta]
   );
   return r.rows as LineaCruda[];

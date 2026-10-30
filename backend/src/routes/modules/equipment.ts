@@ -442,10 +442,13 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
       cantidad: z.number().positive(),
       costo_unitario: z.number().nonnegative(),
       tipo: z.enum(["REPUESTO", "INSUMO"]).optional()
-    })).max(40).default([])
+    })).max(40).default([]),
+    // 👷 Anticipo a un operador de Transporte (queda como su vale; se descuenta en su nómina).
+    anticipo_operador: z.string().trim().min(2).max(120).optional()
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
   const out = await inTransaction((client) => registrarGastoTransporte(client, {
+    anticipoOperador: body.anticipo_operador ?? null,
     matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id ?? null, tipo: body.maintenance_type,
     categoria: body.categoria ?? null, monto: body.monto ?? null, pagadoA: body.pagado_a ?? null,
     descripcion: body.description, provider: body.provider, hechoPorTipo: body.hecho_por_tipo ?? null, compradoPor: body.comprado_por,

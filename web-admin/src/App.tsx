@@ -2931,6 +2931,9 @@ export function App() {
   const [movDeTransporte, setMovDeTransporte] = useState(false);
   const [movTrCategoria, setMovTrCategoria] = useState("");
   const [movTrActivo, setMovTrActivo] = useState("");
+  // 👷 Anticipo a un operador de Transporte (categoría ANTICIPO_OPERADOR): queda como su vale y se descuenta en su nómina.
+  const [movTrOperador, setMovTrOperador] = useState("");
+  const [campoOperadores, setCampoOperadores] = useState<string[]>([]);
   const [campoCategoriasGasto, setCampoCategoriasGasto] = useState<string[]>([]);
   // Componente elegido en el buscador que es una máquina de Transporte (abre «Trabajo en un equipo» con ella).
   const [teqActivoInicial, setTeqActivoInicial] = useState<string | undefined>(undefined);
@@ -10529,16 +10532,19 @@ export function App() {
     const limpiarEgreso = () => {
       safeResetForm(formElement);
       setMovCategory(""); setMovSubcategoria(""); setMovProveedor(""); setMovVence(""); setMovOpcionesOpen(false);
-      setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo("");
+      setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo(""); setMovTrOperador("");
       setMovNoEfectivo(false); setMovPagadoPor(""); setMovPorCuentaDe("");
     };
     // 🚜 Gasto de Transporte y Cosechadora pagado con esta caja (la Matriz).
     if (movement === "EXPENSE" && esMatrizActiva && movDeTransporte && !esFondo && !aCredito && category !== "COMPRA_ACTIVO_FIJO") {
       const catNombre = cashCategories.find((c) => c.codigo === category)?.nombre ?? category;
+      const esAnticipoOp = movTrCategoria === "ANTICIPO_OPERADOR";
+      if (esAnticipoOp && !movTrOperador) throw new Error("Elige a qué operador se le dio el anticipo.");
       const r = await apiPost<{ total: number; descontado: number; por_cobrar: number }>("/equipment/transporte/gasto", {
         cash_register_id: registerId,
-        categoria: movTrCategoria || "OTROS",
-        activo_id: movTrActivo || undefined,
+        categoria: esAnticipoOp ? undefined : movTrCategoria || "OTROS",
+        activo_id: esAnticipoOp ? undefined : movTrActivo || undefined,
+        anticipo_operador: esAnticipoOp ? movTrOperador : undefined,
         monto: amount,
         description: [category === "GASTO_OPERATIVO" && (movSubcategoria.trim() || descripcionTxt) ? "" : catNombre, movSubcategoria.trim(), descripcionTxt, conTarjeta ? "pagado con tarjeta" : ""].filter(Boolean).join(" · ") || "Gasto de Transporte",
         pagado_a: provTxt || undefined,
@@ -20961,18 +20967,37 @@ Motivo (obligatorio):`, ""));
                               {movDeTransporte && (
                                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 8, marginTop: 8 }}>
                                   <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Categoría en Transporte</span>
-                                    <select value={movTrCategoria} onChange={(e) => setMovTrCategoria(e.target.value)} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
-                                      {[...new Set([...(campoCategoriasGasto.length ? campoCategoriasGasto : ["DIESEL", "GASOLINA", "VIATICOS", "REPARACION_MANT", "TRASLADO", "MATRICULACION", "OPERA", "OTROS"]), movTrCategoria].filter(Boolean))]
+                                    <select value={movTrCategoria} onChange={(e) => {
+                                      setMovTrCategoria(e.target.value);
+                                      if (e.target.value === "ANTICIPO_OPERADOR" && campoOperadores.length === 0) {
+                                        apiGet<Array<{ nombre: string }>>("/campo/operadores?solo_activos=1").then((r) => setCampoOperadores(r.map((x) => x.nombre))).catch(() => undefined);
+                                      }
+                                    }} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                      <option value="ANTICIPO_OPERADOR">👷 ANTICIPO A OPERADOR</option>
+                                      {[...new Set([...(campoCategoriasGasto.length ? campoCategoriasGasto : ["DIESEL", "GASOLINA", "VIATICOS", "REPARACION_MANT", "TRASLADO", "MATRICULACION", "OPERA", "OTROS"]), movTrCategoria].filter((c) => c && c !== "ANTICIPO_OPERADOR"))]
                                         .map((c) => <option key={c} value={c}>{c.replace(/_/g, " ")}</option>)}
                                     </select>
                                   </label>
+                                  {movTrCategoria === "ANTICIPO_OPERADOR" ? (
+                                    <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>¿A qué operador? *</span>
+                                      <select value={movTrOperador} onChange={(e) => setMovTrOperador(e.target.value)} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
+                                        <option value="">Seleccione</option>
+                                        {campoOperadores.map((o) => <option key={o} value={o}>{o}</option>)}
+                                      </select>
+                                    </label>
+                                  ) : (
                                   <label style={{ fontSize: 12.5, fontWeight: 600 }}><span style={{ display: "block", marginBottom: 4 }}>Máquina <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
                                     <select value={movTrActivo} onChange={(e) => setMovTrActivo(e.target.value)} style={{ width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 13 }}>
                                       <option value="">— General —</option>
                                       {fletaActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
                                     </select>
                                   </label>
-                                  <small className="muted" style={{ gridColumn: "1 / -1" }}>Sale de esta caja pero es gasto de Transporte: primero se descuenta de lo que {matrizName || "la Matriz"} le debe a Transporte y el resto Transporte se lo queda debiendo (Por Cobrar).</small>
+                                  )}
+                                  <small className="muted" style={{ gridColumn: "1 / -1" }}>
+                                    {movTrCategoria === "ANTICIPO_OPERADOR"
+                                      ? <>👷 No es gasto: queda como <strong>vale del operador</strong> en Transporte y se le descuenta en su nómina. Transporte le debe a {matrizName || "la Matriz"} lo entregado (primero se descuenta de lo que {matrizName || "la Matriz"} le debe a Transporte).</>
+                                      : <>Sale de esta caja pero es gasto de Transporte: primero se descuenta de lo que {matrizName || "la Matriz"} le debe a Transporte y el resto Transporte se lo queda debiendo (Por Cobrar).</>}
+                                  </small>
                                 </div>
                               )}
                             </div>
