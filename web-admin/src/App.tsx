@@ -4355,7 +4355,7 @@ export function App() {
     [stock]
   );
   const otherStockRows = useMemo(
-    () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cáscara", "Producto", "Subproducto"].includes(stockGroupLabel(row))),
+    () => stock.filter((row) => row.warehouse_type !== "EXTERNO" && !["Cáscara", "Producto", "Subproducto", "Marca / Empacado"].includes(stockGroupLabel(row))),
     [stock]
   );
   // 🧮 Total para vender (pedido del dueño 2026-10-29): la vendedora ve cuántos QQ hay de cada producto SIN importar
