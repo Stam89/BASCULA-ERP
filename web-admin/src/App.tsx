@@ -4370,8 +4370,11 @@ export function App() {
       if (!(tipo in orden)) continue;
       const qq = Number(r.quantity) || 0;
       if (Math.abs(qq) < 0.0005) continue;
-      const k = r.product_id ?? r.product_name;
-      const x = m.get(k) ?? { nombre: r.product_name, tipo, piladora: 0, alla: [] };
+      // Las marcas (Flor, Oso…) son el mismo arroz 0.11 / Corriente: se suman a su producto base.
+      const baseId = tipo === "PACKAGED_GOOD" ? getInventoryProductForBrand(r.product_name) : null;
+      const base = baseId ? products.find((p) => p.id === baseId && p.product_type === "FINISHED_GOOD") : undefined;
+      const k = base?.id ?? r.product_id ?? r.product_name;
+      const x = m.get(k) ?? { nombre: base?.name ?? r.product_name, tipo: base ? "FINISHED_GOOD" : tipo, piladora: 0, alla: [] };
       if (r.warehouse_type === "EXTERNO") x.alla.push({ donde: r.warehouse_name.replace(/^Allá:\s*/i, ""), qq });
       else x.piladora += qq;
       m.set(k, x);
@@ -4380,7 +4383,8 @@ export function App() {
       .map((x) => ({ ...x, total: x.piladora + x.alla.reduce((s, a) => s + a.qq, 0) }))
       .filter((x) => Math.abs(x.total) > 0.0005)
       .sort((a, b) => (orden[a.tipo] - orden[b.tipo]) || b.total - a.total);
-  }, [stock, visibleInventoryProducts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stock, visibleInventoryProducts, products, sackInventory]);
   const criticalSupplies = useMemo(
     () => insumos.filter((item) => item.is_critical),
     [insumos]
@@ -17000,7 +17004,7 @@ Motivo (obligatorio):`, ""));
               <section className="invTotalVender" style={{ gridColumn: "1 / -1" }}>
                 <div className="invTotalVender__cab">
                   <h3>🧮 Total para vender</h3>
-                  <small className="muted">QQ de cada producto sin importar dónde esté (el detalle por bodega está abajo)</small>
+                  <small className="muted">QQ de cada producto sin importar dónde esté, con sus marcas sumadas (el detalle está abajo)</small>
                 </div>
                 <div className="invTotalVender__grid">
                   {totalParaVender.map((x) => (
