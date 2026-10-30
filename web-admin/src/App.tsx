@@ -5101,12 +5101,21 @@ export function App() {
     // (cruce con lo que la Matriz le debe a Transporte; el anticipo queda como vale del operador).
     if (f.movement === "EXPENSE" && d && (d.tipo === "transporte" || d.tipo === "anticipo")) {
       const operador = d.tipo === "anticipo" ? d.valor.replace(/^.*·\s*/, "").trim() : undefined;
+      // 🔧 Mantenimiento, repuesto o material de UNA máquina de Transporte: entra a su hoja de vida (como «Trabajo en un
+      // equipo»): el mantenimiento como mano de obra; el repuesto o material como lo usado (1 × el monto).
+      const conMaquina = d.tipo === "transporte" && !!d.id;
+      const trabajo = !conMaquina ? null
+        : f.category === "MANTENIMIENTO_EQUIPO" ? { maintenance_type: "CORRECTIVO", mano_obra: f.amount }
+        : f.category === "REPUESTOS" ? { maintenance_type: "REPUESTO", items: [{ nombre: f.description, cantidad: 1, costo_unitario: f.amount, tipo: "REPUESTO" }] }
+        : f.category === CATEGORIA_MATERIALES ? { maintenance_type: "CORRECTIVO", items: [{ nombre: f.description, cantidad: 1, costo_unitario: f.amount, tipo: "INSUMO" }] }
+        : null;
       const r = await apiPost<{ total: number; descontado: number; por_cobrar: number }>("/equipment/transporte/gasto", {
         cash_register_id: registerId,
-        categoria: operador ? undefined : categoriaTransporteDe(f.category, f.description),
+        categoria: operador ? undefined : trabajo ? "REPARACION_MANT" : categoriaTransporteDe(f.category, f.description),
         activo_id: d.tipo === "transporte" ? d.id : undefined,
         anticipo_operador: operador,
-        monto: f.amount,
+        ...(trabajo ?? {}),
+        monto: trabajo ? undefined : f.amount,
         description: f.description,
         pagado_con_banco: f.banco || undefined
       });

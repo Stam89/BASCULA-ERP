@@ -47,6 +47,14 @@ try {
   const d = exigir(await api("POST", `/cash/${caja}/movements`, { movement: "EXPENSE", category: "ALIMENTACION", amount: 12, description: "Comida", por_cuenta_de: socio.id }, matriz), `D1. gasto de ${socio.name} en efectivo`);
   check(d.category === "GASTO_POR_SOCIO" && cerca(await saldo(), s0 - 12), "D2. queda como gasto del socio y sale de la gaveta", { cat: d.category, saldo: await saldo() });
 
+  // E. Repuesto y mantenimiento de una máquina desde la hoja: entran a su hoja de vida en Transporte
+  const e1 = exigir(await api("POST", "/equipment/transporte/gasto", { cash_register_id: caja, categoria: "REPARACION_MANT", activo_id: maq.id, maintenance_type: "REPUESTO",
+    items: [{ nombre: "Filtro de aceite", cantidad: 1, costo_unitario: 18, tipo: "REPUESTO" }], description: "Filtro de aceite" }, matriz), "E1. repuesto de la máquina (como lo manda la hoja)");
+  const e2 = exigir(await api("POST", "/equipment/transporte/gasto", { cash_register_id: caja, categoria: "REPARACION_MANT", activo_id: maq.id, maintenance_type: "CORRECTIVO",
+    mano_obra: 30, description: "Soldadura de la plataforma" }, matriz), "E2. mantenimiento de la máquina (como lo manda la hoja)");
+  const hv = await q("SELECT tipo, costo::float c FROM campo_mantenimientos WHERE cxp_id = ANY($1::uuid[]) ORDER BY costo", [[e1.cxp_id, e2.cxp_id]]);
+  check(hv.length === 2 && hv[0].c === 18 && hv[1].c === 30, "E3. los dos quedan en la hoja de vida de la máquina", hv);
+
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
   check(h.length === 0, "Z. integridad sin hallazgos", h.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); check(false, "excepción"); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }
