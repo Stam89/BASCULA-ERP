@@ -1281,6 +1281,8 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT p.id, p.fecha, p.activo_id, p.operador, p.cliente, p.cliente_id, p.qq::float AS qq,
             p.observaciones,
+            -- 🌾 Agricultor del arroz (el del parte o el del ticket de báscula que lo generó): se muestra en vez del nº de ticket.
+            COALESCE(fp.full_name, ft.full_name) AS agricultor,
             CASE WHEN liq.id IS NOT NULL THEN 'cobrado' ELSE p.estado END AS estado,
             p.origen, p.created_at,
             COALESCE(c.tipo, CASE WHEN p.origen = 'bascula' THEN 'piladora' END) AS cliente_tipo,
@@ -1299,6 +1301,9 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
      JOIN campo_activos a ON a.id = p.activo_id
      LEFT JOIN campo_clientes c ON c.id = p.cliente_id
      LEFT JOIN campo_servicios_saldo sv ON sv.id = p.servicio_id
+     LEFT JOIN farmers fp ON fp.id = p.farmer_id
+     LEFT JOIN weighing_tickets wt ON p.origen_uid LIKE 'weighing_ticket:%' AND wt.id::text = substring(p.origen_uid FROM 17)
+     LEFT JOIN farmers ft ON ft.id = wt.farmer_id
      LEFT JOIN LATERAL (
        SELECT l.id, l.liquidation_number, ac.name AS accionista_nombre,
               CASE WHEN EXISTS (
@@ -1674,9 +1679,15 @@ async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
             SUM(p.qq)::float AS qq,
             MIN(p.fecha) AS desde, MAX(p.fecha) AS hasta,
             t.tarifa::float AS tarifa, t.unidad AS unidad,
-            array_agg(p.id) AS parte_ids
+            array_agg(p.id) AS parte_ids,
+            -- 📄 Recibo: cada parte con su fecha, agricultor (o cliente) y QQ.
+            json_agg(json_build_object('fecha', to_char(p.fecha, 'YYYY-MM-DD'), 'qq', p.qq::float,
+                     'agricultor', COALESCE(fp.full_name, ft.full_name, p.cliente)) ORDER BY p.fecha, p.created_at) AS detalle
        FROM campo_partes p
        JOIN campo_activos a ON a.id = p.activo_id
+       LEFT JOIN farmers fp ON fp.id = p.farmer_id
+       LEFT JOIN weighing_tickets wt ON p.origen_uid LIKE 'weighing_ticket:%' AND wt.id::text = substring(p.origen_uid FROM 17)
+       LEFT JOIN farmers ft ON ft.id = wt.farmer_id
        LEFT JOIN campo_tarifas_operador t
          ON lower(t.operador) = lower(p.operador) AND t.activo_id = p.activo_id AND t.activo = true
       WHERE ${conds.join(" AND ")}
@@ -1695,7 +1706,8 @@ async function gruposNominaPendiente(db: Q, q: { from?: string; to?: string }) {
     return {
       operador: r.operador, activo_id: r.activo_id, activo_nombre: r.activo_nombre, activo_tipo: r.activo_tipo,
       viajes: r.viajes, qq: Number(r.qq || 0), dias: r.dias, desde: r.desde, hasta: r.hasta,
-      unidad, tarifa, base, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[]
+      unidad, tarifa, base, sin_tarifa: r.tarifa == null, total, parte_ids: r.parte_ids as string[],
+      detalle: (r.detalle ?? []) as Array<{ fecha: string; qq: number; agricultor: string | null }>
     };
   });
   return grupos;
@@ -1763,6 +1775,7 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
     sueldo_semanal_principal: boolean; sueldo_semanal_pagado: boolean; periodo_semanal: boolean;
     sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
     vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
+    detalle: Array<{ fecha: string; qq: number; agricultor: string | null }>;
   };
   type OperadorNomina = { id: string; nombre: string; cargo: string | null; sueldo_semanal: number };
   const operadoresNomina = operadores.rows as OperadorNomina[];
@@ -1775,7 +1788,7 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
     sueldo_semanal: 0, modalidad_fija: false, sueldo_semanal_principal: false,
     sueldo_semanal_pagado: false, periodo_semanal: periodoSemanal,
     sin_tarifa: g.sin_tarifa, parte_ids: g.parte_ids,
-    desde: g.desde, hasta: g.hasta, vales: []
+    desde: g.desde, hasta: g.hasta, vales: [], detalle: g.detalle
   }));
   const conFilas = new Set(filas.map((f) => f.operador.trim().toLowerCase()));
   const habitual = new Map(habituales.rows.map((h) => [String(h.operador).trim().toLowerCase(), h]));
@@ -1790,7 +1803,7 @@ campoRouter.get("/nomina-operadores/matriz", asyncRoute(async (req, res) => {
       tarifa: null, qq: 0, viajes: 0, dias: 0, sugerido: null, produccion_sugerida: null,
       sueldo_semanal: Number(o.sueldo_semanal || 0), modalidad_fija: Number(o.sueldo_semanal || 0) > 0,
       sueldo_semanal_principal: false, sueldo_semanal_pagado: false, periodo_semanal: periodoSemanal,
-      sin_tarifa: false, parte_ids: [], desde: null, hasta: null, vales: []
+      sin_tarifa: false, parte_ids: [], desde: null, hasta: null, vales: [], detalle: []
     });
     conFilas.add(k);
   }

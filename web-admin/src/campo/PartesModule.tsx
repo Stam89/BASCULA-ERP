@@ -37,6 +37,7 @@ function operadorSugerido(activo: Activo | undefined, operadores: Operador[]): s
 type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; activo_tipo?: string; operador: string | null;
+  agricultor?: string | null;
   operador_pagado_at?: string | null;
   cliente: string; cliente_id: string | null; cliente_tipo: "piladora" | "externo" | null;
   qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
@@ -285,16 +286,12 @@ export default function PartesModule() {
               {partesVista.length === 0 ? (
                 <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
               ) : partesVista.map((p) => {
-                const faltaChofer = p.origen !== "manual" && !(p.operador && p.operador.trim());
                 return (
-                <tr key={p.id} style={faltaChofer ? { background: "#fef2f2" } : undefined}>
+                <tr key={p.id}>
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
                   <td>
-                    {p.operador
-                      ? p.operador
-                      : faltaChofer
-                        ? <span className="chip" style={{ background: "#dc2626", color: "#fff", fontWeight: 700 }} title="Este parte entró por la romana sin chofer. Usa Editar para asignarlo.">⚠️ Faltan datos de chofer</span>
-                        : "—"}
+                    {/* Sin chofer no es un error: el pago sale del informe que trae el chofer. */}
+                    {p.operador ? p.operador : <span className="muted" title="Sin chofer anotado (se puede poner con Editar)">—</span>}
                   </td>
                   <td>{p.activo_nombre}</td>
                   <td style={{ fontWeight: 600 }}>
@@ -308,7 +305,12 @@ export default function PartesModule() {
                     )}
                   </td>
                   <td className="num" style={{ fontWeight: 700 }}>{qqFmt(p.qq)}</td>
-                  <td>{p.observaciones || "—"}</td>
+                  <td>
+                    {p.agricultor
+                      ? <><span style={{ fontWeight: 600 }}>🌾 {p.agricultor}</span>
+                          {p.origen === "bascula" && <small className="muted" style={{ display: "block" }} title={p.observaciones ?? undefined}>Báscula</small>}</>
+                      : (p.observaciones || "—")}
+                  </td>
                   <td>
                     {p.cobro_automatico ? (
                       <>

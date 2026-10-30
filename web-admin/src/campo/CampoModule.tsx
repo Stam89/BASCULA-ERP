@@ -3404,8 +3404,14 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
   const [editId, setEditId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const formRef = useRef<HTMLDivElement>(null);
   function editar(o: Operador) {
     setEditId(o.id);
+    // El formulario está arriba de la tabla: se sube a él para que se vea que ya se está editando.
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      formRef.current?.querySelector<HTMLInputElement>("input")?.focus();
+    }, 0);
     setF({
       nombre: o.nombre, identificacion: o.identificacion ?? "", telefono: o.telefono ?? "",
       cargo: o.cargo ?? "", sueldo_semanal: o.sueldo_semanal > 0 ? String(o.sueldo_semanal) : ""
@@ -3440,8 +3446,9 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
   }
 
   return (
-    <div className="formPanel" style={{ gridColumn: "1 / -1" }}>
+    <div className="formPanel" style={{ gridColumn: "1 / -1" }} ref={formRef}>
       <h2>👷 Operadores</h2>
+      {editId && <p className="chip warn" style={{ display: "inline-block", margin: "0 0 6px" }}>✏️ Editando a {operadores.find((o) => o.id === editId)?.nombre ?? "operador"}: cambia los datos y toca «Guardar cambios»</p>}
       <p className="muted" style={{ marginTop: -4 }}>
         Personal de Transporte y Cosechadora. Si tiene sueldo semanal, la nómina lo propone una sola vez de lunes a domingo;
         con sueldo en $0 conserva el cálculo por QQ, viaje o día.

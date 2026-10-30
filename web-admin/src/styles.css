@@ -5488,6 +5488,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .invxModal__marcaFila strong { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .invxModal__marcaPie { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
 .invxModal__pres { display: flex; flex-wrap: wrap; gap: 4px; }
+/* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
+.nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
+.nomMatriz__recibo summary { cursor: pointer; color: #1d4ed8; font-weight: 600; }
+.nomMatriz__recibo table { margin-top: 4px; border-collapse: collapse; width: 100%; }
+.nomMatriz__recibo td { padding: 2px 6px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
+.nomMatriz__recibo td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .invxModal__llenos { display: grid; gap: 4px; margin: 6px 0 2px; }
 .invxModal__lleno { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 5px 8px; border-radius: 8px; background: #f5f3ff; border: 1px solid #ddd6fe; font-size: 13px; }
 .invxModal__lleno span { font-weight: 600; min-width: 92px; }

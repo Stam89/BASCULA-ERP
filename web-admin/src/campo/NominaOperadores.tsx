@@ -34,6 +34,8 @@ type FilaMatriz = {
   sueldo_semanal_principal: boolean; sueldo_semanal_pagado: boolean; periodo_semanal: boolean;
   sin_tarifa: boolean; parte_ids: string[]; desde: string | null; hasta: string | null;
   vales: Array<{ id: string; fecha: string; concepto: string | null; monto: number }>;
+  /** 📄 Recibo: cada parte pendiente con su fecha, agricultor y QQ. */
+  detalle?: Array<{ fecha: string; qq: number; agricultor: string | null }>;
 };
 // Lo que el usuario escribió en la fila (vacío = valor sugerido).
 type Edicion = { base?: string; extras?: string; descuentos?: string; nota?: string; excluir?: boolean };
@@ -239,6 +241,22 @@ const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
             : <small className="nomMatriz__sub">× {money(f.tarifa ?? 0)} / {unidadCorta(f.unidad)}</small>}</>
           : <span className="muted">—</span>}
         {f.modalidad_fija && f.produccion_sugerida != null && <small className="nomMatriz__sub">Referencia por producción: {money(f.produccion_sugerida)}</small>}
+        {(f.detalle?.length ?? 0) > 0 && (
+          <details className="nomMatriz__recibo">
+            <summary>📄 Recibo · {f.dias} día(s) · {f.detalle!.length} parte(s)</summary>
+            <table>
+              <tbody>
+                {f.detalle!.map((d, i) => (
+                  <tr key={i}>
+                    <td>{d.fecha.split("-").reverse().join("/")}</td>
+                    <td>{d.agricultor ?? "—"}</td>
+                    <td className="num">{qqFmt(d.qq)} QQ</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
       </td>
       <td className="num">{celda("base", c.baseTxt, {
         alerta: c.pideNota,
