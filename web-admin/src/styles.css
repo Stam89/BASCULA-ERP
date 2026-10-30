@@ -6714,6 +6714,17 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjh-acc select { padding: 3px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; }
 /* 🧭 «¿De quién?» y 💳 «No es efectivo» de la caja hoja (2026-10-30) */
 .cjh-quien { font-size: 12px; color: #475569; white-space: nowrap; }
+/* Caja: barra de arriba (Resumen global + formulario completo como botón chico) */
+.cjx-barra { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
+.cjx-barra__res { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 10px; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-weight: 700; cursor: pointer; }
+.cjx-barra__res.is-on { background: #3730a3; color: #fff; }
+.cjx-barra__form { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cjx-barra__form small { color: #64748b; font-weight: 600; }
+.cjx-barra__form button { padding: 6px 10px; border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; font-weight: 600; cursor: pointer; }
+.cjx-barra__form button.is-in { color: #15803d; }
+.cjx-barra__form button.is-out { color: #b91c1c; }
+.cjx-barra__form button.is-on { background: #f1f5f9; border-color: #94a3b8; }
+.cjx-barra kbd { font-size: 10.5px; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #475569; }
 .cjh-acc button.cjh-banco { font-size: 14px; padding: 1px 6px; opacity: .55; }
 .cjh-acc button.cjh-banco.is-on { opacity: 1; background: #fef3c7; border-color: #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, .25); }
 .cjh-aviso { display: block; margin-top: 4px; color: #92400e; font-weight: 600; }

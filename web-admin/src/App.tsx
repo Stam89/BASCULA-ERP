@@ -20039,9 +20039,9 @@ Motivo (obligatorio):`, ""));
                     .filter((t) => !(esSocio && soloMatriz.includes(t)));
                   const fomentosActivos = fomentos.filter((f) => f.status === "ACTIVOS").length;
                   const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
+                    { key: "anticipo", icon: "🌾", label: "Arroz en cáscara", hint: "Anticipo o pago al agricultor" },
                     { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por dólares, libras o QQ" },
                     { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
-                    { key: "anticipo", icon: "🌾", label: "Arroz en cáscara", hint: "Anticipo o pago al agricultor" },
                     { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
                     { key: "mantenimiento", icon: "🔧", label: "Mantenimiento", hint: "Reparaciones y repuestos" }
                   ];
@@ -20086,10 +20086,10 @@ Motivo (obligatorio):`, ""));
                                   </button>
                                 )}
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); downloadCajaExcel(); }}>
-                                  <span className="cj-menu-ico">📥</span><span className="cj-menu-label">Descargar Excel</span>
+                                  <span className="cj-menu-ico">📥</span><span className="cj-menu-label">Excel de cierre de esta caja</span>
                                 </button>
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); printCajaMovimientos(); }}>
-                                  <span className="cj-menu-ico">🖨</span><span className="cj-menu-label">Imprimir PDF</span>
+                                  <span className="cj-menu-ico">🖨</span><span className="cj-menu-label">Imprimir esta caja</span>
                                 </button>
                                 <div className="cj-menu-sep" />
                                 <button type="button" role="menuitem" className="cj-menu-item cj-menu-item--danger" onClick={() => { setCajaMenu(null); closeCaja().catch((e) => addToast(e.message, "error")); }}>
@@ -20149,17 +20149,17 @@ Motivo (obligatorio):`, ""));
                         );
                       })()}
 
-                      {/* Lo de todos los días: ingreso, egreso y el resumen global (atajos F2 · F3 · F4). */}
-                      <div className="cjx-big cjx-big--3">
-                        <button type="button" className={`cjx-big__btn is-in ${cajaSubTab === "movimiento" && movType === "INCOME" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("INCOME")}>
-                          <span aria-hidden="true">＋</span> Registrar ingreso <kbd>F2</kbd>
+                      {/* La HOJA de abajo es la forma principal de registrar (2026-10-30). El formulario completo queda
+                          para lo que pide más datos: a crédito, fondo a rendir, activo fijo, nota del taller, proveedor… */}
+                      <div className="cjx-barra">
+                        <button type="button" className={`cjx-barra__res ${cajaResumenGlobal ? "is-on" : ""}`} onClick={() => setCajaResumenGlobal(true)}>
+                          <span aria-hidden="true">📊</span> Resumen global <kbd>F4</kbd>
                         </button>
-                        <button type="button" className={`cjx-big__btn is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("EXPENSE")}>
-                          <span aria-hidden="true">－</span> Registrar egreso <kbd>F3</kbd>
-                        </button>
-                        <button type="button" className={`cjx-big__btn is-res ${cajaResumenGlobal ? "is-on" : ""}`} onClick={() => setCajaResumenGlobal(true)}>
-                          <span aria-hidden="true">📊</span> Ver resumen global <kbd>F4</kbd>
-                        </button>
+                        <span className="cjx-barra__form">
+                          <small>📝 Formulario completo</small>
+                          <button type="button" className={`is-in ${cajaSubTab === "movimiento" && movType === "INCOME" ? "is-on" : ""}`} title="Ingreso con todos los datos" onClick={() => abrirMovimientoCaja("INCOME")}>＋ Ingreso <kbd>F2</kbd></button>
+                          <button type="button" className={`is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} title="Egreso con todos los datos: a crédito, fondo a rendir, activo fijo, nota del taller, proveedor…" onClick={() => abrirMovimientoCaja("EXPENSE")}>－ Egreso <kbd>F3</kbd></button>
+                        </span>
                       </div>
 
                       {/* 📲 Transferencias / cheques de pedidos despachados que aún no se confirman. */}
@@ -20184,13 +20184,9 @@ Motivo (obligatorio):`, ""));
 
                       {/* Accesos a la vista (antes escondidos en «Acciones rápidas» y «Opciones»). */}
                       <div className="cjx-accesos">
-                        {esMatrizActiva && (visibles.includes("movimiento") || visibles.includes("historial") || visibles.includes("mantenimiento")) && (
+                        {esMatrizActiva && (visibles.includes("historial") || visibles.includes("mantenimiento")) && (
                           <div className="cjx-grupo">
                             <span className="cjx-grupo__t">Equipos</span>
-                            {visibles.includes("movimiento") && (
-                              <button type="button" className={cajaSubTab === "movimiento" && movCategory === "MANTENIMIENTO_EQUIPO" ? "is-on" : ""}
-                                onClick={() => { abrirMovimientoCaja("EXPENSE"); setMovCategory("MANTENIMIENTO_EQUIPO"); }}>🔧 Registrar trabajo o repuesto</button>
-                            )}
                             {visibles.includes("historial") && (
                               <button type="button" className={cajaSubTab === "historial" ? "is-on" : ""} onClick={() => abrir("historial")}>🔎 ¿Cuándo se hizo?</button>
                             )}
@@ -20200,7 +20196,7 @@ Motivo (obligatorio):`, ""));
                           </div>
                         )}
                         <div className="cjx-grupo">
-                          <span className="cjx-grupo__t">Accesos directos</span>
+                          <span className="cjx-grupo__t">Otros registros</span>
                           {acciones.filter((x) => visibles.includes(x.key) && x.key !== "mantenimiento").map((x) => (
                             <button key={x.key} type="button" className={cajaSubTab === x.key ? "is-on" : ""} title={x.hint} onClick={() => abrir(x.key)}>{x.icon} {x.label}</button>
                           ))}
@@ -20213,16 +20209,14 @@ Motivo (obligatorio):`, ""));
                           {(dashboard.current_cash_register?.tipo ?? "EFECTIVO") !== "BANCO" && (
                             <button type="button" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadre del día</button>
                           )}
-                          {cajaSubTab !== "resumen" && (
-                            <button type="button" onClick={() => abrir("resumen")}>📋 Hoja de movimientos</button>
-                          )}
                         </div>
                       </div>
 
                       {/* Título de la sección abierta (fuera de Movimientos / Nuevo movimiento) */}
-                      {cajaSubTab !== "resumen" && cajaSubTab !== "movimiento" && (() => {
+                      {cajaSubTab !== "resumen" && (() => {
                         const x = acciones.find((a) => a.key === cajaSubTab);
-                        const titulo = x ? `${x.icon} ${x.label}` : cajaSubTab === "historial" ? "🔎 ¿Cuándo se hizo?" : "";
+                        const titulo = x ? `${x.icon} ${x.label}` : cajaSubTab === "historial" ? "🔎 ¿Cuándo se hizo?"
+                          : cajaSubTab === "movimiento" ? `📝 Formulario completo · ${movType === "INCOME" ? "ingreso" : "egreso"}` : cajaSubTab === "mantenimiento" ? "📋 Hoja de vida y repuestos" : "";
                         return titulo ? (
                           <div className="cj-crumb">
                             <button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Hoja de movimientos</button>
