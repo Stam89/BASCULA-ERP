@@ -89,12 +89,12 @@ type SesionResp = { activa: SesionActiva | null; saldo_sugerido: number };
 type SesionHist = { id: string; fecha_apertura: string; fecha_cierre: string | null; saldo_inicial: number; saldo_teorico: number | null; saldo_real: number | null; diferencia: number | null; estado: "ABIERTA" | "CERRADA"; observaciones: string | null; usuario_nombre: string | null };
 
 // Estado de cuenta de clientes (Campo).
-type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; telefono: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number };
+type ClienteCuenta = { id: string; nombre: string; identificacion: string | null; telefono: string | null; tipo: string; debe: number; haber: number; saldo: number; servicios: number; operadores?: string | null };
 // Crédito a favor por fletes retenidos en liquidaciones (cruce Planta→Campo).
 type CreditoConcil = { cliente_id: string; cliente_nombre: string; credito: number; partes_pendientes: number };
 // Parte pendiente para el modal de conversión (subset de /campo/partes).
 type ParteConcil = { id: string; fecha: string; activo_nombre: string; cliente: string; qq: number; observaciones: string | null; origen: string; estado: string };
-type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number };
+type EstadoLinea = { fecha: string; clase: "servicio" | "abono"; detalle: string; maquina: string | null; qq: number | null; precio_unitario: number | null; debe: number; haber: number; cuenta: string | null; saldo: number; operador?: string | null };
 type EstadoCuenta = { cliente: { id: string; nombre: string; identificacion: string | null; tipo: string }; periodo: { from: string; to: string }; saldo_apertura: number; lineas: EstadoLinea[]; total_debe: number; total_haber: number; saldo_final: number };
 type CuentaConsolidada = {
   cliente_id: string; nombre: string; identificacion: string | null;
@@ -254,7 +254,7 @@ type Mantenimiento = {
 // ── Tipos de los reportes (V2) ───────────────────────────────────────────────
 type SaldoCaja = { corte: string; cuentas: Array<{ id: string; nombre: string; saldo: number }>; total: number; total_disponible: number };
 type PorCobrarCliente = { cliente_id: string; cliente_nombre: string; servicios: number; saldo: number; antiguedad_max_dias: number; tramo: string };
-type PorCobrarDetalle = { servicio_id: string; fecha: string; cliente_id: string; cliente_nombre: string; activo_nombre: string; tipo: string; valor: number; cobrado: number; saldo: number; antiguedad_dias: number; tramo: string };
+type PorCobrarDetalle = { servicio_id: string; fecha: string; cliente_id: string; cliente_nombre: string; activo_nombre: string; operador?: string | null; tipo: string; valor: number; cobrado: number; saldo: number; antiguedad_dias: number; tramo: string };
 type PorCobrar = { por_cliente: PorCobrarCliente[]; detalle: PorCobrarDetalle[]; por_tramo: Array<{ tramo: string; saldo: number; servicios: number }>; total_general: number };
 type Maquina = { activo_id: string | null; activo_nombre: string; activo_tipo: string | null; ingresos: number; gastos: number; ganancia: number; qq: number; gastos_por_categoria: Array<{ categoria: string; gasto: number }> };
 type PorMaquina = { periodo: { desde: string; hasta: string }; maquinas: Maquina[] };
@@ -1047,7 +1047,7 @@ function ReportesView({ onError }: { onError: (m: string) => void }) {
                             {(cobrar?.detalle ?? []).filter((d) => d.cliente_id === c.cliente_id).map((d) => (
                               <tr key={d.servicio_id}>
                                 <td style={{ whiteSpace: "nowrap" }}>{String(d.fecha).slice(0, 10)}</td>
-                                <td>{d.activo_nombre}</td>
+                                <td>{d.activo_nombre}{d.operador && <small style={{ display: "block", color: "#1d4ed8", fontWeight: 600 }}>👷 {d.operador}</small>}</td>
                                 <td>{d.tipo}</td>
                                 <td className="num">{num(d.valor)}</td>
                                 <td className="num">{num(d.cobrado)}</td>
@@ -1202,7 +1202,8 @@ function ClientesView({ nombreOperacion, matrizName, onNotify, onError }: {
                 <tr><td colSpan={7} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin clientes.</td></tr>
               ) : clientes.map((c) => (
                 <tr key={c.id}>
-                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small></td>
+                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small>
+                    {c.operadores && <small style={{ display: "block", color: "#1d4ed8" }}>👷 {c.operadores}</small>}</td>
                   <td>{c.identificacion || "—"}</td>
                   <td className="num">{c.servicios}</td>
                   <td className="num">{money(c.debe)}</td>
@@ -1474,7 +1475,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, c
     const filas = ec.lineas.map((l) => `<tr>
       <td>${String(l.fecha).slice(0, 10)}</td>
       <td>${l.detalle}${l.cuenta ? ` (${l.cuenta})` : ""}</td>
-      <td>${l.maquina ?? ""}</td>
+      <td>${l.maquina ?? ""}${l.operador ? `<br><small>Operador: ${l.operador}</small>` : ""}</td>
       <td style="text-align:right">${l.qq != null ? l.qq : ""}</td>
       <td style="text-align:right">${l.debe ? l.debe.enReal() : ""}</td>
       <td style="text-align:right;color:#15803d">${l.haber ? l.haber.enReal() : ""}</td>
@@ -1581,7 +1582,7 @@ function EstadoCuentaModal({ cliente, nombreOperacion, matrizName, cajaCuenta, c
                 <tr key={i}>
                   <td style={{ whiteSpace: "nowrap" }}>{String(l.fecha).slice(0, 10)}</td>
                   <td style={{ minWidth: 320, whiteSpace: "normal", lineHeight: 1.35 }}>{l.detalle}{l.cuenta ? <small className="muted"> · {l.cuenta}</small> : null}{l.clase === "abono" ? <span className="chip ok" style={{ marginLeft: 6 }}>abono</span> : null}</td>
-                  <td>{l.maquina ?? "—"}</td>
+                  <td>{l.maquina ?? "—"}{l.operador && <small style={{ display: "block", color: "#1d4ed8", fontWeight: 600 }}>👷 {l.operador}</small>}</td>
                   <td className="num">{l.qq != null ? l.qq : "—"}</td>
                   <td className="num">{l.debe ? money(l.debe) : "—"}</td>
                   <td className="num" style={{ color: l.haber ? "#15803d" : undefined }}>{l.haber ? money(l.haber) : "—"}</td>
@@ -2498,7 +2499,8 @@ function CxCView({ nombreOperacion, matrizName, onNotify, onError }: {
                 <tr><td colSpan={6} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin cuentas por cobrar pendientes.</td></tr>
               ) : clientes.map((c) => (
                 <tr key={c.id}>
-                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small></td>
+                  <td style={{ fontWeight: 600 }}>{c.nombre}<small className="muted" style={{ display: "block" }}>{c.tipo}</small>
+                    {c.operadores && <small style={{ display: "block", color: "#1d4ed8" }}>👷 {c.operadores}</small>}</td>
                   <td className="num">{c.servicios}</td>
                   <td className="num">{money(c.debe)}</td>
                   <td className="num" style={{ color: "#15803d" }}>{money(c.haber)}</td>

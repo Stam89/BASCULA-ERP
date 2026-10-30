@@ -452,6 +452,9 @@ campoRouter.get("/clientes/estado-cuenta", asyncRoute(async (req, res) => {
        WHERE m.signo = 'entrada' GROUP BY s.cliente_id
      )
      SELECT c.id, c.nombre, c.identificacion, c.telefono, c.tipo,
+            -- 👷 Quién le cosechó / le hizo el flete (de los partes cobrados con un servicio): para preguntarle quién es.
+            (SELECT string_agg(DISTINCT trim(p.operador), ', ') FROM campo_partes p JOIN campo_servicios_saldo sv ON sv.id = p.servicio_id
+              WHERE sv.cliente_id = c.id AND sv.saldo_pendiente > 0.005 AND NULLIF(trim(p.operador), '') IS NOT NULL) AS operadores,
             COALESCE(serv.debe, 0)::float AS debe,
             COALESCE(ab.haber, 0)::float AS haber,
             (COALESCE(serv.debe, 0) - COALESCE(ab.haber, 0))::float AS saldo,
@@ -497,14 +500,16 @@ campoRouter.get("/clientes/:id/estado-cuenta", asyncRoute(async (req, res) => {
               COALESCE(NULLIF(trim(s.notas), ''),
                        CASE WHEN s.tipo = 'cosecha' THEN 'Servicio de cosechadora' ELSE 'Servicio de flete' END) AS detalle,
               a.nombre AS maquina, s.qq::float AS qq, s.precio_unitario::float AS precio_unitario,
-              s.valor::float AS debe, 0::float AS haber, NULL::text AS cuenta
+              s.valor::float AS debe, 0::float AS haber, NULL::text AS cuenta,
+              (SELECT string_agg(DISTINCT trim(p.operador), ', ') FROM campo_partes p
+                WHERE p.servicio_id = s.id AND NULLIF(trim(p.operador), '') IS NOT NULL) AS operador
        FROM campo_servicios s JOIN campo_activos a ON a.id = s.activo_id
        WHERE s.cliente_id = $1 AND s.fecha BETWEEN $2 AND $3
        UNION ALL
        SELECT m.fecha, m.created_at, 'abono' AS clase,
               COALESCE(m.concepto, 'Abono') AS detalle,
               NULL AS maquina, NULL::float AS qq, NULL::float AS precio_unitario,
-              0::float AS debe, m.monto::float AS haber, ct.nombre AS cuenta
+              0::float AS debe, m.monto::float AS haber, ct.nombre AS cuenta, NULL::text AS operador
        FROM campo_movimientos m
          JOIN campo_servicios s ON s.id = m.servicio_id
          JOIN campo_cuentas ct ON ct.id = m.cuenta_id
@@ -537,7 +542,9 @@ const SERVICIO_SELECT = `
   a.nombre AS activo_nombre, a.tipo AS activo_tipo,
   s.cobrado::float AS cobrado,
   s.saldo_pendiente::float AS saldo_pendiente,
-  s.estado AS estado`;
+  s.estado AS estado,
+  (SELECT string_agg(DISTINCT trim(p.operador), ', ') FROM campo_partes p
+                WHERE p.servicio_id = s.id AND NULLIF(trim(p.operador), '') IS NOT NULL) AS operador`;
 
 const SERVICIO_FROM = `
   FROM campo_servicios_saldo s
@@ -2753,6 +2760,8 @@ campoRouter.get("/reportes/por-cobrar", asyncRoute(async (_req, res) => {
   )).rows;
   const detalle = (await pool.query(
     `SELECT v.id AS servicio_id, v.fecha, v.cliente_id, cl.nombre AS cliente_nombre, a.nombre AS activo_nombre,
+            (SELECT string_agg(DISTINCT trim(p.operador), ', ') FROM campo_partes p
+                WHERE p.servicio_id = v.id AND NULLIF(trim(p.operador), '') IS NOT NULL) AS operador,
             v.tipo, v.valor::float AS valor, v.cobrado::float AS cobrado, v.saldo_pendiente::float AS saldo,
             (CURRENT_DATE - v.fecha)::int AS antiguedad_dias,
             ${TRAMO_SQL("(CURRENT_DATE - v.fecha)")} AS tramo
