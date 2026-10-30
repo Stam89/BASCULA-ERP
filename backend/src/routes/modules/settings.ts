@@ -450,7 +450,9 @@ settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) =>
   const body = z.object({
     accionista_id: z.string().uuid().nullable().optional(),
     tarifa_pilado_qq: z.number().nonnegative().max(9999),
-    humedad_base_pct: z.number().min(0).max(100)
+    humedad_base_pct: z.number().min(0).max(100),
+    // ⚖️ Mínimo del servicio de pilada a clientes: (kg ÷ 100) + este % (migración 20261130).
+    servicio_minimo_pct: z.number().min(0).max(100).optional()
   }).parse(req.body);
 
   const result = await inTransaction(async (client) => {
@@ -465,10 +467,11 @@ settingsRouter.put("/plant-params", requireAdmin, asyncRoute(async (req, res) =>
       `UPDATE app_settings
        SET tarifa_pilado_qq = $2,
            humedad_base_pct = $3,
+           servicio_minimo_pct = COALESCE($4, servicio_minimo_pct),
            updated_at = now()
        WHERE socio_id IS NOT DISTINCT FROM $1::uuid
        RETURNING *`,
-      [socioId, body.tarifa_pilado_qq, body.humedad_base_pct]
+      [socioId, body.tarifa_pilado_qq, body.humedad_base_pct, body.servicio_minimo_pct ?? null]
     );
   });
   res.json(result.rows[0]);

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import { aplicarMinimoServicio, parametrosServicioPilada } from "../../services/servicio-pilada.js";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -745,11 +746,20 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const esDeOtroAccionista = Boolean(accionistaId) && accionistaId !== matrizId;
     const cobraServicio = isMaquila || esDeOtroAccionista;
 
-    const servicio = await calcularServicioPilado(
+    let servicio = await calcularServicioPilado(
       client,
       (body.white_rice_presentations ?? []).map((p) => ({ presentation: p.presentation, quantity: p.quantity })),
       processedQq
     );
+    // ⚖️ Pilada a un CLIENTE (maquila): tarifa de Configuración › Parámetros de planta y cobro mínimo por rendimiento
+    // ((kg de cáscara ÷ 100) + %). A los socios se les cobra como siempre.
+    let notaMinimo = "";
+    if (isMaquila) {
+      const ps = await parametrosServicioPilada(client);
+      const aj = aplicarMinimoServicio(servicio.detalle, { base: ps.tarifa ?? servicio.precio_base_qq, kgEntrada: inputPaddyKg, minimoPct: ps.minimoPct });
+      servicio = { ...servicio, ...aj };
+      if (aj.aplico_minimo) notaMinimo = ` · mínimo por rendimiento: salieron ${aj.qq_reales} QQ, se cobran ${aj.qq_minimo} QQ`;
+    }
     const serviceRate = servicio.tarifa_promedio_qq;
     const piladoAmount = cobraServicio ? servicio.total : 0;
     // ── REGLA DE NEGOCIO 'Servicio Completo' (SECADO_PILADO) ──
@@ -788,8 +798,8 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       const montoBase = round2(servicio.quintales * servicio.precio_base_qq);
       const adic = servicio.adicional_sacos;
       const desc = esServicioCompleto
-        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}`
-        : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}`;
+        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}${notaMinimo}`
+        : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}${notaMinimo}`;
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable

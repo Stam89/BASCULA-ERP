@@ -2,7 +2,16 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 🧭 Caja hoja adaptada: «¿De quién?» y 💳 «No es efectivo» (2026-10-30)
+## Último cambio: ⚖️ Servicio de pilada a clientes: tarifa visible y cobro mínimo (2026-10-30)
+- El cobro de pilada a CLIENTE (maquila) usa la tarifa de Configuración › Parámetros de planta (app_settings maestro
+  tarifa_pilado_qq; antes leía labor_rates.pilado_precio_qq, sin pantalla). Recargos por saco siguen en labor_rates.
+- Mínimo: QQ cobrados ≥ (kg de cáscara ÷ 100) + servicio_minimo_pct (migración 20261130, default 7). `services/servicio-pilada.ts`
+  agrega la línea «mínimo por rendimiento» al detalle. A los socios no se aplica.
+- POST /pilado/services/:id/aplicar-minimo (admin): recalcula con tarifa y mínimo vigentes; actualiza pilado_services,
+  su CxC (saldo ± diferencia), CxP espejo, maquila_orders y production_yields. Botón «⚖️ Aplicar mínimo» en Servicio de Pilado.
+- Caja limpia: hoja principal, formulario completo chico (F2/F3), sin duplicados. Simulacro servicio_pilada_minimo.
+
+## Cambio anterior: 🧭 Caja hoja adaptada: «¿De quién?» y 💳 «No es efectivo» (2026-10-30)
 - La fila rápida de `CajaHoja` (solo caja de la Matriz) tiene la celda «¿De quién?»: esta caja / 🚜 Transporte (general o máquina) /
   👷 Anticipo · operador / 🤝 socio. Se llena sola si el concepto nombra una máquina («cose 10,1» → COS.10.1, `claveMaq`) o
   «anticipo <operador>». App.guardarFilaHoja manda Transporte/anticipo a POST /equipment/transporte/gasto y socio a

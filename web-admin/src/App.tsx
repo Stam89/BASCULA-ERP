@@ -231,6 +231,8 @@ type AppSettings = {
   receipt_footer: string;
   // Parámetros operativos de planta (pg los devuelve como string numérico).
   tarifa_pilado_qq?: string | number;
+  /** ⚖️ Mínimo del servicio de pilada a clientes: (kg ÷ 100) + este %. */
+  servicio_minimo_pct?: string | number;
   humedad_base_pct?: string | number;
 };
 
@@ -741,6 +743,8 @@ type PiladoService = {
   rate_per_qq: number;
   total: number;
   saldo: number;
+  /** Cliente externo (maquila): se le aplica el mínimo por rendimiento. */
+  externo?: boolean;
   estado: string;
   notes: string | null;
   detalle?: Array<{ presentacion: string; quintales: number; precio_total_qq: number; subtotal: number }> | null;
@@ -6283,6 +6287,18 @@ export function App() {
     setPiladoReport(s);
   }
 
+  // ⚖️ Recalcula el cobro de una pilada a cliente ya subida: tarifa y mínimo por rendimiento de Parámetros de planta.
+  async function aplicarMinimoPilado(s: PiladoService) {
+    if (!(await confirmar(`¿Recalcular el cobro a ${s.cliente} con la tarifa y el mínimo por rendimiento de Parámetros de planta?
+
+Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ que (kg ÷ 100) + %, se cobra ese mínimo.`))) return;
+    const r = await apiPost<{ total: number; antes: number; delta: number; quintales: number; qq_reales: number; qq_minimo: number; aplico_minimo: boolean; sin_cambio?: boolean }>(
+      `/pilado/services/${s.id}/aplicar-minimo`, {});
+    addToast(r.sin_cambio ? "El cobro ya estaba con la tarifa y el mínimo vigentes."
+      : `Cobro recalculado: ${money(r.antes)} → ${money(r.total)}${r.aplico_minimo ? ` (salieron ${r.qq_reales} QQ, mínimo ${r.qq_minimo} QQ)` : ""}`, "success");
+    await refreshPilado();
+  }
+
   async function settlePilado(id: string) {
     const registerId = dashboard.current_cash_register?.id;
     const r = await apiPost<{ paid: number; caja_registrada: boolean; espejo: null | { accionista: string; cuenta: string; caja_registrada: boolean } }>(
@@ -7584,16 +7600,20 @@ export function App() {
     e.preventDefault();
     const tarifa = Number(settingsForm.tarifa_pilado_qq ?? 0);
     const humedad = Number(settingsForm.humedad_base_pct ?? 0);
+    const minimoPct = Number(settingsForm.servicio_minimo_pct ?? 7);
+    if (!(minimoPct >= 0 && minimoPct <= 100)) throw new Error("El % del mínimo del servicio debe estar entre 0 y 100");
     if (!(tarifa >= 0)) throw new Error("La tarifa de pilado no es válida");
     if (!(humedad >= 0 && humedad < 100)) throw new Error("La humedad base debe estar entre 0 y 100");
     if (!(await confirmarCambiosCfg("Parámetros de planta:", [
       { etiqueta: "Tarifa de pilado ($ por QQ)", antes: Number(appSettings.tarifa_pilado_qq ?? 0), despues: tarifa },
-      { etiqueta: "Humedad base (%)", antes: Number(appSettings.humedad_base_pct ?? 0), despues: humedad }
+      { etiqueta: "Humedad base (%)", antes: Number(appSettings.humedad_base_pct ?? 0), despues: humedad },
+      { etiqueta: "Mínimo del servicio: (kg ÷ 100) + %", antes: Number(appSettings.servicio_minimo_pct ?? 7), despues: minimoPct }
     ]))) return;
     const saved = await apiPut<AppSettings>("/settings/plant-params", {
       accionista_id: activeAccionistaId,
       tarifa_pilado_qq: tarifa,
-      humedad_base_pct: humedad
+      humedad_base_pct: humedad,
+      servicio_minimo_pct: minimoPct
     });
     setAppSettings((cur) => ({ ...cur, ...saved }));
     setSettingsForm((cur) => ({ ...cur, ...saved }));
@@ -23651,6 +23671,10 @@ Motivo (obligatorio):`, ""));
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                           <button type="button" className="btnGhost" onClick={() => loadPiladoReport(s.id).catch((err) => addToast(err.message, "error"))}>Ver informe</button>
                           {Number(s.saldo) > 0 && <button type="button" className="btnGhost" onClick={() => settlePilado(s.id).catch((err) => addToast(err.message, "error"))} style={{ marginLeft: 6 }}>Marcar pagado</button>}
+                          {isAdmin && s.externo && Number(s.saldo) > 0 && (
+                            <button type="button" className="btnGhost" style={{ marginLeft: 6 }} title="Recalcular con la tarifa y el mínimo por rendimiento ((kg ÷ 100) + %) de Parámetros de planta"
+                              onClick={() => aplicarMinimoPilado(s).catch((err) => addToast(err.message, "error"))}>⚖️ Aplicar mínimo</button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -26169,7 +26193,7 @@ Motivo (obligatorio):`, ""));
                 <form onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Tarifa de pilado ($/QQ)</span>
+                    <label><span>Tarifa del servicio de pilada a clientes ($/QQ)</span>
                       <input type="number" step="0.001" min="0" required disabled={!isAdmin}
                         value={String(settingsForm.tarifa_pilado_qq ?? "")}
                         onChange={(e) => setSettingsForm({ ...settingsForm, tarifa_pilado_qq: e.target.value })} />
@@ -26178,6 +26202,12 @@ Motivo (obligatorio):`, ""));
                       <input type="number" step="0.1" min="0" max="99.9" required disabled={!isAdmin}
                         value={String(settingsForm.humedad_base_pct ?? "")}
                         onChange={(e) => setSettingsForm({ ...settingsForm, humedad_base_pct: e.target.value })} />
+                    </label>
+                    <label style={{ gridColumn: "1 / -1" }}><span>⚖️ Mínimo a cobrar en el servicio de pilada: (kg de cáscara ÷ 100) + %</span>
+                      <input type="number" step="0.1" min="0" max="100" disabled={!isAdmin}
+                        value={String(settingsForm.servicio_minimo_pct ?? 7)}
+                        onChange={(e) => setSettingsForm({ ...settingsForm, servicio_minimo_pct: e.target.value })} />
+                      <small className="muted">Ej.: 2,110 kg → 21.10 + {Number(settingsForm.servicio_minimo_pct ?? 7)}% = {((2110 / 100) * (1 + Number(settingsForm.servicio_minimo_pct ?? 7) / 100)).toFixed(2)} QQ. Si salen menos QQ, se cobra este mínimo. Solo a clientes (maquila); a los socios, su tarifa.</small>
                     </label>
                   </div>
                   <div className="buttonRow" style={{ marginTop: 10 }}>

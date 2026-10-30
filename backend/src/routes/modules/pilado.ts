@@ -9,6 +9,7 @@ import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
 import { fechaEc } from "../../utils/fechas.js";
+import { aplicarMinimoServicio, parametrosServicioPilada, type LineaServicio } from "../../services/servicio-pilada.js";
 
 export const piladoRouter = Router();
 
@@ -175,6 +176,58 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
 //     la plata de su caja (EXPENSE). Si es cliente externo, solo cobra CEYRO.
 // Antes solo bajaba los saldos y NO tocaba la caja: la plata cobrada nunca
 // aparecía como ingreso. Ese era el bug (dinero saldado que no subía a caja).
+// ⚖️ Recalcular el cobro de una pilada a CLIENTE ya subida (pedido del dueño 2026-10-30): con la tarifa y el mínimo por
+// rendimiento vigentes en Parámetros de planta. Actualiza el servicio, su Por Cobrar (el saldo cambia por la diferencia),
+// la orden de maquila y el monto del servicio en el rendimiento (Costos). Solo el administrador.
+piladoRouter.post("/services/:id/aplicar-minimo", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ motivo: z.string().trim().min(3).max(200).optional() }).parse(req.body ?? {});
+  const out = await inTransaction(async (tx) => {
+    const s = (await tx.query(
+      `SELECT ps.id, ps.lot_id, ps.processing_batch_id, ps.client_accionista_id, ps.receivable_id, ps.payable_id,
+              ps.total::float AS total, ps.detalle, COALESCE(ps.client_name, 'Cliente') AS cliente,
+              pb.input_quantity::float AS kg
+         FROM pilado_services ps LEFT JOIN processing_batches pb ON pb.id = ps.processing_batch_id
+        WHERE ps.id = $1 FOR UPDATE OF ps`, [req.params.id]
+    )).rows[0];
+    if (!s) throw new ApiError(404, "Servicio no encontrado");
+    if (s.client_accionista_id) throw new ApiError(400, "El mínimo por rendimiento es para servicios a clientes; a los socios se les cobra con su tarifa.");
+    if (!s.processing_batch_id || !(Number(s.kg) > 0)) throw new ApiError(409, "Este servicio no tiene la pilada con los kg que entraron: no se puede calcular el mínimo.");
+    const ps = await parametrosServicioPilada(tx);
+    const lineas = (Array.isArray(s.detalle) ? s.detalle : []) as LineaServicio[];
+    const base = ps.tarifa ?? Number(lineas[0]?.precio_base_qq ?? 0);
+    if (!(base > 0)) throw new ApiError(409, "Configura la tarifa de pilado en Parámetros de planta.");
+    const aj = aplicarMinimoServicio(lineas.length ? lineas : [], { base, kgEntrada: Number(s.kg), minimoPct: ps.minimoPct });
+    const delta = round2(aj.total - Number(s.total));
+    if (Math.abs(delta) < 0.005) return { ...aj, antes: Number(s.total), delta: 0, sin_cambio: true };
+
+    const ar = (await tx.query("SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable WHERE id = $1 FOR UPDATE", [s.receivable_id])).rows[0];
+    if (ar && ar.balance + delta < -0.005) throw new ApiError(409, `El cliente ya pagó más de lo que quedaría (${ar.amount - ar.balance} pagado): revisa el cobro antes de bajar el valor.`);
+    const nota = aj.aplico_minimo ? ` · mínimo por rendimiento: salieron ${aj.qq_reales} QQ, se cobran ${aj.qq_minimo} QQ` : "";
+    const desc = `Servicio de pilada a ${s.cliente}: ${aj.quintales} QQ × $${base}/QQ = $${aj.total}${nota}${body.motivo ? ` · ${body.motivo}` : ""}`;
+    await tx.query("UPDATE pilado_services SET quintals = $2, rate_per_qq = $3, total = $4, detalle = $5 WHERE id = $1",
+      [s.id, aj.quintales, aj.tarifa_promedio_qq, aj.total, JSON.stringify(aj.detalle)]);
+    if (ar) {
+      const saldo = round2(ar.balance + delta);
+      await tx.query(
+        `UPDATE accounts_receivable SET amount = $2, balance = $3, description = left($4, 500),
+                status = CASE WHEN $3 <= 0.005 THEN 'PAID'::document_status WHEN $3 < $2 - 0.005 THEN 'PARTIAL'::document_status ELSE 'CONFIRMED'::document_status END
+          WHERE id = $1`, [ar.id, aj.total, saldo, desc]);
+    }
+    if (s.payable_id) {
+      await tx.query("UPDATE accounts_payable SET amount = amount + $2, balance = balance + $2, description = left($3, 500) WHERE id = $1", [s.payable_id, delta, desc]);
+    }
+    await tx.query(
+      `UPDATE maquila_orders SET total_service_amount = $2, price_per_quintal = $3
+        WHERE lot_id = $1 AND service_type = 'PILADO_MAQUILA' AND ABS(total_service_amount - $4) < 0.01`,
+      [s.lot_id, aj.total, aj.tarifa_promedio_qq, Number(s.total)]
+    );
+    await tx.query("UPDATE production_yields SET service_amount = $2, service_rate_per_qq = $3 WHERE processing_batch_id = $1",
+      [s.processing_batch_id, aj.total, aj.tarifa_promedio_qq]);
+    return { ...aj, antes: Number(s.total), delta };
+  });
+  res.json(out);
+}));
+
 piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
   const body = z.object({
     amount: z.number().positive().optional(),
