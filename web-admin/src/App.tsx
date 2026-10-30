@@ -5224,11 +5224,15 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  // 🧭 Caja hoja › «¿De quién?»: operadores y máquinas de Transporte (si la carga del inicio falló —p. ej. la pestaña
+  // se abrió antes de iniciar sesión—, se vuelven a pedir al entrar a la Caja de la Matriz).
   useEffect(() => {
-    if (activeTab !== "Caja" || !esMatrizActiva || campoOperadores.length) return;
-    apiGet<Array<{ nombre: string }>>("/campo/operadores?solo_activos=1").then((r) => setCampoOperadores(r.map((x) => x.nombre))).catch(() => undefined);
+    if (activeTab !== "Caja" || !esMatrizActiva) return;
+    if (!campoOperadores.length) apiGet<Array<{ nombre: string }>>("/campo/operadores?solo_activos=1").then((r) => setCampoOperadores(r.map((x) => x.nombre))).catch(() => undefined);
+    if (!fletaActivos.length) apiGet<Array<{ id: string; nombre: string; tipo?: string }>>("/campo/activos?solo_activos=1")
+      .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo })))).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, esMatrizActiva]);
+  }, [activeTab, esMatrizActiva, authUser?.id]);
   // «¿De quién es este gasto?»: socios a los que la caja de la Matriz les puede pagar un gasto, y en qué categorías
   // (las que tienen flujo propio —mantenimiento, sacos, repuestos, activos, pagos enlazados— no).
   const sociosDelGasto = accionistas.filter((a) => a.tipo === "SOCIO" && a.id !== activeAccionistaId);
