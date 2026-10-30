@@ -4175,6 +4175,9 @@ export function App() {
   });
   const [purchaseForm, setPurchaseForm] = useState({
     supplier_id: "",
+    // 🌾 Compra a un agricultor (p. ej. producto terminado): a crédito, la deuda queda a su nombre.
+    farmer_id: "",
+    compra_a: "PROVEEDOR" as "PROVEEDOR" | "AGRICULTOR",
     payment_type: "CASH" as "CASH" | "CREDIT",
     due_date: "",
     invoice_number: "",
@@ -9949,7 +9952,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     setPurchaseItems((prev) => prev.map((it, i) => i === idx ? { ...it, ...patch } : it));
 
   const submitPurchase = async () => {
-    if (!purchaseForm.supplier_id) { addToast("Selecciona un proveedor", "error"); return; }
+    const aAgricultor = purchaseForm.compra_a === "AGRICULTOR";
+    if (aAgricultor ? !purchaseForm.farmer_id : !purchaseForm.supplier_id) { addToast(aAgricultor ? "Selecciona el agricultor" : "Selecciona un proveedor", "error"); return; }
     const items: any[] = [];
     for (const it of purchaseItems) {
       const quantity = parseFloat(it.quantity);
@@ -9967,7 +9971,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     if (purchaseTotal() <= 0) { addToast("El total de la compra debe ser mayor a 0", "error"); return; }
 
     const payload: any = {
-      supplier_id: purchaseForm.supplier_id,
+      supplier_id: aAgricultor ? undefined : purchaseForm.supplier_id,
+      farmer_id: aAgricultor ? purchaseForm.farmer_id : undefined,
       payment_type: purchaseForm.payment_type,
       invoice_number: purchaseForm.invoice_number || undefined,
       notes: purchaseForm.notes || undefined,
@@ -9983,7 +9988,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
 
     try {
       await apiPost("/purchases", payload);
-      setPurchaseForm({ supplier_id: "", payment_type: "CASH", due_date: "", invoice_number: "", notes: "" });
+      setPurchaseForm({ supplier_id: "", farmer_id: "", compra_a: purchaseForm.compra_a, payment_type: "CASH", due_date: "", invoice_number: "", notes: "" });
       setPurchaseItems([{ item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
       await refreshPurchases();
       if (purchaseForm.payment_type === "CASH" && dashboard.current_cash_register?.id) {
@@ -19810,6 +19815,22 @@ Motivo (obligatorio):`, ""));
             {/* ── Registrar compra ── */}
             <div className="formPanel" style={{ marginBottom: 16 }}>
               <h2>🛒 Registrar compra</h2>
+              <div className="segmented" role="group" aria-label="¿A quién le compras?" style={{ marginBottom: 8 }}>
+                <button type="button" className={purchaseForm.compra_a === "PROVEEDOR" ? "active" : ""} onClick={() => setPurchaseForm({ ...purchaseForm, compra_a: "PROVEEDOR" })}>🏪 Proveedor</button>
+                <button type="button" className={purchaseForm.compra_a === "AGRICULTOR" ? "active" : ""} onClick={() => setPurchaseForm({ ...purchaseForm, compra_a: "AGRICULTOR" })}>🌾 Agricultor</button>
+              </div>
+              {purchaseForm.compra_a === "AGRICULTOR" ? (
+                <label><span>Agricultor *</span>
+                  <select value={purchaseForm.farmer_id}
+                    onChange={(e: any) => setPurchaseForm({ ...purchaseForm, farmer_id: e.target.value })}>
+                    <option value="">— Selecciona —</option>
+                    {[...farmers].sort((a, b) => a.full_name.localeCompare(b.full_name)).map((f) => (
+                      <option key={f.id} value={f.id}>{f.full_name}</option>
+                    ))}
+                  </select>
+                  <small className="muted">Ej.: arroz pilado que te vende un agricultor. A crédito, lo que se le debe queda a su nombre y se le descuenta al pagarle.</small>
+                </label>
+              ) : (
               <label><span>Proveedor *</span>
                 <select value={purchaseForm.supplier_id}
                   onChange={(e: any) => setPurchaseForm({ ...purchaseForm, supplier_id: e.target.value })}>
@@ -19819,6 +19840,7 @@ Motivo (obligatorio):`, ""));
                   ))}
                 </select>
               </label>
+              )}
               <label><span>Tipo de pago</span>
                 <select value={purchaseForm.payment_type}
                   onChange={(e: any) => setPurchaseForm({ ...purchaseForm, payment_type: e.target.value })}>

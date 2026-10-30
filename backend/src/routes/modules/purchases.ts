@@ -8,6 +8,7 @@ import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { avisarSobregiro } from "../../services/caja.js";
+import { resolverProveedor } from "../../services/proveedores.js";
 
 export const purchasesRouter = Router();
 
@@ -75,7 +76,9 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
   const accionistaId = authReq.accionistaId ?? null;
   const body = z.object({
-    supplier_id: z.string().uuid(),
+    // Proveedor, o un AGRICULTOR (se le crea su ficha de proveedor con el mismo nombre; a crédito la deuda es suya).
+    supplier_id: z.string().uuid().optional(),
+    farmer_id: z.string().uuid().optional(),
     purchase_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     payment_type: z.enum(["CASH", "CREDIT"]),
     cash_register_id: z.string().uuid().optional(),   // requerido solo si CASH
@@ -89,11 +92,21 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   const total = round2(body.items.reduce((acc, it) => acc + it.quantity * it.unit_price, 0));
   if (total <= 0) throw new ApiError(400, "El total de la compra debe ser mayor a 0");
 
-  // Proveedor
-  const sup = await pool.query("SELECT id, name, is_active FROM suppliers WHERE id = $1", [body.supplier_id]);
-  if (!sup.rows[0]) throw new ApiError(404, "Proveedor no encontrado");
-  if (!sup.rows[0].is_active) throw new ApiError(409, "El proveedor esta inactivo");
-  const supplierName = sup.rows[0].name;
+  // Proveedor o agricultor
+  if (!body.supplier_id && !body.farmer_id) throw new ApiError(400, "Elige el proveedor o el agricultor al que le compras.");
+  let supplierName = "";
+  let farmerName: string | null = null;
+  if (body.farmer_id) {
+    const f = await pool.query("SELECT full_name FROM farmers WHERE id = $1", [body.farmer_id]);
+    if (!f.rows[0]) throw new ApiError(404, "Agricultor no encontrado");
+    farmerName = String(f.rows[0].full_name);
+    supplierName = farmerName;
+  } else {
+    const sup = await pool.query("SELECT id, name, is_active FROM suppliers WHERE id = $1", [body.supplier_id]);
+    if (!sup.rows[0]) throw new ApiError(404, "Proveedor no encontrado");
+    if (!sup.rows[0].is_active) throw new ApiError(409, "El proveedor esta inactivo");
+    supplierName = sup.rows[0].name;
+  }
 
   // Caja: solo se valida/exige en compra a CONTADO
   if (body.payment_type === "CASH") {
@@ -130,12 +143,14 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (client) => {
+    // Agricultor: su ficha de proveedor (la busca por nombre o la crea) para que la compra salga en Compras como siempre.
+    const supplierId = body.farmer_id ? (await resolverProveedor(client, null, farmerName))!.id : body.supplier_id!;
     const purchase = await client.query(
       `INSERT INTO purchases
-        (purchase_number, supplier_id, accionista_id, purchase_date, payment_type, total_amount, invoice_number, status, notes, created_by)
-       VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7, 'CONFIRMED', $8, $9)
+        (purchase_number, supplier_id, accionista_id, purchase_date, payment_type, total_amount, invoice_number, status, notes, created_by, farmer_id)
+       VALUES ($1, $2, $3, COALESCE($4, CURRENT_DATE), $5, $6, $7, 'CONFIRMED', $8, $9, $10)
        RETURNING *`,
-      [nextCode("COMP"), body.supplier_id, accionistaId, body.purchase_date ?? null, body.payment_type, total, body.invoice_number ?? null, body.notes ?? null, body.created_by ?? null]
+      [nextCode("COMP"), supplierId, accionistaId, body.purchase_date ?? null, body.payment_type, total, body.invoice_number ?? null, body.notes ?? null, body.created_by ?? null, body.farmer_id ?? null]
     );
     const purchaseId = purchase.rows[0].id;
     const purchaseNumber = purchase.rows[0].purchase_number;
@@ -181,15 +196,15 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
         `INSERT INTO cash_movements
           (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
          VALUES ($1, 'EXPENSE', 'COMPRA_GENERAL', 'purchase', $2, $3, $4, $5)`,
-        [body.cash_register_id, purchaseId, total, `Compra ${purchaseNumber}`, body.created_by ?? null]
+        [body.cash_register_id, purchaseId, total, `Compra ${purchaseNumber} ${farmerName ? `al agricultor ${farmerName}` : `a ${supplierName}`}`, body.created_by ?? null]
       );
     } else {
       // Credito: cuenta por pagar al proveedor (se paga luego via /cash/payables/:id/pay)
       await client.query(
         `INSERT INTO accounts_payable
           (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description)
-         VALUES (NULL, $1, $2, $2, 'CONFIRMED', $3, 'purchase', $4, $5)`,
-        [accionistaId, total, body.due_date ?? null, purchaseId, `Compra ${purchaseNumber} a ${supplierName}`]
+         VALUES ($6, $1, $2, $2, 'CONFIRMED', $3, 'purchase', $4, $5)`,
+        [accionistaId, total, body.due_date ?? null, purchaseId, `Compra ${purchaseNumber} a ${farmerName ? `agricultor ${farmerName}` : supplierName}`, body.farmer_id ?? null]
       );
     }
 
