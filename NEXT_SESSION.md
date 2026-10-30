@@ -2,7 +2,13 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: ⚖️ Servicio de pilada a clientes: tarifa visible y cobro mínimo (2026-10-30)
+## Último cambio: 🚚 Bajada de carro parcial (2026-10-30)
+- Volqueta (se vacía sola, «no se paga») en la que un chico ayudó a bajar una parte: en Nómina › Bajada de carro, «🤝 alguien ayudó a bajar una parte» (o ✂️ en un ticket con nombre) pide quién y cuántos QQ; se le paga solo esa parte (QQ × tarifa).
+- `mobile_synced_tickets.bajada_qq` (migración 20261132; NULL = todo el ticket). `/cuadrilla/bajadas/asignar` acepta `qq` (null = todo; sin mandarlo no cambia; «no se paga» lo borra; no más que el ticket → 400). `sincronizarBajadas` usa la parte y lo anota «bajó X de Y QQ».
+- Además: Cuadrilla › Registros del período y su recibo ya NO muestran la bajada de carro (`/cuadrilla/entries` la excluye salvo `?incluir_bajada=1`).
+- Simulacro `bajada_parcial` TODO OK.
+
+## Cambio anterior: ⚖️ Servicio de pilada a clientes: tarifa visible y cobro mínimo (2026-10-30)
 - El cobro de pilada a CLIENTE (maquila) usa la tarifa de Configuración › Parámetros de planta (app_settings maestro
   tarifa_pilado_qq; antes leía labor_rates.pilado_precio_qq, sin pantalla). Recargos por saco siguen en labor_rates.
 - Mínimo: QQ cobrados ≥ (kg de cáscara ÷ 100) + servicio_minimo_pct (migración 20261130, default 7). `services/servicio-pilada.ts`
