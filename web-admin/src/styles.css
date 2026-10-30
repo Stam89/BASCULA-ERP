@@ -5488,6 +5488,11 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .invxModal__marcaFila strong { font-size: 15px; min-width: 0; overflow-wrap: anywhere; }
 .invxModal__marcaPie { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
 .invxModal__pres { display: flex; flex-wrap: wrap; gap: 4px; }
+.invxModal__llenos { display: grid; gap: 4px; margin: 6px 0 2px; }
+.invxModal__lleno { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 5px 8px; border-radius: 8px; background: #f5f3ff; border: 1px solid #ddd6fe; font-size: 13px; }
+.invxModal__lleno span { font-weight: 600; min-width: 92px; }
+.invxModal__lleno strong { font-variant-numeric: tabular-nums; }
+.invxModal__lleno small { opacity: .75; }
 .invxModal__pres span { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155; border: 1px solid #e2e8f0; }
 .invxModal__pres small { font-weight: 600; opacity: .75; }
 .invxModal__nota { margin: 0; padding: 8px 16px 14px; font-size: 11.5px; color: var(--c-text-muted, #5a7168); }

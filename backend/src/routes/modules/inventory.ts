@@ -36,6 +36,26 @@ inventoryRouter.get("/stock", asyncRoute(async (req, res) => {
   res.json(result.rows);
 }));
 
+// 📦 EMPACADO POR PRESENTACIÓN (pedido del dueño 2026-10-29): bultos YA LLENOS de cada marca por peso de saco
+// (piladora + allá). sack_weight_lb NULL = QQ de la marca sin presentación anotada.
+inventoryRouter.get("/empacado", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const result = await pool.query(
+    `SELECT m.product_id, p.name AS product_name, m.sack_weight_lb::float AS sack_weight_lb,
+            SUM(m.quantity)::float AS qq,
+            COALESCE(SUM(m.quantity) FILTER (WHERE w.type = 'EXTERNO'), 0)::float AS qq_alla
+       FROM inventory_movements m
+       JOIN products p ON p.id = m.product_id
+       JOIN warehouses w ON w.id = m.warehouse_id
+      WHERE m.accionista_id = $1 AND m.ownership = 'OWNED' AND p.product_type = 'PACKAGED_GOOD'
+      GROUP BY m.product_id, p.name, m.sack_weight_lb
+     HAVING ABS(SUM(m.quantity)) > 0.0005
+      ORDER BY p.name, m.sack_weight_lb DESC NULLS LAST`,
+    [accionistaId]
+  );
+  res.json(result.rows);
+}));
+
 // 🚚 POR DESPACHAR (pedido del dueño 2026-10-21): lo que ya salió del inventario al «Confirmar Preparación» pero el
 // pedido aún no se despacha. Sigue físicamente en bodega, ya comprometido: físico = existencia + por despachar.
 // Es la salida neta (OUT menos devoluciones) de los pedidos PENDIENTES ya preparados, del accionista activo.

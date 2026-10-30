@@ -4120,6 +4120,8 @@ export function App() {
   const [kardexOpen, setKardexOpen] = useState(false);
   // 🚚 Lo preparado que aún no se despacha (ya salió del inventario, pero sigue en bodega).
   const [porDespachar, setPorDespachar] = useState<Array<{ product_name: string; qq: number; numeros: string }>>([]);
+  // 📦 Bultos ya llenos de cada marca por peso de saco (piladora + allá).
+  const [empacadoPorPeso, setEmpacadoPorPeso] = useState<Array<{ product_id: string; product_name: string; sack_weight_lb: number | null; qq: number; qq_alla: number }>>([]);
   // 📄 Kardex por producto (2026-10-21): producto + bodega + período; saldo después de cada movimiento.
   type KardexProducto = { product_id: string; code: string; name: string; unit: string; warehouse_id: string; warehouse_name: string; warehouse_type: string; saldo: number; movimientos: number };
   type KardexMov = { id: string; created_at: string; movement: string; cantidad: number; nombre: string; detalle: string | null; notes: string | null; warehouse_name: string; lot_code: string | null; saldo: number };
@@ -5372,7 +5374,10 @@ export function App() {
         .filter((sk) => sk.categoria === "MARCA" && sk.activo !== false && (sk.marca ?? "").toUpperCase() === nombre && Number(sk.peso_lb) > 0)
         .map((sk) => ({ peso_lb: Number(sk.peso_lb), sacos: Number(sk.stock) || 0 }))
         .sort((a, b) => b.peso_lb - a.peso_lb);
-      return { nombre: product.name, calidad, cantidad: fila?.quantity ?? 0, unit: fila?.unit ?? product.unit, presentaciones };
+      const llenos = empacadoPorPeso
+        .filter((e) => e.product_id === product.id && Math.abs(Number(e.qq)) > 0.0005)
+        .map((e) => ({ peso_lb: e.sack_weight_lb == null ? null : Number(e.sack_weight_lb), qq: Number(e.qq), qq_alla: Number(e.qq_alla) || 0 }));
+      return { nombre: product.name, calidad, cantidad: fila?.quantity ?? 0, unit: fila?.unit ?? product.unit, presentaciones, llenos };
     });
 
   useEffect(() => {
@@ -6203,6 +6208,8 @@ export function App() {
     if (activeTab !== "Inventario") return;
     apiGet<Array<{ product_name: string; qq: number; numeros: string }>>("/inventory/por-despachar")
       .then(setPorDespachar).catch(() => setPorDespachar([]));
+    apiGet<typeof empacadoPorPeso>("/inventory/empacado")
+      .then(setEmpacadoPorPeso).catch(() => setEmpacadoPorPeso([]));
   }, [activeTab, stock, activeAccionistaId]);
   const conPorDespachar = (filas: FilaStock[]) => filas.map((f) => {
     const pd = porDespachar.find((x) => x.product_name === f.product_name);

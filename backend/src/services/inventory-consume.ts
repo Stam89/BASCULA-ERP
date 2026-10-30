@@ -15,14 +15,20 @@ type ConsumeInventoryOptions = {
   createdBy?: string | null;
   notes?: string | null;
   preferredLotId?: string | null;
+  /** 📦 Solo los bultos llenos de ese peso de saco (marca por presentación). Sin él, sale primero lo «sin presentación». */
+  sackWeightLb?: number | null;
 };
+
+/** Lo que salió de cada tramo (lote + peso del saco), para quien deba volver a ingresarlo igual (ej. traer de allá). */
+export type TramoConsumido = { lot_id: string | null; quantity: number; sack_weight_lb: number | null };
 
 export async function consumeInventoryFIFO(
   client: PoolClient,
   opts: ConsumeInventoryOptions
-): Promise<void> {
+): Promise<TramoConsumido[]> {
+  const tramos: TramoConsumido[] = [];
   const quantity = round3(Number(opts.quantity) || 0);
-  if (quantity <= 0) return;
+  if (quantity <= 0) return tramos;
   const ownership = opts.ownership ?? "OWNED";
 
   await lockInventoryStock(client, {
@@ -36,20 +42,21 @@ export async function consumeInventoryFIFO(
   const productName = product.rows[0]?.name ?? "este producto";
 
   const stockArgs: unknown[] = [opts.productId, opts.warehouseId, opts.accionistaId ?? null, ownership];
-  const lotFilter = opts.preferredLotId ? "AND lot_id = $5::uuid" : "";
-  if (opts.preferredLotId) stockArgs.push(opts.preferredLotId);
+  let lotFilter = "";
+  if (opts.preferredLotId) { stockArgs.push(opts.preferredLotId); lotFilter += ` AND lot_id = $${stockArgs.length}::uuid`; }
+  if (opts.sackWeightLb != null) { stockArgs.push(opts.sackWeightLb); lotFilter += ` AND sack_weight_lb = $${stockArgs.length}::numeric`; }
 
   const available = await client.query(
-    `SELECT lot_id, COALESCE(SUM(quantity), 0)::float AS quantity, MIN(created_at) AS first_at
+    `SELECT lot_id, sack_weight_lb::float AS sack_weight_lb, COALESCE(SUM(quantity), 0)::float AS quantity, MIN(created_at) AS first_at
      FROM inventory_movements
      WHERE product_id = $1
        AND warehouse_id = $2
        AND accionista_id = $3
        AND ownership = $4
        ${lotFilter}
-     GROUP BY lot_id
+     GROUP BY lot_id, sack_weight_lb
      HAVING COALESCE(SUM(quantity), 0) > 0.001
-     ORDER BY (lot_id IS NULL), MIN(created_at), lot_id`,
+     ORDER BY (sack_weight_lb IS NOT NULL), (lot_id IS NULL), MIN(created_at), lot_id, sack_weight_lb`,
     stockArgs
   );
 
@@ -68,8 +75,8 @@ export async function consumeInventoryFIFO(
     if (take <= 0) continue;
     await client.query(
       `INSERT INTO inventory_movements
-       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-       VALUES ($1, $2, $3, 'OUT', $4, $5, $6, $7, $8, $9, $10)`,
+       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id, sack_weight_lb)
+       VALUES ($1, $2, $3, 'OUT', $4, $5, $6, $7, $8, $9, $10, $11)`,
       [
         opts.productId,
         opts.warehouseId,
@@ -80,14 +87,17 @@ export async function consumeInventoryFIFO(
         ownership,
         opts.notes ?? null,
         opts.createdBy ?? null,
-        opts.accionistaId ?? null
+        opts.accionistaId ?? null,
+        row.sack_weight_lb ?? null
       ]
     );
+    tramos.push({ lot_id: row.lot_id ?? null, quantity: take, sack_weight_lb: row.sack_weight_lb ?? null });
     remaining = round3(remaining - take);
   }
 
   if (remaining > 0.001) {
     throw new ApiError(409, `No se pudo completar la salida de inventario de ${productName}. Faltan ${remaining.toFixed(2)} QQ.`);
   }
+  return tramos;
 }
 

@@ -2,7 +2,13 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📍 Saldo inicial de arroz pilado con presentación y «Allá» (2026-10-29)
+## Último cambio: 📦 Empacado por presentación + Total para vender (2026-10-29)
+- `inventory_movements.sack_weight_lb` (migración 20261128, con relleno de saldos iniciales desde «N bultos de X lb»): bultos YA LLENOS de cada marca por peso.
+- Saldo inicial manda `sack_weight_lb` (solo PACKAGED_GOOD); anular lo copia. `consumeInventoryFIFO` agrupa por (lote, peso), acepta `sackWeightLb` y devuelve los tramos; traer-allá conserva el peso.
+- Preparar pedido (orders.ts `descontarInventarioPreparacion`): línea de marca con presentación explícita → primero bultos llenos de esa marca+peso (piladora, luego allá = retiro), el resto del arroz base. `planSacosPedido` descuenta sacos vacíos solo del resto (`services/empacado.ts`). El respaldo del pedido suma los bultos llenos de las marcas del arroz base.
+- GET `/inventory/empacado`; el modal de marcas muestra 📦 bultos por peso. Inventario: «🧮 Total para vender» une marcas con su arroz base (Flor/Oso → 0.11); «Otros stocks» ya no repite marcas. Simulacro empacado_presentacion.
+
+## Cambio anterior: 📍 Saldo inicial de arroz pilado con presentación y «Allá» (2026-10-29)
 
 - Saldos iniciales › Inventario: «Presentación» (bultos × peso del saco; 25 lb = @ arroba) calcula los QQ y se anota en
   el detalle (el inventario sigue en QQ por producto, sin presentación). «¿Dónde está?»: piladora o «Allá: <proveedor>»

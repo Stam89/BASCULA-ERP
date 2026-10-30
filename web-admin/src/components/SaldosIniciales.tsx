@@ -195,6 +195,7 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
       const r = await apiPost<{ lote: string | null; bodega: string }>("/saldos-iniciales/inventario", {
         corte, product_id: prod.id, cantidad: enNegativo ? -qqN : qqN, costo_unitario: costoN ?? undefined,
         external_provider_id: !esCascara && allaId ? allaId : undefined,
+        sack_weight_lb: textoPresentacion ? Number(pesoLb) : undefined,
         detalle: [textoPresentacion, detalle.trim()].filter(Boolean).join(" · ") || undefined
       });
       avisar(`${prod.name}: ${enNegativo ? `−${qqTxt(qqN)} (en negativo)` : qqTxt(qqN)} en ${r.bodega}${r.lote ? ` · lote ${r.lote} listo para pilar` : ""}`, "success");

@@ -15,6 +15,7 @@ import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from 
 import { revertCuadrillaDespachoVentaEntry, upsertCuadrillaDespachoVentaEntry } from "./cuadrilla.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { traerDesdeAlla } from "../../services/traer-alla.js";
+import { bultosLlenosDisponibles, marcasDelArrozBase, pesoExplicito } from "../../services/empacado.js";
 import { validarFleteRegreso, type FleteEnvejecido } from "../../services/campo-flete-envejecido.js";
 import { calculateOrderStockCoverage, CODIGOS_CASCARA, rawBackingCode, RENDIMIENTO_SUBPRODUCTO_DEFECTO, subproductoEsperadoQq } from "../../utils/order-stock-coverage.js";
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
@@ -347,7 +348,9 @@ async function validarRespaldoDelPedido(
       ? await client.query("SELECT id, name FROM products WHERE code = $1 AND is_active = true", [rawCode])
       : null;
 
-    const stockIds = [productId, rawProduct?.rows[0]?.id].filter(Boolean) as string[];
+    // 📦 Los bultos ya llenos de sus marcas (Flor, Oso…) también respaldan el arroz base: salen primero al preparar.
+    const marcas = await marcasDelArrozBase(client, String(producto.rows[0].code));
+    const stockIds = [productId, rawProduct?.rows[0]?.id, ...marcas].filter(Boolean) as string[];
     const saldos = await client.query(
       `SELECT product_id, COALESCE(SUM(quantity), 0)::float AS quantity
          FROM inventory_movements
@@ -359,7 +362,8 @@ async function validarRespaldoDelPedido(
       [accionistaId, stockIds]
     );
     const saldoPorProducto = new Map(saldos.rows.map((row) => [String(row.product_id), Number(row.quantity)]));
-    const terminadoQq = Math.max(0, saldoPorProducto.get(productId) ?? 0);
+    const terminadoQq = Math.max(0, saldoPorProducto.get(productId) ?? 0)
+      + marcas.reduce((s, id) => s + Math.max(0, saldoPorProducto.get(id) ?? 0), 0);
     const cascaraQq = rawProduct?.rowCount ? Math.max(0, saldoPorProducto.get(String(rawProduct.rows[0].id)) ?? 0) : 0;
 
     const pendientes = await client.query(
@@ -461,14 +465,36 @@ async function descontarInventarioPreparacion(
   const salidasPlan: Array<{ productId: string; nombre: string; warehouseId: string; qq: number; bodega?: string }> = [];
 
   const items = await client.query(
-    "SELECT inventory_product_id, product_id, quantity FROM sales_order_items WHERE order_id = $1",
+    `SELECT i.inventory_product_id, i.product_id, i.quantity, i.presentation_id, i.presentation_name, p.product_type, p.name
+       FROM sales_order_items i JOIN products p ON p.id = i.product_id WHERE i.order_id = $1 ORDER BY i.id`,
     [opts.orderId]
   );
+  // 📦 Bultos YA LLENOS de la marca con la presentación pedida: salen primero (piladora y luego allá), sin
+  // gastar sacos vacíos. Lo que falte sale del arroz base como siempre.
+  const tomadoLleno = new Map<string, number>(); // `${marca}|${peso}|${bodega}` → QQ ya asignados en este pedido
+  const salidasLlenas: Array<{ productId: string; nombre: string; warehouseId: string; qq: number; peso: number; bodega?: string }> = [];
   // Agrupa por producto de inventario para validar/descontar una vez por producto.
   const porProducto = new Map<string, number>();
   for (const it of items.rows) {
+    let qqLinea = round2(Number(it.quantity || 0));
+    const peso = it.product_type === "PACKAGED_GOOD" && qqLinea > 0
+      ? await pesoExplicito(client, it.presentation_id ?? null, it.presentation_name ?? null) : null;
+    if (peso) {
+      const disp = await bultosLlenosDisponibles(client, { productId: String(it.product_id), sackWeightLb: peso, accionistaId: opts.accionistaId, piladoraId: opts.warehouseId });
+      for (const d of disp) {
+        if (qqLinea <= 0.001) break;
+        const k = `${it.product_id}|${peso}|${d.warehouseId}`;
+        const libre = round2(d.qq - (tomadoLleno.get(k) ?? 0));
+        const toma = round2(Math.min(qqLinea, libre));
+        if (toma <= 0.001) continue;
+        tomadoLleno.set(k, round2((tomadoLleno.get(k) ?? 0) + toma));
+        salidasLlenas.push({ productId: String(it.product_id), nombre: String(it.name), warehouseId: d.warehouseId, qq: toma, peso, bodega: d.externo ? d.bodega : undefined });
+        qqLinea = round2(qqLinea - toma);
+      }
+    }
+    if (qqLinea <= 0.001) continue;
     const pid = String(it.inventory_product_id ?? it.product_id);
-    porProducto.set(pid, round2((porProducto.get(pid) ?? 0) + Number(it.quantity || 0)));
+    porProducto.set(pid, round2((porProducto.get(pid) ?? 0) + qqLinea));
   }
   for (const [productId, qq] of [...porProducto.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     if (!(qq > 0)) continue;
@@ -530,7 +556,16 @@ async function descontarInventarioPreparacion(
     for (const i of v.items) traidos.push({ producto: i.producto, bodega: v.bodega, qq: i.quantity });
   }
 
-  // 2) La salida por venta.
+  // 2) La salida por venta: primero los bultos llenos de la marca (con su peso de saco)…
+  for (const s of salidasLlenas) {
+    await consumeInventoryFIFO(client, {
+      productId: s.productId, warehouseId: s.warehouseId, accionistaId: opts.accionistaId, quantity: s.qq, sackWeightLb: s.peso,
+      referenceType: "sales_order", referenceId: opts.orderId, createdBy: opts.createdBy ?? null,
+      notes: s.bodega ? `Bultos llenos de ${s.peso} lb retirados allá (${s.bodega.replace(/^Allá: /, "")}) para el pedido` : `Bultos llenos de ${s.peso} lb`
+    });
+    if (s.bodega) retiros.push({ producto: `${s.nombre} ${s.peso} lb`, bodega: s.bodega, qq: s.qq });
+  }
+  // …y el resto, del arroz base.
   for (const s of salidasPlan) {
     await consumeInventoryFIFO(client, {
       productId: s.productId,

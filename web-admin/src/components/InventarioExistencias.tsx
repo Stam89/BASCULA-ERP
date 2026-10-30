@@ -31,6 +31,8 @@ export type MarcaEmpacada = {
   unit: string;
   /** Presentaciones del catálogo de sacos de esa marca (peso y sacos vacíos en bodega). */
   presentaciones: Array<{ peso_lb: number; sacos: number }>;
+  /** 📦 Bultos YA LLENOS por peso de saco (peso null = QQ sin presentación anotada). */
+  llenos?: Array<{ peso_lb: number | null; qq: number; qq_alla: number }>;
 };
 export type Empacados = {
   marcas: MarcaEmpacada[];
@@ -234,6 +236,19 @@ function ModalEmpacados({ modal, marcas, onCerrar }: { modal: ModalMarcas; marca
                       <span className="invx__cant">{cant.enReal()} <small>{m.unit}</small></span>
                     </div>
                     <span className="invx__barra2" aria-hidden="true"><i style={{ width: `${estado === "cero" ? 0 : Math.max(4, (Math.abs(cant) / maximo) * 100)}%` }} /></span>
+                    {(m.llenos ?? []).length > 0 && (
+                      <div className="invxModal__llenos">
+                        {(m.llenos ?? []).map((l) => (
+                          <div key={String(l.peso_lb)} className="invxModal__lleno">
+                            <span>📦 {l.peso_lb == null ? "Sin presentación" : `${l.peso_lb} LB${l.peso_lb === 25 ? " (@)" : ""}`}</span>
+                            <strong>
+                              {l.peso_lb == null ? "" : `${Math.round((l.qq * 100) / l.peso_lb).toLocaleString("en-US")} bultos · `}{num(l.qq).enReal()} QQ
+                            </strong>
+                            {l.qq_alla > 0.0005 && <small>📍 {num(l.qq_alla).enReal()} QQ allá</small>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="invxModal__marcaPie">
                       <span className={`invx__chip invx__chip--${estado}`}>{TEXTO_ESTADO[estado]}</span>
                       {m.presentaciones.length > 0 && (
@@ -252,7 +267,7 @@ function ModalEmpacados({ modal, marcas, onCerrar }: { modal: ModalMarcas; marca
             </section>
           ))}
         </div>
-        <p className="invxModal__nota">«sacos» = sacos vacíos de esa marca en bodega (para empacar). El detalle por saco está en Inventario → 🧵 Sacos.</p>
+        <p className="invxModal__nota">📦 = bultos ya llenos de la marca por presentación (salen primero al preparar un pedido de esa marca y peso). «sacos» = sacos vacíos de esa marca en bodega (para empacar). El detalle por saco está en Inventario → 🧵 Sacos.</p>
       </div>
     </div>
   );

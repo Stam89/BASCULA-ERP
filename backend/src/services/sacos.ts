@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 import { ApiError } from "../http/error-handler.js";
 import { tipoSacoEspecial } from "./cargo-empaque.js";
+import { empacadoTomadoDelPedido } from "./empacado.js";
 
 /**
  * INVENTARIO DE SACOS POR MARCA Y PESO (bodega única de la MATRIZ).
@@ -246,6 +247,8 @@ export async function planSacosPedido(client: PoolClient, orderId: string): Prom
      WHERE i.order_id = $1`,
     [orderId]
   );
+  // 📦 Lo que el pedido sacó de bultos YA LLENOS de la marca no gasta sacos vacíos.
+  const lleno = await empacadoTomadoDelPedido(client, orderId);
   // Agrupa por saco para registrar un solo movimiento por tipo.
   const porSaco = new Map<string, { saco: SacoRow; sacos: number }>();
   const sumar = (saco: SacoRow, sacos: number) => {
@@ -263,8 +266,11 @@ export async function planSacosPedido(client: PoolClient, orderId: string): Prom
       if (saco && n > 0) sumar(saco, n);
       continue;
     }
-    const qq = Number(it.quantity);
+    let qq = Number(it.quantity);
     const peso = await pesoDePresentacion(client, it.presentation_id, it.presentation_name);
+    const kLleno = `${it.product_id}|${peso}`;
+    const yaLleno = Math.min(qq, lleno.get(kLleno) ?? 0);
+    if (yaLleno > 0) { lleno.set(kLleno, (lleno.get(kLleno) ?? 0) - yaLleno); qq = Math.round((qq - yaLleno) * 1000) / 1000; }
     if (!sacosParaQq(qq, peso)) continue;
     const cand = await sacosCandidatos(client, { id: it.product_id, code: it.code, name: it.name, product_type: it.product_type });
     if (!cand) {

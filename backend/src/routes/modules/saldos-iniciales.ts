@@ -244,6 +244,8 @@ const inventarioSchema = z.object({
   warehouse_id: z.string().uuid().optional(),
   // 📍 Arroz que está «Allá» donde el proveedor de selección / envejecimiento (pedido del dueño 2026-10-29).
   external_provider_id: z.string().uuid().optional(),
+  // 📦 Peso del saco de los bultos YA LLENOS de una marca (25 lb, 10 lb…): el inventario de la marca se lleva por presentación.
+  sack_weight_lb: z.number().positive().max(1000).optional(),
   detalle: z.string().trim().max(300).optional()
 });
 
@@ -309,10 +311,11 @@ saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
     const mov = await client.query(
       `INSERT INTO inventory_movements
          (product_id, warehouse_id, lot_id, movement, quantity, unit, reference_type, reference_id, ownership,
-          cost_unit, total_cost, notes, created_by, accionista_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, 'QQ', 'saldo_inicial', $6, 'OWNED', $7, $8, $9, $10, $11, ${SELLO("$12")})
+          cost_unit, total_cost, notes, created_by, accionista_id, created_at, sack_weight_lb)
+       VALUES ($1, $2, $3, $4, $5, 'QQ', 'saldo_inicial', $6, 'OWNED', $7, $8, $9, $10, $11, ${SELLO("$12")}, $13)
        RETURNING id`,
-      [p.id, w.id, loteId, esCascara ? "IN" : "ADJUSTMENT", qq, siId, costo ?? 0, total ?? 0, notas, userId, accionistaId, body.corte]
+      [p.id, w.id, loteId, esCascara ? "IN" : "ADJUSTMENT", qq, siId, costo ?? 0, total ?? 0, notas, userId, accionistaId, body.corte,
+       p.product_type === "PACKAGED_GOOD" ? body.sack_weight_lb ?? null : null]
     );
     await client.query(
       "UPDATE saldos_iniciales SET ref_tabla = 'inventory_movements', ref_id = $2, ref2_id = $3, contraparte_nombre = $4 WHERE id = $1",
@@ -428,9 +431,9 @@ saldosInicialesRouter.post("/:id/anular", asyncRoute(async (req, res) => {
         // Contra-asiento en el kárdex (no se borra el ingreso).
         await client.query(
           `INSERT INTO inventory_movements
-             (product_id, warehouse_id, lot_id, movement, quantity, unit, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-           VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'QQ', 'saldo_inicial_anulado', $5, $6, $7, $8, $9)`,
-          [mov.product_id, mov.warehouse_id, mov.lot_id, -qq, si.id, mov.ownership, `Anulación de saldo inicial: ${motivo}`, userId, accionistaId]
+             (product_id, warehouse_id, lot_id, movement, quantity, unit, reference_type, reference_id, ownership, notes, created_by, accionista_id, sack_weight_lb)
+           VALUES ($1, $2, $3, 'ADJUSTMENT', $4, 'QQ', 'saldo_inicial_anulado', $5, $6, $7, $8, $9, $10)`,
+          [mov.product_id, mov.warehouse_id, mov.lot_id, -qq, si.id, mov.ownership, `Anulación de saldo inicial: ${motivo}`, userId, accionistaId, mov.sack_weight_lb ?? null]
         );
         if (si.ref2_id) await client.query("UPDATE lots SET status = 'CANCELLED' WHERE id = $1", [si.ref2_id]);
       }

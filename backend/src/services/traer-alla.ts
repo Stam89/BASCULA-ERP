@@ -35,18 +35,22 @@ export async function traerDesdeAlla(tx: PoolClient, input: {
   for (const it of input.items) {
     const qty = round3(it.quantity);
     // Sale de «Allá» (valida que haya: no se trae más de lo que quedó)…
-    await consumeInventoryFIFO(tx, {
+    const salio = await consumeInventoryFIFO(tx, {
       productId: it.product_id, warehouseId: alla.rows[0].id, accionistaId: input.accionistaId, quantity: qty,
       referenceType: "selection_traida", referenceId: traidaId,
       notes: `Traído a la piladora desde ${alla.rows[0].name}`, createdBy: input.createdBy ?? null
     });
-    // …y entra a la piladora.
-    await tx.query(
-      `INSERT INTO inventory_movements
-       (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
-       VALUES ($1, $2, 'IN', $3, 'selection_traida', $4, 'OWNED', $5, $6, $7)`,
-      [it.product_id, plantaId, qty, traidaId, `Llegó a la piladora desde ${alla.rows[0].name}`, input.createdBy ?? null, input.accionistaId]
-    );
+    // …y entra a la piladora (los bultos llenos de una marca conservan su peso de saco).
+    const porPeso = new Map<number | null, number>();
+    for (const t of salio) porPeso.set(t.sack_weight_lb, round3((porPeso.get(t.sack_weight_lb) ?? 0) + t.quantity));
+    for (const [peso, q] of porPeso) {
+      await tx.query(
+        `INSERT INTO inventory_movements
+         (product_id, warehouse_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id, sack_weight_lb)
+         VALUES ($1, $2, 'IN', $3, 'selection_traida', $4, 'OWNED', $5, $6, $7, $8)`,
+        [it.product_id, plantaId, q, traidaId, `Llegó a la piladora desde ${alla.rows[0].name}`, input.createdBy ?? null, input.accionistaId, peso]
+      );
+    }
   }
   let flete: Awaited<ReturnType<typeof registrarFleteEnvejecido>> | null = null;
   if (input.flete) {
