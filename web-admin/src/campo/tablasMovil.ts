@@ -23,6 +23,11 @@ function etiquetar(tabla: HTMLTableElement) {
         const nombre = span > 1 ? "" : nombres[col] ?? "";
         if (td.getAttribute("data-label") !== nombre) td.setAttribute("data-label", nombre);
         td.classList.toggle("tt-ancha", span > 1);
+        // Vacía («—») = no se muestra en la tarjeta; texto largo = va debajo de su etiqueta, alineado a la izquierda.
+        const conControl = td.querySelector("input, select, button, textarea, details") != null;
+        const txt = (td.textContent ?? "").replace(/\s+/g, " ").trim();
+        td.classList.toggle("tt-vacia", !conControl && (txt === "" || txt === "—" || txt === "-"));
+        td.classList.toggle("tt-larga", !conControl && txt.length > 34);
         col += span;
       }
     }
@@ -39,7 +44,7 @@ export function useTablasEnTarjetas() {
       document.querySelectorAll<HTMLTableElement>(SELECTOR).forEach(etiquetar);
     };
     const obs = new MutationObserver(() => { if (!pendiente) pendiente = window.setTimeout(pasar, 60); });
-    obs.observe(document.body, { childList: true, subtree: true });
+    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
     pasar();
     return () => {
       obs.disconnect();

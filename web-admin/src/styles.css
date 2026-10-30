@@ -5514,6 +5514,9 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child small { font-weight: 500; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-ancha,
   body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""] { display: block; text-align: left; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-vacia:not(:first-child) { display: none; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child) { display: block; text-align: left; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child)::before { display: block; max-width: none; margin-bottom: 1px; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td:has(button) { flex-wrap: wrap; }
   body.campoActivo table.tablaTarjeta td button { min-height: 38px; }
   body.campoActivo table.tablaTarjeta td input, body.campoActivo table.tablaTarjeta td select { max-width: 60%; }
@@ -5525,7 +5528,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
 .campoNomina__recibo { grid-column: 1 / -1; margin-top: 0; }
-.campoNomina__recibo td { white-space: normal; }
+.campoNomina__recibo { min-width: 0; }
+.campoNomina__recibo table { table-layout: fixed; }
+.campoNomina__recibo td { white-space: normal; overflow-wrap: anywhere; padding: 3px 4px; }
+.campoNomina__recibo td:nth-child(1) { width: 25%; }
+.campoNomina__recibo td:nth-child(2) { width: 20%; }
+.campoNomina__recibo td:nth-child(4) { width: 19%; white-space: nowrap; }
 .nomMatriz__recibo summary { cursor: pointer; color: #1d4ed8; font-weight: 600; }
 .nomMatriz__recibo table { margin-top: 4px; border-collapse: collapse; width: 100%; }
 .nomMatriz__recibo td { padding: 2px 6px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
