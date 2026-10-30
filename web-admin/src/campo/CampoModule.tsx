@@ -3468,10 +3468,14 @@ function OperadoresCatalogo({ operadores, onChanged, onError }: {
   return (
     <div className="formPanel" style={{ gridColumn: "1 / -1" }} ref={formRef}>
       <h2>👷 Operadores</h2>
-      {editId && <p className="chip warn" style={{ display: "inline-block", margin: "0 0 6px" }}>✏️ Editando a {operadores.find((o) => o.id === editId)?.nombre ?? "operador"}: cambia los datos y toca «Guardar cambios»</p>}
+      {editId && <p className="chip warn" style={{ display: "inline-block", margin: "0 0 6px", whiteSpace: "normal", lineHeight: 1.35 }}>✏️ Editando a {operadores.find((o) => o.id === editId)?.nombre ?? "operador"}: cambia los datos y toca «Guardar cambios»</p>}
       <p className="muted" style={{ marginTop: -4 }}>
         Personal de Transporte y Cosechadora. Si tiene sueldo semanal, la nómina lo propone una sola vez de lunes a domingo;
         con sueldo en $0 conserva el cálculo por QQ, viaje o día.
+      </p>
+      <p className="muted" style={{ marginTop: -4, fontSize: 12.5 }}>
+        📅 <strong>¿Cobra por día?</strong> Deja el sueldo en $0 y ponle su pago en <strong>⚙️ Configuración → 💵 Tarifas de operadores</strong>: operador, máquina, valor y «$ / Día».
+        La nómina cuenta los días distintos que tiene partes (si maneja otra máquina del mismo tipo, usa esa misma tarifa).
       </p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
         <label><span>Nombre</span><input type="text" value={f.nombre} onChange={(e) => setF({ ...f, nombre: e.target.value })} placeholder="Ej: Juan Pérez" /></label>
