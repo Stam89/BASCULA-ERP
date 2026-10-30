@@ -2,7 +2,14 @@
 
 Actualizado: 2026-10-29
 
-## Último cambio: 📦 Empacado por presentación + Total para vender (2026-10-29)
+## Último cambio: 🚜 Transporte: operador visible, recibo de nómina y vista de celular (2026-10-29)
+- Partes Diarios: sugiere el operador que manejó la máquina la última vez (GET /campo/activos trae `ultimo_operador`); sin aviso rojo de chofer; Observaciones muestra el agricultor (farmer del parte o del ticket por `origen_uid`).
+- El operador (string_agg de campo_partes.servicio_id) sale en CxC (lista y Ver detalle + impresión), Servicios y Reportes › Por cobrar.
+- Nómina: `detalle` por fila (fecha, agricultor, QQ) → 📄 Recibo en Ajustes y en «Pagar la semana» (por operador, todas sus máquinas, días distintos).
+- Celular: `campo/tablasMovil.ts` (useTablasEnTarjetas en CampoWorkspace) etiqueta td con el th y pone body.campoActivo; CSS ≤700px convierte cajaTable/nomMatriz__tabla/er-tabla en tarjetas (oculta «—», textos largos debajo, tfoot etiquetado). Operadores › Editar sube al formulario.
+- Datos: caja CEYRO 29/10 cargada ($482.55; tarjeta de débito de CEYRO = RETIRO_BANCO + gasto). Ventas por asignar viejas ocultas (anulado_at, plata queda). Saldos iniciales de producto de STALYN/ROVINSON BORRADOS a pedido (respaldo CSV en scratchpad de la sesión).
+
+## Cambio anterior: 📦 Empacado por presentación + Total para vender (2026-10-29)
 - `inventory_movements.sack_weight_lb` (migración 20261128, con relleno de saldos iniciales desde «N bultos de X lb»): bultos YA LLENOS de cada marca por peso.
 - Saldo inicial manda `sack_weight_lb` (solo PACKAGED_GOOD); anular lo copia. `consumeInventoryFIFO` agrupa por (lote, peso), acepta `sackWeightLb` y devuelve los tramos; traer-allá conserva el peso.
 - Preparar pedido (orders.ts `descontarInventarioPreparacion`): línea de marca con presentación explícita → primero bultos llenos de esa marca+peso (piladora, luego allá = retiro), el resto del arroz base. `planSacosPedido` descuenta sacos vacíos solo del resto (`services/empacado.ts`). El respaldo del pedido suma los bultos llenos de las marcas del arroz base.
