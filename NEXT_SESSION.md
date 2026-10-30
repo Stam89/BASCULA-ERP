@@ -1,8 +1,24 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-29
+Actualizado: 2026-10-30
 
-## Último cambio: 🚜 Transporte: operador visible, recibo de nómina y vista de celular (2026-10-29)
+## Último cambio: 📋 Caja Principal tipo hoja de cálculo (2026-10-30)
+- Arriba 4 saldos (gaveta, entradas de HOY, salidas de HOY, saldo inicial) y 3 botones: ＋ Registrar ingreso (F2),
+  － Registrar egreso (F3), 📊 Ver resumen global (F4). Atajos en un useEffect de App.tsx (solo en Caja con caja abierta y
+  sin otro modal). «Otros registros» pasó a «Accesos directos».
+- `components/CajaHoja.tsx` reemplaza la tabla de movimientos: FECHA · CONCEPTO · CATEGORÍA · CÓDIGO · ENTRADAS · SALIDAS ·
+  SALDO acumulado (con TODOS los movimientos, aunque los de otros módulos estén escondidos; egresos a crédito en su hora sin
+  mover el saldo). Fila de captura al final: Enter/Tab pasa de celda, Enter en el monto guarda (POST /cash/:id/movements),
+  Esc limpia. Autocompletado propio `CeldaSugerida` (el datalist nativo se comía el Enter; lista en portal). Categorías
+  guiadas (mantenimiento, repuestos, materiales, sacos, activo fijo) abren el formulario completo con lo escrito; sin
+  PAGO_AGRICULTOR/FOMENTOS/PAGO_SERVICIO_PILADO. Conserva Anular, 🔁 Repetir y 💸 Liquidar fondo.
+- Migración 20261129: `cash_movements.codigo` (NULL = 001) y categorías GASTOS_VARIOS (egreso, con rubro «Gastos varios /
+  Donación» en Resultado mensual) e INGRESOS_VARIOS (ingreso), «… / Donación / Contribución económica», AMBOS.
+- GET /cash/resumen?desde&hasta[&detalle=fecha] (cash.ts): por día en hora de Ecuador, todas las cajas del accionista;
+  saldo al cierre = saldo inicial de la última caja abierta hasta ese momento + sus movimientos. `CajaResumenGlobal.tsx`:
+  Por día (movimientos + últimos 30 días), Por fechas, Por mes; Excel (CSV) e Imprimir. Simulacro `caja_hoja`.
+
+## Cambio anterior: 🚜 Transporte: operador visible, recibo de nómina y vista de celular (2026-10-29)
 - Partes Diarios: sugiere el operador que manejó la máquina la última vez (GET /campo/activos trae `ultimo_operador`); sin aviso rojo de chofer; Observaciones muestra el agricultor (farmer del parte o del ticket por `origen_uid`).
 - El operador (string_agg de campo_partes.servicio_id) sale en CxC (lista y Ver detalle + impresión), Servicios y Reportes › Por cobrar.
 - Nómina: `detalle` por fila (fecha, agricultor, QQ) → 📄 Recibo en Ajustes y en «Pagar la semana» (por operador, todas sus máquinas, días distintos).

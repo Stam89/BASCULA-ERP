@@ -48,6 +48,8 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
+import { CajaHoja, type HojaNueva } from "./components/CajaHoja";
+import { CajaResumenGlobal } from "./components/CajaResumenGlobal";
 
 // Módulos bajo demanda: si la pestaña quedó con una versión anterior y el
 // archivo ya no existe, se recarga sola en vez de quedar en blanco.
@@ -1147,6 +1149,8 @@ type CashMovement = {
   // Gasto de un socio pagado por esta caja (GASTO_POR_SOCIO): el socio y la categoría real del gasto.
   por_cuenta_de?: string | null;
   categoria_por_cuenta?: string | null;
+  // Columna «CÓDIGO» de la caja tipo hoja (NULL = 001).
+  codigo?: string | null;
 };
 
 /** Egreso A CRÉDITO registrado en la sesión: es una Cuenta por Pagar, no toca la caja. */
@@ -2893,6 +2897,22 @@ export function App() {
       if (d) d.value = deSocio ? "" : m.description ?? "";
       if (a) { a.value = String(Number(m.amount)); a.focus(); a.select(); }
     }, 120);
+  }
+  // 📊 Resumen global de la caja (F4): por día, por fechas y por mes.
+  const [cajaResumenGlobal, setCajaResumenGlobal] = useState(false);
+  // Desde la hoja: una categoría que pide más datos abre el formulario completo con lo ya escrito.
+  function abrirFormularioDesdeHoja(tipo: "EXPENSE" | "INCOME", category: string, description: string, amount: number | null) {
+    abrirMovimientoCaja(tipo);
+    setMovCategory(category);
+    setTimeout(() => {
+      const f = document.querySelector("form.cj-form") as HTMLFormElement | null;
+      const d = f?.querySelector("input[name='description']") as HTMLInputElement | null;
+      const a = f?.querySelector("input[name='amount']") as HTMLInputElement | null;
+      if (d && description) d.value = description;
+      if (a && amount) a.value = String(amount);
+      (a ?? d)?.focus();
+    }, 120);
+    addToast("Esta categoría pide más datos: completa el formulario", "warn");
   }
   useEffect(() => {
     if (!cajaMenu) return;
@@ -5066,6 +5086,18 @@ export function App() {
     }
   }
 
+  // 📋 Fila de la caja tipo hoja: un movimiento simple (categoría + monto + concepto + código).
+  async function guardarFilaHoja(f: HojaNueva) {
+    const registerId = dashboard.current_cash_register?.id;
+    if (!registerId) throw new Error("No hay caja abierta");
+    await apiPost(`/cash/${registerId}/movements`, {
+      movement: f.movement, category: f.category, amount: f.amount, description: f.description, codigo: f.codigo,
+      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? f.medio : undefined
+    });
+    addToast(`${f.movement === "INCOME" ? "Entrada" : "Salida"} de ${money(f.amount)} registrada`, "success");
+    await refreshCaja(registerId);
+  }
+
   async function submitExpense(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const registerId = dashboard.current_cash_register?.id;
@@ -6026,6 +6058,24 @@ export function App() {
     return () => { window.removeEventListener("focus", alVolver); document.removeEventListener("visibilitychange", alVolver); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
+  // Atajos de la Caja: F2 ingreso · F3 egreso · F4 resumen global (con una caja abierta y sin otra ventana encima).
+  const hayCajaAbierta = !!dashboard.current_cash_register;
+  useEffect(() => {
+    if (activeTab !== "Caja" || !hayCajaAbierta) return;
+    const atajo = (e: KeyboardEvent) => {
+      if (e.key !== "F2" && e.key !== "F3" && e.key !== "F4") return;
+      if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (document.querySelector(".modalOverlay:not(.cjr-overlay)")) return;
+      e.preventDefault();
+      if (e.key === "F4") { setCajaResumenGlobal((v) => !v); return; }
+      setCajaResumenGlobal(false);
+      abrirMovimientoCaja(e.key === "F2" ? "INCOME" : "EXPENSE");
+      setTimeout(() => (document.querySelector("form.cj-form input[name='amount']") as HTMLInputElement | null)?.focus(), 150);
+    };
+    window.addEventListener("keydown", atajo);
+    return () => window.removeEventListener("keydown", atajo);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, hayCajaAbierta]);
   const toggleCashCategory = async (c: CashCat) => {
     try {
       await apiOk(`/cash/categories/${c.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ activo: !c.activo }) });
@@ -19948,23 +19998,13 @@ Motivo (obligatorio):`, ""));
                   };
                   return (
                     <>
-                      {/* Saldo compacto: cuánto hay, dónde y lo de hoy. Lo poco usado va en «Más». */}
-                      <div className="cjx-hero">
-                        <div style={{ minWidth: 0 }}>
-                          <p className="cjx-sub"><span className="cj-live" /> {caja.name} · {(() => {
-                            const ab = caja.opened_at ? new Date(caja.opened_at) : null;
-                            const dias = ab ? Math.floor((Date.now() - ab.getTime()) / 86400000) : 0;
-                            return ab ? `abierta el ${ab.toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}${dias >= 1 ? ` (hace ${dias} día${dias === 1 ? "" : "s"})` : ""}` : new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
-                          })()}</p>
-                          <div className="cjx-saldo">{money(saldoActual)}</div>
-                          <p className="cjx-sub">
-                            {caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined
-                              ? <>💵 Gaveta <b>{money(Number(cashSummary.saldo_efectivo))}</b> · 🏦 Banco <b>{money(Number(cashSummary.saldo_banco ?? 0))}</b> · </>
-                              : <>💵 En la gaveta <b>{money(saldoActual)}</b> · </>}
-                            entró <b className="cj-pos">+{money(cashSummary?.total_income ?? 0)}</b> · salió <b className="cj-neg">−{money(cashSummary?.total_expense ?? 0)}</b>
-                            <span className="cjx-ini"> · inicial {money(Number(caja.opening_balance))}</span>
-                          </p>
-                        </div>
+                      {/* Caja tipo hoja (2026-10-30): nombre de la caja y «Más» arriba; debajo los 4 saldos. */}
+                      <div className="cjx-hero cjx-hero--fino">
+                        <p className="cjx-sub"><span className="cj-live" /> <b>{caja.name}</b> · {(() => {
+                          const ab = caja.opened_at ? new Date(caja.opened_at) : null;
+                          const dias = ab ? Math.floor((Date.now() - ab.getTime()) / 86400000) : 0;
+                          return ab ? `abierta el ${ab.toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long" })}${dias >= 1 ? ` (hace ${dias} día${dias === 1 ? "" : "s"})` : ""}` : new Date().toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", year: "numeric" });
+                        })()}</p>
                         <div className="cj-dd">
                           <button type="button" className={`cj-btn ${cajaMenu === "opciones" ? "is-open" : ""}`} aria-haspopup="menu" aria-expanded={cajaMenu === "opciones"}
                             onClick={() => setCajaMenu(cajaMenu === "opciones" ? null : "opciones")}>
@@ -20016,13 +20056,51 @@ Motivo (obligatorio):`, ""));
                         </div>
                       )}
 
-                      {/* Lo de todos los días: dos botones grandes. */}
-                      <div className="cjx-big">
-                        <button type="button" className={`cjx-big__btn is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("EXPENSE")}>
-                          <span aria-hidden="true">↓</span> Salió dinero
-                        </button>
+                      {/* 💰 Saldos en tiempo real: lo que hay, lo de HOY y con cuánto se abrió. */}
+                      {(() => {
+                        const hoy = hoyLocal();
+                        const deHoy = cashMovements.filter((m) => fechaLocal(new Date(m.created_at)) === hoy);
+                        const entHoy = round2(deHoy.filter((m) => m.movement === "INCOME").reduce((t, m) => t + Number(m.amount), 0));
+                        const salHoy = round2(deHoy.filter((m) => m.movement === "EXPENSE").reduce((t, m) => t + Number(m.amount), 0));
+                        const mixta = caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined;
+                        const gaveta = mixta ? Number(cashSummary!.saldo_efectivo) : saldoActual;
+                        const abiertaHoy = caja.opened_at ? fechaLocal(new Date(caja.opened_at)) === hoy : true;
+                        return (
+                          <div className="cjk">
+                            <div className="cjk-card is-saldo">
+                              <small>💵 Saldo actual en gaveta</small>
+                              <strong>{money(gaveta)}</strong>
+                              <span>{mixta ? <>🏦 Banco {money(Number(cashSummary?.saldo_banco ?? 0))} · total {money(saldoActual)}</> : "lo que debe haber ahora"}</span>
+                            </div>
+                            <div className="cjk-card is-in">
+                              <small>＋ Entradas de hoy</small>
+                              <strong>{money(entHoy)}</strong>
+                              <span>{abiertaHoy ? `${deHoy.filter((m) => m.movement === "INCOME").length} movimiento(s)` : `en la sesión ${money(cashSummary?.total_income ?? 0)}`}</span>
+                            </div>
+                            <div className="cjk-card is-out">
+                              <small>－ Salidas de hoy</small>
+                              <strong>{money(salHoy)}</strong>
+                              <span>{abiertaHoy ? `${deHoy.filter((m) => m.movement === "EXPENSE").length} movimiento(s)` : `en la sesión ${money(cashSummary?.total_expense ?? 0)}`}</span>
+                            </div>
+                            <div className="cjk-card">
+                              <small>🗂️ Saldo inicial / anterior</small>
+                              <strong>{money(Number(caja.opening_balance))}</strong>
+                              <span>con el que se abrió la caja</span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* Lo de todos los días: ingreso, egreso y el resumen global (atajos F2 · F3 · F4). */}
+                      <div className="cjx-big cjx-big--3">
                         <button type="button" className={`cjx-big__btn is-in ${cajaSubTab === "movimiento" && movType === "INCOME" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("INCOME")}>
-                          <span aria-hidden="true">↑</span> Entró dinero
+                          <span aria-hidden="true">＋</span> Registrar ingreso <kbd>F2</kbd>
+                        </button>
+                        <button type="button" className={`cjx-big__btn is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} onClick={() => abrirMovimientoCaja("EXPENSE")}>
+                          <span aria-hidden="true">－</span> Registrar egreso <kbd>F3</kbd>
+                        </button>
+                        <button type="button" className={`cjx-big__btn is-res ${cajaResumenGlobal ? "is-on" : ""}`} onClick={() => setCajaResumenGlobal(true)}>
+                          <span aria-hidden="true">📊</span> Ver resumen global <kbd>F4</kbd>
                         </button>
                       </div>
 
@@ -20064,7 +20142,7 @@ Motivo (obligatorio):`, ""));
                           </div>
                         )}
                         <div className="cjx-grupo">
-                          <span className="cjx-grupo__t">Otros registros</span>
+                          <span className="cjx-grupo__t">Accesos directos</span>
                           {acciones.filter((x) => visibles.includes(x.key) && x.key !== "mantenimiento").map((x) => (
                             <button key={x.key} type="button" className={cajaSubTab === x.key ? "is-on" : ""} title={x.hint} onClick={() => abrir(x.key)}>{x.icon} {x.label}</button>
                           ))}
@@ -20078,7 +20156,7 @@ Motivo (obligatorio):`, ""));
                             <button type="button" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadre del día</button>
                           )}
                           {cajaSubTab !== "resumen" && (
-                            <button type="button" onClick={() => abrir("resumen")}>📋 Movimientos</button>
+                            <button type="button" onClick={() => abrir("resumen")}>📋 Hoja de movimientos</button>
                           )}
                         </div>
                       </div>
@@ -20089,7 +20167,7 @@ Motivo (obligatorio):`, ""));
                         const titulo = x ? `${x.icon} ${x.label}` : cajaSubTab === "historial" ? "🔎 ¿Cuándo se hizo?" : "";
                         return titulo ? (
                           <div className="cj-crumb">
-                            <button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Movimientos</button>
+                            <button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Hoja de movimientos</button>
                             <span className="cj-crumb-sep">/</span>
                             <strong>{titulo}</strong>
                           </div>
@@ -20146,6 +20224,14 @@ Motivo (obligatorio):`, ""));
                     </div>
                   );
                 })()}
+
+                {cajaResumenGlobal && (
+                  <CajaResumenGlobal
+                    titulo={`Caja de ${accionistas.find((a) => a.id === activeAccionistaId)?.name ?? dashboard.current_cash_register?.name ?? ""}`}
+                    negocio={appSettings.business_name}
+                    onCerrar={() => setCajaResumenGlobal(false)}
+                  />
+                )}
 
                 {cuadreDia && cashSummary && (() => {
                   const c = cuadreDia;
@@ -20232,7 +20318,7 @@ Motivo (obligatorio):`, ""));
                 {cajaSubTab === "resumen" && (
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
-                      <span>📋 Movimientos de la sesión</span>
+                      <span>📋 Hoja de movimientos de la sesión</span>
                       <span className="cj-count">{cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).length + cajaCreditos.length}</span>
                     </div>
                     {(() => {
@@ -20257,128 +20343,39 @@ Motivo (obligatorio):`, ""));
                         💳 A crédito en esta sesión: <strong>{money(cajaCreditos.filter((c) => c.status !== "CANCELLED").reduce((s, c) => s + Number(c.amount), 0))}</strong> en Cuentas por Pagar · no afecta el saldo de la caja
                       </div>
                     )}
-                    {cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).length + cajaCreditos.length === 0 ? (
-                      <div className="emptyState">
-                        <div className="emptyIcon">📭</div>
-                        <p>{cashMovements.length ? "Sin movimientos registrados en Caja (los de otros módulos están escondidos)" : "Sin movimientos registrados aún"}</p>
-                      </div>
-                    ) : (
-                      <div style={{ maxHeight: "600px", overflowY: "auto" }}>
-                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                          <thead style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb", position: "sticky", top: 0 }}>
-                            <tr>
-                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Hora</th>
-                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Tipo</th>
-                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Categoría</th>
-                              <th style={{ padding: "12px 16px", textAlign: "left", fontWeight: 700, color: "#374151" }}>Descripción</th>
-                              <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }}>Monto</th>
-                              {canAnular && <th style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700, color: "#374151" }} />}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {[
-                              ...cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).map((m) => ({ k: "mov" as const, t: m.created_at, m })),
-                              ...cajaCreditos.map((c) => ({ k: "cred" as const, t: c.created_at, c }))
-                            ].sort((a, b) => (a.t < b.t ? 1 : a.t > b.t ? -1 : 0)).map((fila, idx) => {
-                              if (fila.k === "cred") {
-                                // Egreso A CRÉDITO: Cuenta por Pagar al proveedor, $0 de impacto en la caja.
-                                const c = fila.c;
-                                const anulado = c.status === "CANCELLED";
-                                const abonado = Number(c.amount) - Number(c.balance);
-                                return (
-                                  <tr key={`cred-${c.id}`} style={{ borderBottom: "1px solid #e5e7eb", background: anulado ? "#fef2f2" : "#faf5ff", opacity: anulado ? 0.7 : 1 }}>
-                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>{new Date(c.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</td>
-                                    <td style={{ padding: "12px 16px" }}>
-                                      <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: "4px", background: "#ede9fe", color: "#6d28d9", fontWeight: 700, fontSize: 11 }}>💳 A Crédito / CxP</span>
-                                      {anulado && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
-                                    </td>
-                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>
-                                      {categoryLabel(c.categoria ?? "")}
-                                      {c.subcategoria && <div style={{ fontSize: 11, color: "#9ca3af" }}>{c.subcategoria}</div>}
-                                    </td>
-                                    <td style={{ padding: "12px 16px", color: "#6b7280" }}>
-                                      {c.description ?? "—"}
-                                      <div style={{ fontSize: 11, color: "#6d28d9", marginTop: 3 }}>
-                                        🏪 {c.proveedor_nombre ?? "—"}{c.due_date ? ` · vence ${String(c.due_date).slice(0, 10).split("-").reverse().join("/")}` : ""}
-                                        {!anulado && (Number(c.balance) < 0.005 ? " · ✅ pagada" : abonado > 0.005 ? ` · abonado ${money(abonado)}, saldo ${money(Number(c.balance))}` : " · pendiente en Por Pagar")}
-                                      </div>
-                                    </td>
-                                    <td style={{ padding: "12px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
-                                      <div style={{ fontWeight: 700, color: "#6d28d9", textDecoration: anulado ? "line-through" : "none" }}>{money(Number(c.amount))}</div>
-                                      <div style={{ fontSize: 11, color: "#6b7280" }}>$0.00 en caja</div>
-                                    </td>
-                                    {canAnular && (
-                                      <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
-                                        {!anulado && abonado < 0.005 && (
-                                          <button type="button" className="btnGhost" onClick={() => anularEgresoCredito(c).catch((e) => addToast(e.message, "error"))}>Anular</button>
-                                        )}
-                                      </td>
-                                    )}
-                                  </tr>
-                                );
-                              }
-                              const m = fila.m;
-                              const isReversed = !!m.reversed_at;
-                              const isReversal = !!m.reversal_of;
-                              return (
-                              <tr key={m.id} style={{ borderBottom: "1px solid #e5e7eb", background: isReversed ? "#fef2f2" : isReversal ? "#f5f3ff" : idx % 2 === 0 ? "white" : "#fafafa", opacity: isReversed ? 0.7 : 1 }}>
-                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
-                                  {new Date(m.created_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}
-                                </td>
-                                <td style={{ padding: "12px 16px" }}>
-                                  <span style={{ display: "inline-block", padding: "3px 8px", borderRadius: "4px", background: m.movement === "INCOME" ? "#dcfce7" : "#fee2e2", color: m.movement === "INCOME" ? "#16a34a" : "#dc2626", fontWeight: 600, fontSize: 11 }}>
-                                    {m.movement === "INCOME" ? "⬆ Ingreso" : "⬇ Egreso"}
-                                  </span>
-                                  {isReversed && <span className="chip bad" style={{ marginLeft: 6 }}>ANULADO</span>}
-                                  {isReversal && <span className="chip info" style={{ marginLeft: 6 }}>Anulación</span>}
-                                  {m.medio === "BANCO" && dashboard.current_cash_register?.tipo === "MIXTO" && <span className="chip" style={{ marginLeft: 6 }}>🏦 Banco</span>}
-                                  {origenExternoCaja(m) && <span className="chip" style={{ marginLeft: 6 }} title="Registrado desde otro módulo">↪ {origenExternoCaja(m)}</span>}
-                                </td>
-                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
-                                  {categoryLabel(m.category)}
-                                  {m.subcategoria && <div style={{ fontSize: 11, color: "#9ca3af" }}>{m.subcategoria}</div>}
-                                  {(m.maq_activo || m.area) && <div style={{ fontSize: 11, color: "#9ca3af" }}>🔧 {[m.area, m.maq_activo].filter(Boolean).join(" · ")}</div>}
-                                </td>
-                                <td style={{ padding: "12px 16px", color: "#6b7280" }}>
-                                  {m.description ?? "—"}
-                                  {m.proveedor_nombre && <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>🏪 {m.proveedor_nombre} · 💵 Contado</div>}
-                                  {isReversed && m.reversed_reason && <div style={{ fontSize: 11, color: "#b91c1c" }}>Motivo: {m.reversed_reason}</div>}
-                                  {m.es_fondo && (
-                                    <div style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                                      {m.fondo_estado === "LIQUIDADO"
-                                        ? <span className="chip ok">✅ Liquidado</span>
-                                        : <span className="chip warn">⏳ Por Liquidar</span>}
-                                      {m.responsable && <span style={{ fontSize: 11, color: "#6b7280" }}>👤 {m.responsable}</span>}
-                                      {/* «Registrar Vuelto» SOLO en un fondo a rendir cuentas vigente y sin liquidar. */}
-                                      {m.fondo_estado === "POR_LIQUIDAR" && !isReversed && !isReversal && (
-                                        <button type="button" className="btnSecondary" style={{ fontSize: 11, padding: "3px 10px", color: "#2563eb" }}
-                                          title="Registrar el gasto real y el vuelto que regresa a caja"
-                                          onClick={() => { setLiquidarFondo({ mov: m, gasto_real: "", description: "", repuestos: [], repAbierto: false }); if (esMatrizActiva) cargarRepCatalogo(); }}>💸 Liquidar / Registrar vuelto</button>
-                                      )}
-                                    </div>
-                                  )}
-                                </td>
-                                <td style={{ padding: "12px 16px", textAlign: "right", fontWeight: 600, color: m.movement === "EXPENSE" ? "#dc2626" : "#16a34a", textDecoration: isReversed ? "line-through" : "none" }}>
-                                  {m.movement === "EXPENSE" ? "-" : "+"}{money(Number(m.amount))}
-                                  {!m.reference_type && !isReversed && !isReversal && !m.es_fondo && (
-                                    <div><button type="button" className="cjx-repetir" title="Registrar otra vez este movimiento (se puede cambiar)" onClick={() => repetirMovimientoCaja(m)}>🔁 Repetir</button></div>
-                                  )}
-                                </td>
-                                {canAnular && (
-                                  <td style={{ padding: "8px 16px", textAlign: "right", whiteSpace: "nowrap" }}>
-                                    {/* Los gastos directos (facturas, sueldos, compras) NO llevan
-                                        «Registrar Vuelto»: solo los fondos a rendir cuentas (columna Descripción). */}
-                                    {!isReversed && !isReversal && (
-                                      <button type="button" className="btnGhost" onClick={() => reverseCashMovement(m)}>Anular</button>
-                                    )}
-                                  </td>
-                                )}
-                              </tr>
-                            );})}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                    {(() => {
+                      const esSocioH = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
+                      const categoriasHoja = cashCategories.filter((c) => c.activo
+                        && !["PAGO_AGRICULTOR", "FOMENTOS", "PAGO_SERVICIO_PILADO"].includes(c.codigo)
+                        && (esSocioH ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS" || (c.codigo === "COMPRA_SACOS" && manejaSacosPropios))
+                          : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
+                      const sug = new Set<string>();
+                      for (const m of cashMovements) if (m.description && !m.reference_type) sug.add(m.description.trim());
+                      for (const sc of subcategoriasGastos) sug.add(sc);
+                      for (const a of accionistas) sug.add(a.name);
+                      for (const f of farmers) sug.add(f.full_name);
+                      return (
+                        <CajaHoja
+                          movimientos={cashMovements}
+                          creditos={cajaCreditos}
+                          verOtros={cajaVerOtros}
+                          origenExterno={origenExternoCaja}
+                          saldoInicial={Number(dashboard.current_cash_register?.opening_balance ?? 0)}
+                          categorias={categoriasHoja}
+                          sugerencias={[...sug].filter((x) => x.length >= 2).slice(0, 1500)}
+                          mixto={dashboard.current_cash_register?.tipo === "MIXTO"}
+                          puedeAnular={canAnular}
+                          esCompleja={(codigo, mov) => mov === "EXPENSE" && (codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
+                            || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo))}
+                          onGuardar={guardarFilaHoja}
+                          onFormularioCompleto={abrirFormularioDesdeHoja}
+                          onAnular={(m) => reverseCashMovement(m as CashMovement)}
+                          onAnularCredito={(c) => anularEgresoCredito(c as CajaCredito).catch((e) => addToast(e.message, "error"))}
+                          onRepetir={(m) => repetirMovimientoCaja(m as CashMovement)}
+                          onLiquidarFondo={(m) => { setLiquidarFondo({ mov: m as CashMovement, gasto_real: "", description: "", repuestos: [], repAbierto: false }); if (esMatrizActiva) cargarRepCatalogo(); }}
+                        />
+                      );
+                    })()}
                   </div>
                 )}
 

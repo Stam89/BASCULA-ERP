@@ -942,6 +942,76 @@ cashRouter.post("/movements", asyncRoute(async (req, res) => {
   res.status(201).json(result.rows[0]);
 }));
 
+// 📊 Resumen global de la caja del accionista activo (todas sus cajas, abiertas y cerradas), por día en hora de
+// Ecuador: entradas, salidas, neto y saldo al cierre del día. El saldo en un instante = saldo inicial de la caja que
+// estaba vigente (la última abierta hasta ese momento) + sus movimientos hasta ahí. ?detalle=AAAA-MM-DD trae además
+// los movimientos de ese día.
+cashRouter.get("/resumen", asyncRoute(async (req, res) => {
+  const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const q = z.object({ desde: fecha, hasta: fecha, detalle: fecha.optional() }).parse(req.query);
+  if (q.desde > q.hasta) throw new ApiError(400, "«Desde» no puede ser después de «Hasta».");
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  // Saldo con que arranca el período (00:00 de «desde» en Ecuador).
+  const saldoSql = `
+    SELECT COALESCE((
+      SELECT cr.opening_balance + COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
+                                              FROM cash_movements m
+                                             WHERE m.cash_register_id = cr.id AND m.created_at < t.lim), 0)
+        FROM cash_registers cr
+       WHERE cr.accionista_id = $1 AND cr.opened_at < t.lim
+       ORDER BY cr.opened_at DESC LIMIT 1), 0)::float AS saldo
+      FROM (SELECT ($2::date::timestamp AT TIME ZONE 'America/Guayaquil') AS lim) t`;
+  const dias = (await pool.query(
+    `WITH d AS (SELECT generate_series($2::date, $3::date, interval '1 day')::date AS dia),
+          mov AS (
+            SELECT (m.created_at AT TIME ZONE 'America/Guayaquil')::date AS dia,
+                   SUM(m.amount) FILTER (WHERE m.movement = 'INCOME') AS entradas,
+                   SUM(m.amount) FILTER (WHERE m.movement = 'EXPENSE') AS salidas,
+                   count(*) AS n
+              FROM cash_movements m
+              JOIN cash_registers cr ON cr.id = m.cash_register_id
+             WHERE cr.accionista_id = $1
+               AND m.created_at >= ($2::date::timestamp AT TIME ZONE 'America/Guayaquil')
+               AND m.created_at < (($3::date + 1)::timestamp AT TIME ZONE 'America/Guayaquil')
+             GROUP BY 1)
+     SELECT d.dia::text AS fecha, COALESCE(mov.entradas, 0)::float AS entradas, COALESCE(mov.salidas, 0)::float AS salidas,
+            COALESCE(mov.n, 0)::int AS movimientos,
+            (SELECT COALESCE((
+               SELECT cr.opening_balance + COALESCE((SELECT SUM(CASE WHEN m.movement = 'INCOME' THEN m.amount ELSE -m.amount END)
+                                                       FROM cash_movements m
+                                                      WHERE m.cash_register_id = cr.id
+                                                        AND m.created_at < ((d.dia + 1)::timestamp AT TIME ZONE 'America/Guayaquil')), 0)
+                 FROM cash_registers cr
+                WHERE cr.accionista_id = $1 AND cr.opened_at < ((d.dia + 1)::timestamp AT TIME ZONE 'America/Guayaquil')
+                ORDER BY cr.opened_at DESC LIMIT 1), 0))::float AS saldo_final
+       FROM d LEFT JOIN mov ON mov.dia = d.dia
+      ORDER BY d.dia`,
+    [accionistaId, q.desde, q.hasta]
+  )).rows.map((r) => ({ ...r, entradas: round2(r.entradas), salidas: round2(r.salidas), neto: round2(r.entradas - r.salidas), saldo_final: round2(r.saldo_final) }));
+  const anterior = (await pool.query(saldoSql, [accionistaId, q.desde])).rows[0].saldo as number;
+  const entradas = round2(dias.reduce((s, d) => s + d.entradas, 0));
+  const salidas = round2(dias.reduce((s, d) => s + d.salidas, 0));
+  let detalle: unknown[] | undefined;
+  if (q.detalle) {
+    detalle = (await pool.query(
+      `SELECT m.id, m.created_at, m.movement, m.category, c.nombre AS categoria_nombre, m.description, m.subcategoria,
+              m.amount::float AS amount, m.codigo, m.reversal_of, m.reversed_at, cr.name AS caja
+         FROM cash_movements m
+         JOIN cash_registers cr ON cr.id = m.cash_register_id
+         LEFT JOIN cash_categories c ON c.codigo = m.category
+        WHERE cr.accionista_id = $1
+          AND m.created_at >= ($2::date::timestamp AT TIME ZONE 'America/Guayaquil')
+          AND m.created_at < (($2::date + 1)::timestamp AT TIME ZONE 'America/Guayaquil')
+        ORDER BY m.created_at`,
+      [accionistaId, q.detalle]
+    )).rows;
+  }
+  res.json({
+    desde: q.desde, hasta: q.hasta, saldo_inicial: round2(anterior), entradas, salidas, neto: round2(entradas - salidas),
+    saldo_final: dias.length ? dias[dias.length - 1].saldo_final : round2(anterior), dias, detalle
+  });
+}));
+
 // «¿De quién es este gasto?»: cuánto le debe hoy la Matriz a ese socio (se descontará del gasto).
 cashRouter.get("/gasto-por-socio/:socioId", asyncRoute(async (req, res) => {
   await exigirMatriz(req);
@@ -1022,7 +1092,9 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     // 💳 «No es efectivo · lo pagó un socio» (pedido del dueño 2026-10-28, su columna FOMENTO): el gasto es de esta
     // caja pero lo pagó OTRO accionista con su tarjeta o su dinero. No sale efectivo: entra y sale lo mismo, y primero
     // baja lo que ese socio le debía a esta caja; el resto queda como deuda de esta caja con él.
-    pagado_por: z.string().uuid().optional()
+    pagado_por: z.string().uuid().optional(),
+    // Columna «CÓDIGO» de la caja tipo hoja (por defecto 001; NULL se muestra como 001).
+    codigo: z.string().trim().max(20).optional()
   }).parse(req.body);
   if (body.pagado_por) {
     if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede pagarlo otro socio.");
@@ -1128,13 +1200,14 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     const mov = await client.query(
       `INSERT INTO cash_movements
         (cash_register_id, movement, category, amount, description, reference_type, reference_id, created_by,
-         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id, medio, por_cuenta_de, categoria_por_cuenta)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+         subcategoria, maq_activo, area, es_fondo, responsable, fondo_estado, supplier_id, medio, por_cuenta_de, categoria_por_cuenta, codigo)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        RETURNING *`,
       [req.params.id, body.movement, socio ? "GASTO_POR_SOCIO" : body.category, body.amount,
        socio ? `Gasto de ${socio.name}: ${conceptoSocio}` : body.description, null, null, body.created_by,
        body.subcategoria?.trim() || null, body.maq_activo?.trim() || null, body.area?.trim() || null, esFondo, esFondo ? (body.responsable?.trim() || null) : null, fondoEstado,
-       proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio), socio?.id ?? null, socio ? body.category : null]
+       proveedor?.id ?? null, medioParaCaja(reg.rows[0].tipo, body.medio), socio?.id ?? null, socio ? body.category : null,
+       body.codigo && body.codigo !== "001" ? body.codigo : null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
     if (pagador) {
