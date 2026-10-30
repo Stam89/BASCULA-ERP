@@ -17000,16 +17000,13 @@ Motivo (obligatorio):`, ""));
               <section className="invTotalVender" style={{ gridColumn: "1 / -1" }}>
                 <div className="invTotalVender__cab">
                   <h3>🧮 Total para vender</h3>
-                  <small className="muted">QQ de cada producto sin importar dónde esté: piladora + lo que está allá con el proveedor</small>
+                  <small className="muted">QQ de cada producto sin importar dónde esté (el detalle por bodega está abajo)</small>
                 </div>
                 <div className="invTotalVender__grid">
                   {totalParaVender.map((x) => (
                     <div key={x.nombre} className={`invTotalVender__item${x.total < 0 ? " is-neg" : ""}`}>
                       <span className="invTotalVender__nombre">{x.nombre}</span>
                       <strong>{cantidad(x.total)} QQ</strong>
-                      {x.alla.length > 0 && (
-                        <small>🏭 Piladora {cantidad(x.piladora)} · {x.alla.map((a) => `📍 ${a.donde} ${cantidad(a.qq)}`).join(" · ")}</small>
-                      )}
                     </div>
                   ))}
                 </div>
