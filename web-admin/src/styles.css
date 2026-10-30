@@ -5524,6 +5524,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 }
 /* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
+.campoNomina__recibo { grid-column: 1 / -1; margin-top: 0; }
+.campoNomina__recibo td { white-space: normal; }
 .nomMatriz__recibo summary { cursor: pointer; color: #1d4ed8; font-weight: 600; }
 .nomMatriz__recibo table { margin-top: 4px; border-collapse: collapse; width: 100%; }
 .nomMatriz__recibo td { padding: 2px 6px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }

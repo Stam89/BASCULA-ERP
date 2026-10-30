@@ -196,6 +196,32 @@ function moverFoco(e: KeyboardEvent<HTMLInputElement>, idx: number, col: Columna
   else if (e.key === "Enter") e.preventDefault();
 }
 
+// 📄 Recibo de un operador (todas sus máquinas): cada parte con fecha, máquina, agricultor y QQ, y los días trabajados.
+function ReciboOperador({ filas }: { filas: FilaMatriz[] }) {
+  const lineas = filas.flatMap((f) => (f.detalle ?? []).map((d) => ({ ...d, maquina: f.activo_nombre ?? "" })))
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+  if (lineas.length === 0) return null;
+  const dias = new Set(lineas.map((l) => l.fecha)).size;
+  const qq = lineas.reduce((s, l) => s + Number(l.qq || 0), 0);
+  return (
+    <details className="nomMatriz__recibo campoNomina__recibo">
+      <summary>📄 Recibo · {dias} día(s) trabajado(s) · {lineas.length} parte(s) · {qqFmt(qq)} QQ</summary>
+      <table>
+        <tbody>
+          {lineas.map((l, i) => (
+            <tr key={i}>
+              <td>{l.fecha.split("-").reverse().join("/")}</td>
+              <td>{l.maquina}</td>
+              <td>{l.agricultor ?? "—"}</td>
+              <td className="num">{qqFmt(l.qq)} QQ</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </details>
+  );
+}
+
 // Una fila de la matriz. memo: escribir en una celda solo vuelve a pintar SU fila.
 const FilaNomina = memo(function FilaNomina({ fila: f, idx, edit, onEdit }: {
   fila: FilaMatriz; idx: number; edit: Edicion | undefined; onEdit: (clave: string, cambio: Partial<Edicion>) => void;
@@ -539,6 +565,7 @@ Motivo (obligatorio):`, ""));
                 <div className="campoNomina__monto campoNomina__neto"><span>A pagar</span><b>{money(g.total)}</b></div>
                 <button type="button" className="btnGhost" onClick={() => { setVista("ajustes"); setArea("todas"); }} title="Ver producción, descuentos y notas">Revisar</button>
                 {g.error && <small className="nomMatriz__alerta campoNomina__error">{g.error}</small>}
+                <ReciboOperador filas={g.filas} />
               </article>
             ))}
           </div>
