@@ -5499,17 +5499,19 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
     background: var(--c-surface, #fff); box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
   }
   body.campoActivo table.tablaTarjeta > tbody > tr > td, body.campoActivo table.tablaTarjeta > tfoot > tr > td {
-    display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 4px 0; border: 0;
+    display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 2px 8px; padding: 4px 0; border: 0;
     min-width: 0 !important; max-width: none !important; width: auto !important; white-space: normal !important;
     text-align: right; font-size: 14px; overflow-wrap: anywhere;
   }
   body.campoActivo table.tablaTarjeta > tbody > tr > td + td { border-top: 1px dashed #eef2f7; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td::before {
-    content: attr(data-label); flex: 0 0 auto; max-width: 45%; text-align: left; color: #64748b; font-size: 12px; font-weight: 600;
+    content: attr(data-label); flex: 0 0 auto; max-width: 45%; margin-right: auto; text-align: left; color: #64748b; font-size: 12px; font-weight: 600;
   }
   body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""]::before { content: none; }
   /* Primera celda = título de la tarjeta; celdas que abarcan columnas y botones = a lo ancho */
-  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child { font-weight: 700; font-size: 15px; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child::before { content: none; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child small { font-weight: 500; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-ancha,
   body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""] { display: block; text-align: left; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td:has(button) { flex-wrap: wrap; }
