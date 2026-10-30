@@ -217,10 +217,18 @@ const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otr
 
 campoRouter.get("/activos", asyncRoute(async (req, res) => {
   const q = z.object({ solo_activos: z.enum(["1", "0"]).optional() }).parse(req.query);
-  const where = q.solo_activos === "1" ? "WHERE activo = true" : "";
+  const where = q.solo_activos === "1" ? "WHERE a.activo = true" : "";
   const result = await pool.query(
-    `SELECT id, nombre, tipo, placa_codigo, operador, activo, created_at
-     FROM campo_activos ${where} ORDER BY activo DESC, nombre`
+    // 👷 Último operador que la manejó (su último parte con operador): se sugiere al elegir la máquina en un parte.
+    `SELECT a.id, a.nombre, a.tipo, a.placa_codigo, a.operador, a.activo, a.created_at,
+            u.operador AS ultimo_operador, u.fecha AS ultimo_operador_fecha
+     FROM campo_activos a
+     LEFT JOIN LATERAL (
+       SELECT p.operador, p.fecha FROM campo_partes p
+        WHERE p.activo_id = a.id AND NULLIF(trim(p.operador), '') IS NOT NULL
+        ORDER BY p.fecha DESC, p.created_at DESC LIMIT 1
+     ) u ON true
+     ${where} ORDER BY a.activo DESC, a.nombre`
   );
   res.json(result.rows);
 }));

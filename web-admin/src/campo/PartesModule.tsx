@@ -23,7 +23,16 @@ async function parteReq(path: string, method: "PATCH" | "DELETE", body?: unknown
 }
 
 // Máquina = flota (campo_activos). Solo se usan nombre/operador/estado aquí.
-type Activo = { id: string; nombre: string; tipo: string; operador: string | null; activo: boolean };
+type Activo = { id: string; nombre: string; tipo: string; operador: string | null; activo: boolean; ultimo_operador?: string | null; ultimo_operador_fecha?: string | null };
+// 👷 Operador sugerido al elegir la máquina: quien la manejó la última vez (si nunca, el operador de la ficha).
+// Solo es sugerencia: se cambia en la lista si ese día la manejó otro.
+function operadorSugerido(activo: Activo | undefined, operadores: Operador[]): string | null {
+  for (const n of [activo?.ultimo_operador, activo?.operador]) {
+    const o = n ? operadores.find((x) => x.nombre.toLowerCase() === n.trim().toLowerCase()) : undefined;
+    if (o) return o.nombre;
+  }
+  return null;
+}
 // Operador (catálogo campo_operadores). En el parte se guarda su NOMBRE (texto).
 type Operador = { id: string; nombre: string; activo: boolean };
 type Parte = {
@@ -160,10 +169,7 @@ export default function PartesModule() {
           <label><span>Máquina</span>
             <select value={f.activo_id} onChange={(e) => {
               const activo = activosActivos.find((a) => a.id === e.target.value);
-              const operadorSugerido = activo?.operador && operadores.some((o) => o.nombre.toLowerCase() === activo.operador?.toLowerCase())
-                ? activo.operador
-                : f.operador;
-              setF({ ...f, activo_id: e.target.value, operador: operadorSugerido ?? "" });
+              setF({ ...f, activo_id: e.target.value, operador: operadorSugerido(activo, operadores) ?? f.operador });
             }}>
               <option value="">Seleccione</option>
               {activosActivos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
@@ -176,6 +182,13 @@ export default function PartesModule() {
             {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
           </select>
         </label>
+        {activoSeleccionado && f.operador && operadorSugerido(activoSeleccionado, operadores) === f.operador && (
+          <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>
+            👷 {activoSeleccionado.ultimo_operador?.trim().toLowerCase() === f.operador.toLowerCase() && activoSeleccionado.ultimo_operador_fecha
+              ? `${f.operador} la manejó la última vez (${String(activoSeleccionado.ultimo_operador_fecha).slice(0, 10).split("-").reverse().join("/")})`
+              : `${f.operador} es el operador de esta máquina`}. Si hoy la manejó otro, cámbialo en la lista.
+          </p>
+        )}
         {operadores.length === 0 && (
           <p className="muted" style={{ marginTop: -4, fontSize: 12 }}>No hay operadores. Agrégalos en <strong>⚙️ Configuración → 👷 Operadores</strong>.</p>
         )}
@@ -468,7 +481,10 @@ function EditarParteModal({ parte, activos, operadores, onClose, onDone, onError
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <label><span>Fecha</span><input type="date" value={f.fecha} disabled={esRomana} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
           <label><span>Máquina</span>
-            <select value={f.activo_id} disabled={esRomana} onChange={(e) => setF({ ...f, activo_id: e.target.value })}>
+            <select value={f.activo_id} disabled={esRomana} onChange={(e) => {
+              const activo = activos.find((a) => a.id === e.target.value);
+              setF({ ...f, activo_id: e.target.value, operador: f.operador || (operadorSugerido(activo, operadores) ?? "") });
+            }}>
               {activos.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
             </select>
           </label>
