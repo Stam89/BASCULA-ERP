@@ -5504,6 +5504,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
     text-align: right; font-size: 14px; overflow-wrap: anywhere;
   }
   body.campoActivo table.tablaTarjeta > tbody > tr > td + td { border-top: 1px dashed #eef2f7; }
+  body.campoActivo table.tablaTarjeta > tfoot > tr { background: #f8fafc; }
+  body.campoActivo table.tablaTarjeta > tfoot > tr > td::before { content: attr(data-label); margin-right: auto; color: #64748b; font-size: 12px; font-weight: 600; }
+  body.campoActivo table.tablaTarjeta > tfoot > tr > td[data-label=""]::before { content: none; }
+  body.campoActivo table.tablaTarjeta > tfoot > tr > td.tt-ancha { display: block; text-align: left; }
+  body.campoActivo .segmented { display: flex; flex-wrap: wrap; max-width: 100%; }
+  body.campoActivo .segmented > button { flex: 1 1 auto; }
   body.campoActivo table.tablaTarjeta > tbody > tr > td::before {
     content: attr(data-label); flex: 0 0 auto; max-width: 45%; margin-right: auto; text-align: left; color: #64748b; font-size: 12px; font-weight: 600;
   }

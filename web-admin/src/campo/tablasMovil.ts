@@ -15,7 +15,7 @@ function etiquetar(tabla: HTMLTableElement) {
     for (let i = 0; i < span; i++) nombres.push(txt);
   }
   tabla.classList.add("tablaTarjeta");
-  for (const tb of Array.from(tabla.tBodies)) {
+  for (const tb of [...Array.from(tabla.tBodies), ...(tabla.tFoot ? [tabla.tFoot] : [])]) {
     for (const tr of Array.from(tb.rows)) {
       let col = 0;
       for (const td of Array.from(tr.cells)) {
@@ -27,7 +27,7 @@ function etiquetar(tabla: HTMLTableElement) {
         const conControl = td.querySelector("input, select, button, textarea, details") != null;
         const txt = (td.textContent ?? "").replace(/\s+/g, " ").trim();
         td.classList.toggle("tt-vacia", !conControl && (txt === "" || txt === "—" || txt === "-"));
-        td.classList.toggle("tt-larga", !conControl && txt.length > 34);
+        td.classList.toggle("tt-larga", !conControl && txt.length > 26);
         col += span;
       }
     }
