@@ -2,7 +2,17 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 📋 Caja Principal tipo hoja de cálculo (2026-10-30)
+## Último cambio: 🧭 Caja hoja adaptada: «¿De quién?» y 💳 «No es efectivo» (2026-10-30)
+- La fila rápida de `CajaHoja` (solo caja de la Matriz) tiene la celda «¿De quién?»: esta caja / 🚜 Transporte (general o máquina) /
+  👷 Anticipo · operador / 🤝 socio. Se llena sola si el concepto nombra una máquina («cose 10,1» → COS.10.1, `claveMaq`) o
+  «anticipo <operador>». App.guardarFilaHoja manda Transporte/anticipo a POST /equipment/transporte/gasto y socio a
+  /cash/:id/movements con por_cuenta_de. Solo salidas. Ventas (VENTA_DETALLE/MAYOR) desde la hoja abren Venta al detalle.
+- 💳 `pagado_con_banco` (POST /cash/:id/movements y /equipment/transporte/gasto; `services/pagado-con-banco.ts`): en la misma
+  transacción entra RETIRO_BANCO con reference_type 'pagado_con_banco' → el gasto; la gaveta no cambia. Anular el gasto anula
+  la entrada; la entrada sola no se anula (409). Solo cajas EFECTIVO (la MIXTA usa 🏦). Simulacro caja_hoja_destinos.
+- Permiso especial PERM:SALDOS_INICIALES (tarjeta en el Inicio del usuario; anular solo admin). Simulacro permiso_saldos_iniciales.
+
+## Cambio anterior: 📋 Caja Principal tipo hoja de cálculo (2026-10-30)
 - Arriba 4 saldos (gaveta, entradas de HOY, salidas de HOY, saldo inicial) y 3 botones: ＋ Registrar ingreso (F2),
   － Registrar egreso (F3), 📊 Ver resumen global (F4). Atajos en un useEffect de App.tsx (solo en Caja con caja abierta y
   sin otro modal). «Otros registros» pasó a «Accesos directos».

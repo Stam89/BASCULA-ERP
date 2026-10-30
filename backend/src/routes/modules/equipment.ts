@@ -13,6 +13,7 @@ import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { cuentasMatrizTransporte, registrarGastoTransporte } from "../../services/gasto-transporte.js";
+import { registrarPagoConBanco } from "../../services/pagado-con-banco.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
@@ -444,16 +445,25 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
       tipo: z.enum(["REPUESTO", "INSUMO"]).optional()
     })).max(40).default([]),
     // 👷 Anticipo a un operador de Transporte (queda como su vale; se descuenta en su nómina).
-    anticipo_operador: z.string().trim().min(2).max(120).optional()
+    anticipo_operador: z.string().trim().min(2).max(120).optional(),
+    // 💳 Pagado con el banco / tarjeta de débito de la Matriz (no sale de la gaveta).
+    pagado_con_banco: z.boolean().optional()
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
-  const out = await inTransaction((client) => registrarGastoTransporte(client, {
+  const out = await inTransaction(async (client) => {
+   const r = await registrarGastoTransporte(client, {
     anticipoOperador: body.anticipo_operador ?? null,
     matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id ?? null, tipo: body.maintenance_type,
     categoria: body.categoria ?? null, monto: body.monto ?? null, pagadoA: body.pagado_a ?? null,
     descripcion: body.description, provider: body.provider, hechoPorTipo: body.hecho_por_tipo ?? null, compradoPor: body.comprado_por,
     manoObra: body.mano_obra, items: body.items, factura: body.invoice_number, userId: auth.user?.id ?? null
-  }));
+   });
+   if (body.pagado_con_banco) {
+     const gasto = (await client.query("SELECT id, description FROM cash_movements WHERE reference_type = 'campo_cxp' AND reference_id = $1", [r.cxp_id])).rows[0];
+     if (gasto) await registrarPagoConBanco(client, { cajaId: body.cash_register_id, gastoId: gasto.id, monto: r.total, concepto: String(gasto.description ?? "Gasto de Transporte"), userId: auth.user?.id ?? null });
+   }
+   return r;
+  });
   res.status(201).json(out);
 }));
 

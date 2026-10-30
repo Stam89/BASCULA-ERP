@@ -18,6 +18,7 @@ import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
+import { anularPagoConBanco, registrarPagoConBanco, REF_PAGADO_CON_BANCO } from "../../services/pagado-con-banco.js";
 import { revertirMovimientoDePrestamo } from "./prestamos.js";
 import type { PoolClient } from "pg";
 
@@ -704,6 +705,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
+    if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta entrada es la del banco de un gasto pagado con tarjeta: anula ese gasto y esta se anula sola.");
     if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
     // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
     await revertirMovimientoDePrestamo(client, m);
@@ -874,6 +876,8 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     if (m.reference_type === "campo_cxp" && m.reference_id) {
       await anularGastoTransporte(client, String(m.reference_id), body.reason);
     }
+    // 💳 Gasto pagado con el banco / tarjeta: su «Retiro del banco» se anula con él.
+    const bancoAnulado = await anularPagoConBanco(client, { gastoId: m.id, cajaDestino, motivo: body.reason, userId: user?.id ?? null });
     // Si pagó un MANTENIMIENTO que usó repuestos del inventario, vuelven al stock.
     if (m.reference_type === "equipment_maintenance" && m.reference_id) {
       await devolverRepuestosDeMantenimiento(client, String(m.reference_id));
@@ -903,7 +907,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida, banco_anulado: bancoAnulado };
   });
 
   res.status(201).json(result);
@@ -1093,6 +1097,8 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     // caja pero lo pagó OTRO accionista con su tarjeta o su dinero. No sale efectivo: entra y sale lo mismo, y primero
     // baja lo que ese socio le debía a esta caja; el resto queda como deuda de esta caja con él.
     pagado_por: z.string().uuid().optional(),
+    // 💳 Pagado con el banco / tarjeta de débito de ESTA empresa (no sale de la gaveta): entra lo mismo como Retiro del banco.
+    pagado_con_banco: z.boolean().optional(),
     // Columna «CÓDIGO» de la caja tipo hoja (por defecto 001; NULL se muestra como 001).
     codigo: z.string().trim().max(20).optional()
   }).parse(req.body);
@@ -1102,6 +1108,12 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
       throw new ApiError(400, "Lo que pagó otro socio se registra sin crédito, fondo, activo fijo, sacos, máquina ni gasto de socio.");
     }
     if (body.pagado_por === (req as AuthenticatedRequest).accionistaId) throw new ApiError(400, "Elige el socio que lo pagó (no esta misma caja).");
+  }
+  if (body.pagado_con_banco) {
+    if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO se paga con el banco.");
+    if (body.modalidad_pago === "CREDITO" || body.es_fondo || body.pagado_por) {
+      throw new ApiError(400, "Lo pagado con el banco no es a crédito, ni fondo, ni lo pagó otro socio.");
+    }
   }
   if (body.por_cuenta_de) {
     if (body.movement !== "EXPENSE") throw new ApiError(400, "Solo un EGRESO puede ser gasto de otro socio.");
@@ -1192,7 +1204,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
       : undefined;
     if (body.pagado_por && !pagador) throw new ApiError(404, "El socio que lo pagó no existe o está inactivo.");
     // Lo que pagó otro socio no saca efectivo de esta caja: no hay sobregiro que avisar.
-    if (body.movement === "EXPENSE" && !pagador) await avisarSobregiro(client, req.params.id as string, body.amount, req);
+    if (body.movement === "EXPENSE" && !pagador && !body.pagado_con_banco) await avisarSobregiro(client, req.params.id as string, body.amount, req);
     // Proveedor (opcional) del egreso de contado.
     const proveedor = body.movement === "EXPENSE" ? await resolverProveedor(client, body.supplier_id, body.proveedor_nombre) : null;
     const catNombre = socio ? (await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.category])).rows[0]?.nombre ?? body.category : null;
@@ -1210,6 +1222,13 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
        body.codigo && body.codigo !== "001" ? body.codigo : null]
     );
     await recordarSubcategoria(client, body.subcategoria, body.category);
+    if (body.pagado_con_banco) {
+      await registrarPagoConBanco(client, {
+        cajaId: req.params.id as string, gastoId: mov.rows[0].id, monto: body.amount,
+        concepto: socio ? `Gasto de ${socio.name}: ${conceptoSocio}` : (body.description?.trim() || body.category),
+        userId: body.created_by ?? (req as AuthenticatedRequest).user?.id ?? null
+      });
+    }
     if (pagador) {
       // El gasto queda con su categoría (sale en el resultado); al lado entra lo mismo «de» ese socio, así la gaveta
       // no cambia. Las dos líneas se enlazan para anularse juntas.

@@ -48,7 +48,7 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
-import { CajaHoja, type HojaNueva } from "./components/CajaHoja";
+import { CajaHoja, claveMaq, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
 import { CajaResumenGlobal } from "./components/CajaResumenGlobal";
 
 // Módulos bajo demanda: si la pestaña quedó con una versión anterior y el
@@ -2902,6 +2902,12 @@ export function App() {
   const [cajaResumenGlobal, setCajaResumenGlobal] = useState(false);
   // Desde la hoja: una categoría que pide más datos abre el formulario completo con lo ya escrito.
   function abrirFormularioDesdeHoja(tipo: "EXPENSE" | "INCOME", category: string, description: string, amount: number | null) {
+    // 🛒 Una venta escrita en la hoja va por Venta al detalle: baja el inventario del dueño del arroz (o queda por asignar).
+    if (category === "VENTA_DETALLE" || category === "VENTA_MAYOR") {
+      setCajaSubTab("venta_detalle");
+      addToast(`🛒 Las ventas se registran en Venta al detalle${amount ? ` (${money(amount)})` : ""}, para que baje el arroz de su dueño`, "warn");
+      return;
+    }
     abrirMovimientoCaja(tipo);
     setMovCategory(category);
     setTimeout(() => {
@@ -5090,12 +5096,46 @@ export function App() {
   async function guardarFilaHoja(f: HojaNueva) {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
+    const d = f.destino;
+    // 🚜 Transporte (una máquina o general) y 👷 anticipo a un operador: el mismo flujo que «Salió dinero» › Transporte
+    // (cruce con lo que la Matriz le debe a Transporte; el anticipo queda como vale del operador).
+    if (f.movement === "EXPENSE" && d && (d.tipo === "transporte" || d.tipo === "anticipo")) {
+      const operador = d.tipo === "anticipo" ? d.valor.replace(/^.*·\s*/, "").trim() : undefined;
+      const r = await apiPost<{ total: number; descontado: number; por_cobrar: number }>("/equipment/transporte/gasto", {
+        cash_register_id: registerId,
+        categoria: operador ? undefined : categoriaTransporteDe(f.category, f.description),
+        activo_id: d.tipo === "transporte" ? d.id : undefined,
+        anticipo_operador: operador,
+        monto: f.amount,
+        description: f.description,
+        pagado_con_banco: f.banco || undefined
+      });
+      addToast(`${operador ? `👷 Anticipo a ${operador}` : "🚜 Gasto de Transporte"}: ${money(r.total)}${f.banco ? " (pagado con banco, no sale de la gaveta)" : ""}` +
+        (r.descontado > 0 ? ` · se descontaron ${money(r.descontado)} de lo que se le debía a Transporte` : "") +
+        (r.por_cobrar > 0 ? ` · Transporte te debe ${money(r.por_cobrar)}` : ""), "success");
+      await refreshCaja(registerId);
+      return;
+    }
     await apiPost(`/cash/${registerId}/movements`, {
       movement: f.movement, category: f.category, amount: f.amount, description: f.description, codigo: f.codigo,
-      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? f.medio : undefined
+      medio: dashboard.current_cash_register?.tipo === "MIXTO" ? f.medio : undefined,
+      // 🤝 Gasto de un socio que paga esta caja (se cruza con lo que la Matriz le debe).
+      por_cuenta_de: f.movement === "EXPENSE" && d?.tipo === "socio" ? d.id : undefined,
+      pagado_con_banco: f.movement === "EXPENSE" && f.banco ? true : undefined
     });
-    addToast(`${f.movement === "INCOME" ? "Entrada" : "Salida"} de ${money(f.amount)} registrada`, "success");
+    addToast(`${f.movement === "INCOME" ? "Entrada" : "Salida"} de ${money(f.amount)} registrada` +
+      (d?.tipo === "socio" ? ` · gasto de ${d.valor.replace(/^🤝\s*/, "")}` : "") + (f.banco ? " · pagada con banco (no sale de la gaveta)" : ""), "success");
     await refreshCaja(registerId);
+  }
+  // Categoría del gasto en Transporte a partir de la categoría de esta caja (o del concepto).
+  function categoriaTransporteDe(codigo: string, concepto: string): string {
+    const t = `${codigo} ${concepto}`.toUpperCase();
+    if (/DIESEL|DIÉSEL/.test(t)) return "DIESEL";
+    if (/GASOLINA/.test(t)) return "GASOLINA";
+    if (/ALIMENT|VIATIC|COMIDA/.test(t)) return "VIATICOS";
+    if (/MATRICUL/.test(t)) return "MATRICULACION";
+    if (/MANTEN|REPUEST|REPARA/.test(t)) return "REPARACION_MANT";
+    return "OTROS";
   }
 
   async function submitExpense(e: FormEvent<HTMLFormElement>) {
@@ -5184,6 +5224,11 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  useEffect(() => {
+    if (activeTab !== "Caja" || !esMatrizActiva || campoOperadores.length) return;
+    apiGet<Array<{ nombre: string }>>("/campo/operadores?solo_activos=1").then((r) => setCampoOperadores(r.map((x) => x.nombre))).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, esMatrizActiva]);
   // «¿De quién es este gasto?»: socios a los que la caja de la Matriz les puede pagar un gasto, y en qué categorías
   // (las que tienen flujo propio —mantenimiento, sacos, repuestos, activos, pagos enlazados— no).
   const sociosDelGasto = accionistas.filter((a) => a.tipo === "SOCIO" && a.id !== activeAccionistaId);
@@ -20354,6 +20399,19 @@ Motivo (obligatorio):`, ""));
                       for (const sc of subcategoriasGastos) sug.add(sc);
                       for (const a of accionistas) sug.add(a.name);
                       for (const f of farmers) sug.add(f.full_name);
+                      // 🧭 «¿De quién?» solo en la caja de la Matriz: esta caja, Transporte (general o una máquina),
+                      // anticipo a un operador de Transporte, o un gasto de un socio.
+                      const puedeTransporte = isAdmin || (accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []).includes("Transporte / Cosechadora");
+                      const destinosHoja: HojaDestino[] = esMatrizActiva ? [
+                        { valor: matrizName || "Esta caja", tipo: "propio", detalle: "gasto de esta caja" },
+                        ...(puedeTransporte ? [
+                          { valor: "🚜 Transporte (general)", tipo: "transporte" as const, detalle: "sin máquina" },
+                          ...fletaActivos.map((a) => ({ valor: `🚜 Transporte · ${a.nombre}`, tipo: "transporte" as const, id: a.id, detalle: a.tipo ?? "máquina",
+                            claves: [claveMaq(a.nombre), claveMaq(a.nombre.split(/\s+/)[0] ?? "")] })),
+                          ...campoOperadores.map((o) => ({ valor: `👷 Anticipo · ${o}`, tipo: "anticipo" as const, detalle: "vale: se descuenta en su nómina", claves: [claveMaq(o)] }))
+                        ] : []),
+                        ...sociosDelGasto.map((s) => ({ valor: `🤝 ${s.name}`, tipo: "socio" as const, id: s.id, detalle: "gasto del socio" }))
+                      ] : [];
                       return (
                         <CajaHoja
                           movimientos={cashMovements}
@@ -20365,8 +20423,11 @@ Motivo (obligatorio):`, ""));
                           sugerencias={[...sug].filter((x) => x.length >= 2).slice(0, 1500)}
                           mixto={dashboard.current_cash_register?.tipo === "MIXTO"}
                           puedeAnular={canAnular}
-                          esCompleja={(codigo, mov) => mov === "EXPENSE" && (codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
-                            || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo))}
+                          esCompleja={(codigo, mov) => (mov === "INCOME" && (codigo === "VENTA_DETALLE" || codigo === "VENTA_MAYOR"))
+                            || (mov === "EXPENSE" && (codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
+                            || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo)))}
+                          destinos={destinosHoja}
+                          puedeBanco={esMatrizActiva && dashboard.current_cash_register?.tipo === "EFECTIVO"}
                           onGuardar={guardarFilaHoja}
                           onFormularioCompleto={abrirFormularioDesdeHoja}
                           onAnular={(m) => reverseCashMovement(m as CashMovement)}
