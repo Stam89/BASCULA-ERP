@@ -223,7 +223,7 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
         {prod && !esCascara && (
           <label>Presentación <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span>
             <span style={{ display: "flex", gap: 6 }}>
-              <input type="number" min="0" step="1" value={bultos} placeholder="Bultos" style={{ maxWidth: 90 }}
+              <input type="number" min="0" step="any" inputMode="decimal" value={bultos} placeholder="Bultos" style={{ maxWidth: 90 }}
                 onChange={(e) => cambiarBultos(e.target.value, pesoLb || String(pesos[0] ?? 100))} />
               <select value={pesoLb || String(pesos[0] ?? 100)} onChange={(e) => cambiarBultos(bultos, e.target.value)}>
                 {pesos.map((lb) => <option key={lb} value={lb}>{nombrePeso(lb)}</option>)}
