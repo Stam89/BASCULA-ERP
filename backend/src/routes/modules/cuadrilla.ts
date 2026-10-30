@@ -1421,13 +1421,13 @@ export async function sincronizarBajadas(client: PoolClient): Promise<{ creados:
 
   const tickets = (await client.query(
     `SELECT t.id, t.quintals::float AS qq, t.farmer_name, t.raw_payload->>'numeroTicket' AS numero,
-            t.raw_payload->>'placa' AS placa,
+            t.raw_payload->>'placa' AS placa, t.bajada_qq::float AS parcial,
             COALESCE(NULLIF(btrim(t.bajada_manual), ''), NULLIF(btrim(t.raw_payload->>'bajadaX'), '')) AS trabajador,
             (${FECHA_TICKET})::text AS fecha
        FROM mobile_synced_tickets t
        JOIN bajada_carro_config c ON c.id = 1
       WHERE ${TICKET_ELEGIBLE} AND ${CORTE_BAJADA}`
-  )).rows as Array<{ id: string; qq: number; farmer_name: string | null; numero: string | null; placa: string | null; trabajador: string | null; fecha: string }>;
+  )).rows as Array<{ id: string; qq: number; parcial: number | null; farmer_name: string | null; numero: string | null; placa: string | null; trabajador: string | null; fecha: string }>;
 
   const existentes = new Map<string, { id: string; paid_at: Date | null; worker_name: string; quantity: number; unit_rate: number; work_date: string }>();
   for (const e of (await client.query(
@@ -1445,10 +1445,12 @@ export async function sincronizarBajadas(client: PoolClient): Promise<{ creados:
       if (e) { await client.query("DELETE FROM cuadrilla_entries WHERE id = $1 AND paid_at IS NULL", [e.id]); out.eliminados++; }
       continue;
     }
-    const qq = Number(t.qq) || 0;
+    // Parcial (volqueta en la que alguien ayudó a bajar una parte): solo esos QQ, nunca más que el ticket.
+    const qqTicket = Number(t.qq) || 0;
+    const qq = t.parcial != null ? Math.min(Number(t.parcial), qqTicket) : qqTicket;
     const subtotal = round2(qq * tarifa);
     const fecha = fechaIso(t.fecha);
-    const notas = `Bajada de carro · Ticket #${t.numero ?? "—"} · ${t.farmer_name ?? "—"}${t.placa ? ` · ${t.placa}` : ""}`;
+    const notas = `Bajada de carro · Ticket #${t.numero ?? "—"} · ${t.farmer_name ?? "—"}${t.placa ? ` · ${t.placa}` : ""}${t.parcial != null ? ` · bajó ${qq} de ${qqTicket} QQ` : ""}`;
     if (!e) {
       await client.query(
         `INSERT INTO cuadrilla_entries (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, origen, referencia_id)
@@ -1534,8 +1536,8 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
     `SELECT t.id AS ticket_id, t.raw_payload->>'numeroTicket' AS numero, (${FECHA_TICKET})::text AS fecha,
             t.raw_payload->>'fecha' AS fecha_hora, t.farmer_name AS cliente, t.raw_payload->>'placa' AS placa,
             t.quintals::float AS qq, NULLIF(btrim(t.raw_payload->>'bajadaX'), '') AS bajada_bascula,
-            NULLIF(btrim(t.bajada_manual), '') AS bajada_manual,
-            e.id AS entry_id, e.worker_name AS trabajador, e.subtotal::float AS monto, e.unit_rate::float AS tarifa,
+            NULLIF(btrim(t.bajada_manual), '') AS bajada_manual, t.bajada_qq::float AS bajada_qq,
+            e.id AS entry_id, e.quantity::float AS qq_pagado, e.worker_name AS trabajador, e.subtotal::float AS monto, e.unit_rate::float AS tarifa,
             e.paid_at, NOT ${CORTE_BAJADA} AS antes_del_corte
        FROM mobile_synced_tickets t
        JOIN bajada_carro_config c ON c.id = 1
@@ -1571,11 +1573,14 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
 }));
 
 // Poner / corregir a mano quién bajó el carro (o marcar que no se paga).
+// `qq`: solo una parte del ticket (p. ej. volqueta en la que alguien ayudó a bajar); null = todo el ticket;
+// sin mandarlo se deja como estaba. «No se paga» borra la parte.
 cuadrillaRouter.post("/bajadas/asignar", asyncRoute(async (req, res) => {
   const body = z.object({
     ticket_id: z.string().uuid(),
     trabajador: z.string().trim().max(60).nullable().optional(),
-    no_se_paga: z.boolean().optional()
+    no_se_paga: z.boolean().optional(),
+    qq: z.coerce.number().positive().nullable().optional()
   }).parse(req.body);
   const valor = body.no_se_paga ? BAJADA_NO : (normalizarTrabajador(body.trabajador) || null);
   const out = await inTransaction(async (client) => {
@@ -1584,8 +1589,17 @@ cuadrillaRouter.post("/bajadas/asignar", asyncRoute(async (req, res) => {
       [body.ticket_id]
     );
     if (pagado.rowCount) throw new ApiError(409, "Esta bajada ya se pagó; no se puede cambiar.");
-    const r = await client.query("UPDATE mobile_synced_tickets SET bajada_manual = $2 WHERE id = $1 RETURNING id", [body.ticket_id, valor]);
-    if (!r.rowCount) throw new ApiError(404, "Ticket no encontrado");
+    const tk = (await client.query("SELECT quintals::float AS qq FROM mobile_synced_tickets WHERE id = $1", [body.ticket_id])).rows[0];
+    if (!tk) throw new ApiError(404, "Ticket no encontrado");
+    if (body.qq != null && body.qq > Number(tk.qq) + 0.005) {
+      throw new ApiError(400, `El ticket tiene ${Number(tk.qq).toFixed(2)} QQ; no se puede pagar bajada de más.`);
+    }
+    const tocarParte = body.no_se_paga || body.qq !== undefined;
+    const parte = body.no_se_paga || body.qq == null || body.qq >= Number(tk.qq) - 0.005 ? null : round2(body.qq);
+    await client.query(
+      `UPDATE mobile_synced_tickets SET bajada_manual = $2, bajada_qq = CASE WHEN $3::boolean THEN $4::numeric ELSE bajada_qq END WHERE id = $1`,
+      [body.ticket_id, valor, tocarParte, parte]
+    );
     return sincronizarBajadas(client);
   });
   res.json({ ok: true, ...out });

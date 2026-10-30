@@ -565,6 +565,8 @@ type BajadaFila = {
   ticket_id: string; numero: string | null; fecha: string; fecha_hora: string | null;
   cliente: string | null; placa: string | null; qq: number;
   bajada_bascula: string | null; bajada_manual: string | null;
+  /** Solo una parte del ticket se paga de bajada (volqueta en la que alguien ayudó); null = todo. */
+  bajada_qq?: number | null; qq_pagado?: number | null;
   entry_id: string | null; trabajador: string | null; monto: number | null; tarifa: number | null; paid_at: string | null;
   /** Anterior a «Contar desde el ticket #»: no se paga por aquí. */
   antes_del_corte?: boolean;
@@ -3423,6 +3425,8 @@ export function App() {
   const [bajadaTodo, setBajadaTodo] = useState(false);
   const [bajadaData, setBajadaData] = useState<BajadaData | null>(null);
   const [bajadaBusy, setBajadaBusy] = useState(false);
+  // Bajada PARCIAL de un ticket (volqueta en la que alguien ayudó a bajar una parte): quién y cuántos QQ.
+  const [bajadaParte, setBajadaParte] = useState<{ id: string; nombre: string; qq: string } | null>(null);
   const [bajadaDesde, setBajadaDesde] = useState("");
   const nominaFiltradas = useMemo(
     () => nominaRows.filter((r) => nominaGrupoDe(r.worker_role) === nominaGrupoActivo),
@@ -5837,14 +5841,16 @@ export function App() {
     }
   }
   // Poner/corregir quién bajó el carro, o marcar que ese ticket no se paga.
-  async function asignarBajada(fila: BajadaFila, trabajador: string | null, noSePaga = false) {
+  async function asignarBajada(fila: BajadaFila, trabajador: string | null, noSePaga = false, qq?: number | null) {
     try {
-      await apiPost("/cuadrilla/bajadas/asignar", { ticket_id: fila.ticket_id, trabajador, no_se_paga: noSePaga });
-      addToast(noSePaga ? `Ticket #${fila.numero ?? ""}: no se paga bajada.` : trabajador ? `Ticket #${fila.numero ?? ""}: bajada a ${trabajador.toUpperCase()}.` : `Ticket #${fila.numero ?? ""}: se usa el nombre de la báscula.`, "success");
+      await apiPost("/cuadrilla/bajadas/asignar", { ticket_id: fila.ticket_id, trabajador, no_se_paga: noSePaga, ...(qq !== undefined ? { qq } : {}) });
+      addToast(qq != null && trabajador ? `Ticket #${fila.numero ?? ""}: ${trabajador.toUpperCase()} bajó ${qq} QQ.` : noSePaga ? `Ticket #${fila.numero ?? ""}: no se paga bajada.` : trabajador ? `Ticket #${fila.numero ?? ""}: bajada a ${trabajador.toUpperCase()}.` : `Ticket #${fila.numero ?? ""}: se usa el nombre de la báscula.`, "success");
       await loadBajadas();
       refreshNomina().catch(() => undefined);
+      return true;
     } catch (e) {
       addToast(e instanceof Error ? e.message : "No se pudo guardar", "error");
+      return false;
     }
   }
   // Paga la bajada pendiente (toda, o hasta la fecha de corte) en un solo egreso
@@ -24880,9 +24886,30 @@ Motivo (obligatorio):`, ""));
                             <td className="num">{Number(f.qq).enReal()}</td>
                             <td style={{ minWidth: 190 }}>
                               {pagado || antesDeInicio ? (
-                                <span style={{ fontWeight: 600 }}>{f.trabajador ?? (actual || "—")}</span>
+                                <span style={{ fontWeight: 600 }}>{f.trabajador ?? (actual || "—")}{f.bajada_qq != null && <span className="muted"> · {Number(f.qq_pagado ?? f.bajada_qq).enReal()} QQ</span>}</span>
+                              ) : bajadaParte?.id === f.ticket_id ? (
+                                <form
+                                  className="bajParte"
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const nombre = bajadaParte.nombre.trim().toUpperCase();
+                                    const qq = Number(bajadaParte.qq);
+                                    if (!nombre) { addToast("Escribe quién ayudó a bajar", "error"); return; }
+                                    if (!(qq > 0) || qq > Number(f.qq) + 0.005) { addToast(`Pon los QQ que bajó (entre 0 y ${Number(f.qq).enReal()})`, "error"); return; }
+                                    asignarBajada(f, nombre, false, qq).then((ok) => { if (ok) setBajadaParte(null); }).catch(() => undefined);
+                                  }}
+                                >
+                                  <input list="bajada-trabajadores" autoFocus value={bajadaParte.nombre} placeholder="¿Quién ayudó?" style={{ width: 120, textTransform: "uppercase" }}
+                                    onChange={(e) => setBajadaParte({ ...bajadaParte, nombre: e.target.value })} />
+                                  <input type="number" step="any" min="0" max={f.qq} value={bajadaParte.qq} placeholder="QQ" style={{ width: 70 }}
+                                    onChange={(e) => setBajadaParte({ ...bajadaParte, qq: e.target.value })} />
+                                  <span className="muted">de {Number(f.qq).enReal()}</span>
+                                  <button type="submit" className="btnPrimary">Guardar</button>
+                                  <button type="button" className="btnGhost" onClick={() => setBajadaParte(null)}>✕</button>
+                                </form>
                               ) : noSePaga ? (
-                                <span className="muted">No se paga <button type="button" className="vdTarifaLink" onClick={() => asignarBajada(f, null).catch(() => undefined)}>↺ deshacer</button></span>
+                                <span className="muted">No se paga <button type="button" className="vdTarifaLink" onClick={() => asignarBajada(f, null).catch(() => undefined)}>↺ deshacer</button>
+                                  {" · "}<button type="button" className="vdTarifaLink" title="Ej.: volqueta que se vacía sola, pero alguien ayudó a bajar una parte" onClick={() => setBajadaParte({ id: f.ticket_id, nombre: "", qq: "" })}>🤝 alguien ayudó a bajar una parte</button></span>
                               ) : (
                                 <>
                                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -24901,8 +24928,15 @@ Motivo (obligatorio):`, ""));
                                     }}
                                   />
                                   {f.bajada_manual && <span className="chip info" title={f.bajada_bascula ? `La báscula decía: ${f.bajada_bascula}` : "La báscula no traía nombre"}>manual</span>}
+                                  <button type="button" className="btnGhost" title="Solo bajó una parte del carro (p. ej. ayudó en una volqueta)" onClick={() => setBajadaParte({ id: f.ticket_id, nombre: actual, qq: f.bajada_qq != null ? String(f.bajada_qq) : "" })}>✂️</button>
                                   <button type="button" className="btnGhost" title="Este ticket no paga bajada" onClick={() => asignarBajada(f, null, true).catch(() => undefined)}>🚫</button>
                                 </div>
+                                {f.bajada_qq != null && (
+                                  <div className="bajParte-nota">
+                                    🤝 Solo una parte: <strong>{Number(f.bajada_qq).enReal()}</strong> de {Number(f.qq).enReal()} QQ
+                                    {" · "}<button type="button" className="vdTarifaLink" onClick={() => asignarBajada(f, actual || null, false, null).catch(() => undefined)}>todo el ticket</button>
+                                  </div>
+                                )}
                                 {f.nombre_revisar && (
                                   <div className="bajNom">
                                     <span className="bajNom-motivo">
