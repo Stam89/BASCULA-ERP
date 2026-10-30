@@ -341,7 +341,7 @@ function AnticipoForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: Co
 }
 
 // ── Lista de lo cargado (con anulación en línea) ────────────────────────────
-function ListaCargas({ filas, avisar, onAnulado }: { filas: Registro[]; avisar: Avisar; onAnulado: () => void }) {
+function ListaCargas({ filas, avisar, onAnulado, puedeAnular = true }: { filas: Registro[]; avisar: Avisar; onAnulado: () => void; puedeAnular?: boolean }) {
   const [anulando, setAnulando] = useState<string | null>(null);
   const [motivo, setMotivo] = useState("");
   const [busy, setBusy] = useState(false);
@@ -395,6 +395,7 @@ function ListaCargas({ filas, avisar, onAnulado }: { filas: Registro[]; avisar: 
             <div className="si-fila__accion">
               {anulado ? <span className="si-tag">Anulado</span>
                 : bloqueado ? <span className="si-tag si-tag--ok" title={esInv ? "Ya entró a Producción" : "Ya tiene abonos"}>{esInv ? "En producción" : "Con abonos"}</span>
+                : !puedeAnular ? <span className="si-tag" title="Solo el administrador puede anular una carga">Anula el administrador</span>
                 : anulando !== r.id && <button type="button" className="btnGhost" onClick={() => { setAnulando(r.id); setMotivo(""); }}>Anular</button>}
             </div>
             {anulando === r.id && (
@@ -413,8 +414,10 @@ function ListaCargas({ filas, avisar, onAnulado }: { filas: Registro[]; avisar: 
 }
 
 type Vista = Tipo | "OTROS";
-export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
+export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir, puedeAnular = true }: {
   accionistaNombre: string;
+  /** Anular una carga es solo del administrador (el usuario con el permiso especial solo carga). */
+  puedeAnular?: boolean;
   avisar: Avisar;
   /** Refresca los datos de la app (Por Cobrar, Por Pagar, inventario…). */
   onCambio?: () => void;
@@ -508,7 +511,7 @@ export function SaldosIniciales({ accionistaNombre, avisar, onCambio, ir }: {
       {vista === "INVENTARIO" && <InventarioForm corte={corte} cp={cp} avisar={avisar} onGuardado={guardado} />}
       {vista === "ANTICIPO" && <AnticipoForm corte={corte} cp={cp} avisar={avisar} onGuardado={guardado} />}
       {vista !== "OTROS" && (
-        <ListaCargas filas={registros.filter((r) => r.tipo === vista)} avisar={avisar} onAnulado={guardado} />
+        <ListaCargas filas={registros.filter((r) => r.tipo === vista)} avisar={avisar} onAnulado={guardado} puedeAnular={puedeAnular} />
       )}
 
       {vista === "OTROS" && (

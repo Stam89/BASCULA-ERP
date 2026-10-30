@@ -1835,6 +1835,7 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
   { label: "PERMISOS ESPECIALES", rows: [
     { key: "PERM:EDITAR_PRECIOS", label: "Permitir Editar Precios y Tarifas" },
+    { key: "PERM:SALDOS_INICIALES", label: "Permitir cargar Saldos iniciales (lo ve en su Inicio)" },
   ] },
 ];
 const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.key));
@@ -5124,6 +5125,9 @@ export function App() {
   // permiso especial «Anular / Eliminar» ya no se puede dar a otros usuarios.
   const canAnular = isAdmin;
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
+  // 📥 Saldos iniciales para un usuario que no es administrador (pedido del dueño 2026-10-30): con este permiso
+  // especial en el accionista activo, la tarjeta sale en su Inicio (Configuración sigue siendo solo del administrador).
+  const canSaldosIniciales = isAdmin || activeAllowedPerms.has("PERM:SALDOS_INICIALES");
   // Nivel VER vs EDITAR por módulo (accionista activo): el nombre plano = Ver,
   // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
   // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
@@ -14731,6 +14735,31 @@ Motivo (obligatorio):`, ""));
             onGuardado={(correo) => { if (correo) setCorreoAviso(false); refreshConfig().catch(() => undefined); }}
             avisar={addToast}
           />
+        )}
+
+        {/* 📥 Saldos iniciales en el Inicio del usuario con el permiso especial (el administrador lo usa en Configuración). */}
+        {activeTab === "Dashboard" && !isAdmin && canSaldosIniciales && (
+          <section className="panelGrid" style={{ marginBottom: 12 }}>
+            <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}
+              onToggle={(e) => setSaldosInicialesAbierto((e.currentTarget as HTMLDetailsElement).open)}>
+              <summary>{cfgSum("📥", "Saldos iniciales", `Lo que ${accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista"} tenía al cierre del mes: CxC, CxP, inventario, cáscara y anticipos`)}</summary>
+              {saldosInicialesAbierto && (
+                <SaldosIniciales
+                  key={activeAccionistaId ?? "sin-accionista"}
+                  accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"}
+                  avisar={addToast}
+                  onCambio={() => { refresh().catch(() => undefined); }}
+                  puedeAnular={false}
+                  ir={{
+                    caja: visibleTabs.includes("Caja") ? async () => (await irATab("Caja")) : undefined,
+                    sacos: visibleTabs.includes("Inventario") ? irASacos : undefined,
+                    fomentos: visibleTabs.includes("Fomentos") ? async () => (await irATab("Fomentos")) : undefined,
+                    bascula: visibleTabs.includes("Bascula") ? async () => (await irATab("Bascula")) : undefined
+                  }}
+                />
+              )}
+            </details>
+          </section>
         )}
 
         {activeTab === "Dashboard" && inicioSimple && (() => {

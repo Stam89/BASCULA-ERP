@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// SALDOS INICIALES (Configuración → 📥 Saldos iniciales, solo administradores).
+// SALDOS INICIALES (Configuración → 📥 Saldos iniciales: el administrador, o el usuario con el permiso especial
+// «Cargar Saldos iniciales» en ese accionista —lo ve en su Inicio—; ANULAR una carga sigue siendo solo del administrador).
 // Para arrancar con datos reales: lo que la empresa tenía al CORTE (los cortes
 // son a FIN DE MES) se carga a mano, fechado en ese día y SIN mover la caja:
 //   · CxC → accounts_receivable (cliente, agricultor o socio). Con un socio se
@@ -22,14 +23,14 @@ import { inTransaction } from "../../db/transaction.js";
 import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { nextCode } from "../../utils/codes.js";
 import { CORTE_ARRANQUE, esCorteValido } from "../../utils/corte-mes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 
 export const saldosInicialesRouter = Router();
-saldosInicialesRouter.use(requireAdmin);
+saldosInicialesRouter.use(requirePermiso("SALDOS_INICIALES"));
 
 const ZONA = "America/Guayaquil";
 const fechaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (AAAA-MM-DD)");
@@ -364,7 +365,7 @@ saldosInicialesRouter.post("/anticipos", asyncRoute(async (req, res) => {
 }));
 
 // ── Anular una carga (mientras no tenga abonos ni se haya usado) ─────────────
-saldosInicialesRouter.post("/:id/anular", asyncRoute(async (req, res) => {
+saldosInicialesRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
   const { accionistaId, userId } = contexto(req as AuthenticatedRequest);
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   const out = await inTransaction(async (client) => {

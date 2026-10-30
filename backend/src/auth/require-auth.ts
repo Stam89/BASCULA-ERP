@@ -396,7 +396,7 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
  * Precios y Tarifas») en el accionista activo. Los botones ya se ocultan sin el permiso; esto
  * hace que el servidor diga lo mismo. Va después de resolveAccionista.
  */
-export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS") {
+export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS" | "SALDOS_INICIALES") {
   return (req: Request, _res: Response, next: NextFunction) => {
     const user = (req as AuthenticatedRequest).user;
     if (!user) { next(new ApiError(401, "Sesión requerida")); return; }
@@ -414,7 +414,9 @@ export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS") {
       if (row.role_name === "ADMINISTRADOR" || (permiso !== "ANULAR" && (row.allowed_modules ?? []).includes(`PERM:${permiso}`))) { next(); return; }
       next(new ApiError(403, permiso === "ANULAR"
         ? "Solo el administrador puede anular, eliminar o reabrir registros."
-        : "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador."));
+        : permiso === "SALDOS_INICIALES"
+          ? "No tienes permiso para cargar saldos iniciales en este accionista. Pide el permiso «Cargar Saldos iniciales» a un administrador."
+          : "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador."));
     }, next);
   };
 }
