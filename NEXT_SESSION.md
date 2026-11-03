@@ -2,7 +2,12 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 🚚 Bajada de carro parcial (2026-10-30)
+## Último cambio: 💼 Caja simplificada en 3 zonas (2026-11-03)
+- Aprobado por el dueño («Sí, aplica todo»): saldos (gaveta / entró hoy / salió hoy; sin la tarjeta de saldo inicial, que ya es la 1.ª fila), una fila de acciones (🧮 Cuadrar · ＋ Otros registros ▾ · «Más» arriba) y la hoja.
+- «Otros registros» (`cajaMenu === "acciones"`): Arroz en cáscara, Venta detalle, Fomentos, Sacos, Mantenimiento de equipos, Cuentas entre socios, Pagar nómina, e Ingreso/Egreso con todos los datos (F2/F3). «Más»: Resumen global (F4), ¿Cuándo se hizo?, Excel, imprimir, cerrar.
+- `CajaHoja`: columnas Fecha · Concepto · Entradas · Salidas · Saldo. Categoría y «¿De quién?» son etiquetas bajo el concepto (en la captura, dos combos chicos); código fijo 001 (`CODIGO`), se muestra solo si un movimiento viejo tiene otro. Sin «Conceptos rápidos». Concepto ya usado → Enter salta al monto. Lo de otros módulos se ve SIEMPRE (`is-externo`, gris); se quitó `cajaVerOtros`.
+
+## Cambio anterior: 🚚 Bajada de carro parcial (2026-10-30)
 - Volqueta (se vacía sola, «no se paga») en la que un chico ayudó a bajar una parte: en Nómina › Bajada de carro, «🤝 alguien ayudó a bajar una parte» (o ✂️ en un ticket con nombre) pide quién y cuántos QQ; se le paga solo esa parte (QQ × tarifa).
 - `mobile_synced_tickets.bajada_qq` (migración 20261132; NULL = todo el ticket). `/cuadrilla/bajadas/asignar` acepta `qq` (null = todo; sin mandarlo no cambia; «no se paga» lo borra; no más que el ticket → 400). `sincronizarBajadas` usa la parte y lo anota «bajó X de Y QQ».
 - Además: Cuadrilla › Registros del período y su recibo ya NO muestran la bajada de carro (`/cuadrilla/entries` la excluye salvo `?incluir_bajada=1`).
