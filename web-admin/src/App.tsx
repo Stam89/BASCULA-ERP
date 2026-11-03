@@ -2873,7 +2873,6 @@ export function App() {
   // Caja: menú desplegable abierto de la barra de herramientas (solo UI).
   const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
   // Lista de movimientos: por defecto solo lo registrado en Caja; los de otros módulos, con un botón.
-  const [cajaVerOtros, setCajaVerOtros] = useState(false);
   // Flujo único «Trabajo en un equipo»: tipo con que se abre (desde el buscador) y llave para reiniciarlo.
   const [teqTipoInicial, setTeqTipoInicial] = useState<"COMPRA" | undefined>(undefined);
   const [teqKey, setTeqKey] = useState(0);
@@ -20091,7 +20090,7 @@ Motivo (obligatorio):`, ""));
                     { key: "venta_detalle", icon: "🛒", label: "Venta Detalle", hint: "Venta por dólares, libras o QQ" },
                     { key: "fomentos", icon: "🌾", label: `Fomentos${fomentosActivos > 0 ? ` (${fomentosActivos})` : ""}`, hint: "Créditos a agricultores" },
                     { key: "sacos", icon: "📦", label: "Sacos", hint: "Compra y stock de sacos" },
-                    { key: "mantenimiento", icon: "🔧", label: "Mantenimiento", hint: "Reparaciones y repuestos" }
+                    { key: "mantenimiento", icon: "🔧", label: "Mantenimiento de equipos", hint: "Reparaciones, repuestos y hoja de vida" }
                   ];
                   // Mismo efecto que las pestañas anteriores al abrir cada sección.
                   const abrir = (t: typeof visibles[number]) => {
@@ -20131,6 +20130,14 @@ Motivo (obligatorio):`, ""));
                                 {caja.tipo === "MIXTO" && (
                                   <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setTraspaso({ direccion: "DEPOSITO", monto: "", descripcion: "" }); }}>
                                     <span className="cj-menu-ico">🏦</span><span className="cj-menu-label">Depositar / retirar del banco</span>
+                                  </button>
+                                )}
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setCajaResumenGlobal(true); }}>
+                                  <span className="cj-menu-ico">📊</span><span className="cj-menu-label">Resumen global de cajas <kbd>F4</kbd></span>
+                                </button>
+                                {esMatrizActiva && visibles.includes("historial") && (
+                                  <button type="button" role="menuitem" className="cj-menu-item" onClick={() => abrir("historial")}>
+                                    <span className="cj-menu-ico">🔎</span><span className="cj-menu-label">¿Cuándo se hizo? (equipos)</span>
                                   </button>
                                 )}
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); downloadCajaExcel(); }}>
@@ -20188,26 +20195,49 @@ Motivo (obligatorio):`, ""));
                               <strong>{money(salHoy)}</strong>
                               <span>{abiertaHoy ? `${deHoy.filter((m) => m.movement === "EXPENSE").length} movimiento(s)` : `en la sesión ${money(cashSummary?.total_expense ?? 0)}`}</span>
                             </div>
-                            <div className="cjk-card">
-                              <small>🗂️ Saldo inicial / anterior</small>
-                              <strong>{money(Number(caja.opening_balance))}</strong>
-                              <span>con el que se abrió la caja</span>
-                            </div>
                           </div>
                         );
                       })()}
 
-                      {/* La HOJA de abajo es la forma principal de registrar (2026-10-30). El formulario completo queda
-                          para lo que pide más datos: a crédito, fondo a rendir, activo fijo, nota del taller, proveedor… */}
-                      <div className="cjx-barra">
-                        <button type="button" className={`cjx-barra__res ${cajaResumenGlobal ? "is-on" : ""}`} onClick={() => setCajaResumenGlobal(true)}>
-                          <span aria-hidden="true">📊</span> Resumen global <kbd>F4</kbd>
-                        </button>
-                        <span className="cjx-barra__form">
-                          <small>📝 Formulario completo</small>
-                          <button type="button" className={`is-in ${cajaSubTab === "movimiento" && movType === "INCOME" ? "is-on" : ""}`} title="Ingreso con todos los datos" onClick={() => abrirMovimientoCaja("INCOME")}>＋ Ingreso <kbd>F2</kbd></button>
-                          <button type="button" className={`is-out ${cajaSubTab === "movimiento" && movType === "EXPENSE" ? "is-on" : ""}`} title="Egreso con todos los datos: a crédito, fondo a rendir, activo fijo, nota del taller, proveedor…" onClick={() => abrirMovimientoCaja("EXPENSE")}>－ Egreso <kbd>F3</kbd></button>
-                        </span>
+                      {/* Caja simplificada (pedido del dueño 2026-11-03): una sola fila de acciones. Todo lo que no es la hoja
+                          (arroz en cáscara, ventas, fomentos, sacos, mantenimiento, socios, nómina y el formulario completo)
+                          va en «Otros registros»; el Resumen global y «¿Cuándo se hizo?» en «Más». */}
+                      <div className="cjx-acciones">
+                        {(caja.tipo ?? "EFECTIVO") !== "BANCO" && (
+                          <button type="button" className="cjx-acciones__btn" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadrar</button>
+                        )}
+                        <div className="cj-dd">
+                          <button type="button" className={`cjx-acciones__btn ${cajaMenu === "acciones" || (cajaSubTab !== "resumen" && cajaSubTab !== "historial") ? "is-on" : ""}`}
+                            aria-haspopup="menu" aria-expanded={cajaMenu === "acciones"} onClick={() => setCajaMenu(cajaMenu === "acciones" ? null : "acciones")}>
+                            ＋ Otros registros <span className="cj-caret">▾</span>
+                          </button>
+                          {cajaMenu === "acciones" && (
+                            <div className="cj-menu" role="menu">
+                              {acciones.filter((x) => visibles.includes(x.key)).map((x) => (
+                                <button key={x.key} type="button" role="menuitem" className="cj-menu-item" onClick={() => abrir(x.key)}>
+                                  <span className="cj-menu-ico">{x.icon}</span><span className="cj-menu-label">{x.label}<small>{x.hint}</small></span>
+                                </button>
+                              ))}
+                              {accionistas.length > 1 && (
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setEntreSocios({}); }}>
+                                  <span className="cj-menu-ico">🤝</span><span className="cj-menu-label">Cuentas entre socios<small>Quién le debe a quién</small></span>
+                                </button>
+                              )}
+                              {esMatrizActiva && visibleTabs.includes("Nomina") && (
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); irADestino("Nomina", "pagos"); }}>
+                                  <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes<small>Planta, cuadrilla, bajada y sueldos</small></span>
+                                </button>
+                              )}
+                              <div className="cj-menu-sep" />
+                              <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); abrirMovimientoCaja("INCOME"); }}>
+                                <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Ingreso con todos los datos <kbd>F2</kbd></span>
+                              </button>
+                              <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); abrirMovimientoCaja("EXPENSE"); }}>
+                                <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Egreso con todos los datos <kbd>F3</kbd><small>A crédito, fondo a rendir, activo fijo, nota del taller…</small></span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* 📲 Transferencias / cheques de pedidos despachados que aún no se confirman. */}
@@ -20229,36 +20259,6 @@ Motivo (obligatorio):`, ""));
                           ))}
                         </div>
                       )}
-
-                      {/* Accesos a la vista (antes escondidos en «Acciones rápidas» y «Opciones»). */}
-                      <div className="cjx-accesos">
-                        {esMatrizActiva && (visibles.includes("historial") || visibles.includes("mantenimiento")) && (
-                          <div className="cjx-grupo">
-                            <span className="cjx-grupo__t">Equipos</span>
-                            {visibles.includes("historial") && (
-                              <button type="button" className={cajaSubTab === "historial" ? "is-on" : ""} onClick={() => abrir("historial")}>🔎 ¿Cuándo se hizo?</button>
-                            )}
-                            {visibles.includes("mantenimiento") && (
-                              <button type="button" className={cajaSubTab === "mantenimiento" ? "is-on" : ""} onClick={() => abrir("mantenimiento")}>📋 Hoja de vida y repuestos</button>
-                            )}
-                          </div>
-                        )}
-                        <div className="cjx-grupo">
-                          <span className="cjx-grupo__t">Otros registros</span>
-                          {acciones.filter((x) => visibles.includes(x.key) && x.key !== "mantenimiento").map((x) => (
-                            <button key={x.key} type="button" className={cajaSubTab === x.key ? "is-on" : ""} title={x.hint} onClick={() => abrir(x.key)}>{x.icon} {x.label}</button>
-                          ))}
-                          {accionistas.length > 1 && (
-                            <button type="button" title="Quién le debe a quién entre la Matriz y los socios; dinero que se dan y pagos por su cuenta" onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios</button>
-                          )}
-                          {esMatrizActiva && visibleTabs.includes("Nomina") && (
-                            <button type="button" title="Pagar de una vez a la planta, cuadrilla, bajada de carro y sueldos semanales" onClick={() => irADestino("Nomina", "pagos")}>🗓️ Pagar nómina del viernes</button>
-                          )}
-                          {(dashboard.current_cash_register?.tipo ?? "EFECTIVO") !== "BANCO" && (
-                            <button type="button" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadre del día</button>
-                          )}
-                        </div>
-                      </div>
 
                       {/* Título de la sección abierta (fuera de Movimientos / Nuevo movimiento) */}
                       {cajaSubTab !== "resumen" && (() => {
@@ -20419,25 +20419,8 @@ Motivo (obligatorio):`, ""));
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
                       <span>📋 Hoja de movimientos de la sesión</span>
-                      <span className="cj-count">{cashMovements.filter((m) => cajaVerOtros || !origenExternoCaja(m)).length + cajaCreditos.length}</span>
+                      <span className="cj-count">{cashMovements.length + cajaCreditos.length}</span>
                     </div>
-                    {(() => {
-                      const otros = cashMovements.filter((m) => origenExternoCaja(m));
-                      if (otros.length === 0) return null;
-                      const porModulo = new Map<string, number>();
-                      for (const m of otros) { const k = origenExternoCaja(m) as string; porModulo.set(k, (porModulo.get(k) ?? 0) + 1); }
-                      return (
-                        <div className="cajaOtros">
-                          <span>
-                            {cajaVerOtros ? "Se ven también" : "Escondidos"} {otros.length} movimiento{otros.length === 1 ? "" : "s"} hecho{otros.length === 1 ? "" : "s"} desde otros módulos
-                            <small> ({[...porModulo.entries()].map(([k, n]) => `${k}: ${n}`).join(" · ")}). El saldo de la caja los incluye igual.</small>
-                          </span>
-                          <button type="button" className="btnSecondary" onClick={() => setCajaVerOtros((v) => !v)}>
-                            {cajaVerOtros ? "Ocultarlos" : `Ver también los otros (${otros.length})`}
-                          </button>
-                        </div>
-                      );
-                    })()}
                     {cajaCreditos.some((c) => c.status !== "CANCELLED") && (
                       <div style={{ padding: "8px 16px", background: "#f5f3ff", borderBottom: "1px solid #ede9fe", fontSize: 12.5, color: "#5b21b6" }}>
                         💳 A crédito en esta sesión: <strong>{money(cajaCreditos.filter((c) => c.status !== "CANCELLED").reduce((s, c) => s + Number(c.amount), 0))}</strong> en Cuentas por Pagar · no afecta el saldo de la caja
@@ -20471,7 +20454,7 @@ Motivo (obligatorio):`, ""));
                         <CajaHoja
                           movimientos={cashMovements}
                           creditos={cajaCreditos}
-                          verOtros={cajaVerOtros}
+                          verOtros
                           origenExterno={origenExternoCaja}
                           saldoInicial={Number(dashboard.current_cash_register?.opening_balance ?? 0)}
                           categorias={categoriasHoja}

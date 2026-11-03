@@ -36,7 +36,11 @@ export const RUBRO_VARIOS = { EGRESO: "GASTOS_VARIOS", INGRESO: "INGRESOS_VARIOS
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const sinTilde = (x: string) => x.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 const fechaCorta = (iso: string) => new Date(iso).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-const CELDAS = ["concepto", "categoria", "quien", "codigo", "entrada", "salida"] as const;
+// Caja simplificada (pedido del dueño 2026-11-03): columnas Fecha · Concepto · Entradas · Salidas · Saldo. La categoría
+// y «¿De quién?» van como etiquetas bajo el concepto (se llenan solas por lo escrito y se cambian con un clic); el
+// código queda 001 por dentro. Los movimientos de otros módulos se ven siempre, en gris, para que el saldo cuadre fila a fila.
+const CELDAS = ["concepto", "categoria", "quien", "entrada", "salida"] as const;
+const CODIGO = "001";
 // Para reconocer la máquina en el concepto: «Diésel cose 10,1» → COS101 (como «COS.10.1»).
 export const claveMaq = (x: string) => sinTilde(x).toUpperCase().replace(/\bCOSE\b/g, "COS").replace(/[^A-Z0-9]/g, "");
 type Celda = typeof CELDAS[number];
@@ -71,7 +75,6 @@ export function CajaHoja({
 }) {
   const [concepto, setConcepto] = useState("");
   const [catTxt, setCatTxt] = useState("");
-  const [codigo, setCodigo] = useState("001");
   const [entrada, setEntrada] = useState("");
   const [salida, setSalida] = useState("");
   const [medio, setMedio] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
@@ -169,7 +172,7 @@ export function CajaHoja({
     if (!ir()) setTimeout(ir, 0);
   };
   const limpiar = () => {
-    setConcepto(""); setCatTxt(""); setCodigo("001"); setEntrada(""); setSalida(""); setError("");
+    setConcepto(""); setCatTxt(""); setEntrada(""); setSalida(""); setError("");
     setQuienTxt(""); setQuienManual(false); setBanco(false); enfocar("concepto");
   };
 
@@ -191,7 +194,7 @@ export function CajaHoja({
     if (concepto.trim().length < 2) { setError("Escribe el concepto o la descripción."); enfocar("concepto"); return; }
     setGuardando(true);
     try {
-      await onGuardar({ movement: tipo!, category: cat?.codigo ?? "", amount: monto, description: concepto.trim(), codigo: codigo.trim() || "001", medio,
+      await onGuardar({ movement: tipo!, category: cat?.codigo ?? "", amount: monto, description: concepto.trim(), codigo: CODIGO, medio,
         destino: destino ?? undefined, banco: banco || undefined });
       limpiar();
     } catch (e) {
@@ -208,39 +211,32 @@ export function CajaHoja({
       // Si el concepto nombra una máquina de Transporte o un anticipo a un operador, «¿De quién?» se llena solo.
       const detectado = !quienManual ? detectarQuien(valor ?? concepto) : null;
       if (detectado) setQuienTxt(detectado.valor);
-      enfocar(detectado?.tipo === "anticipo" ? "salida" : "categoria");
+      // Con la categoría ya conocida (la recuerda del mismo concepto) se salta directo al monto.
+      const conocida = resolverCat(catTxt || (previa ? nombreCat.get(previa) ?? "" : ""));
+      if (detectado?.tipo === "anticipo") enfocar("salida");
+      else if (conocida) {
+        const deOtro = !!detectado && detectado.tipo !== "propio";
+        if (!deOtro && esCompleja(conocida.codigo, conocida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) enfocar("categoria");
+        else enfocar(conocida.tipo === "INGRESO" ? "entrada" : "salida");
+      } else enfocar("categoria");
     } else if (c === "categoria") {
       const elegida = resolverCat(valor ?? catTxt);
       if (elegida) setCatTxt(elegida.nombre);
       const deOtro = !!quien && quien.tipo !== "propio";
       if (elegida && !deOtro && esCompleja(elegida.codigo, elegida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) { guardar(elegida); return; }
-      enfocar(elegida ? (conQuien ? "quien" : "codigo") : "categoria");
+      enfocar(elegida ? (elegida.tipo === "INGRESO" ? "entrada" : "salida") : "categoria");
     } else if (c === "quien") {
       const elegido = resolverQuien(valor ?? quienTxt);
       if (elegido) setQuienTxt(elegido.valor);
-      enfocar(elegido ? (elegido.tipo === "anticipo" ? "salida" : "codigo") : "quien");
+      enfocar(elegido ? (elegido.tipo === "anticipo" || tipo !== "INCOME" ? "salida" : "entrada") : "quien");
     }
   };
   const tecla = (c: Celda) => (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") { e.preventDefault(); limpiar(); return; }
     if (e.key !== "Enter") return;
     e.preventDefault();
-    if (c === "codigo") {
-      enfocar(tipo === "INCOME" ? "entrada" : tipo === "EXPENSE" ? "salida" : "categoria");
-    } else {
-      guardar();
-    }
+    guardar();
   };
-
-  // Conceptos rápidos: el rubro flexible y las categorías más usadas en esta caja.
-  const rapidos = useMemo(() => {
-    const cuenta = new Map<string, number>();
-    for (const m of movimientos) if (!m.reference_type && !m.reversal_of) cuenta.set(m.category, (cuenta.get(m.category) ?? 0) + 1);
-    const usadas = [...cuenta.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k)
-      .filter((k) => k !== RUBRO_VARIOS.EGRESO && k !== RUBRO_VARIOS.INGRESO);
-    const lista = [RUBRO_VARIOS.EGRESO, RUBRO_VARIOS.INGRESO, ...usadas].map((k) => categorias.find((c) => c.codigo === k)).filter(Boolean) as HojaCategoria[];
-    return lista.slice(0, 8);
-  }, [movimientos, categorias]);
 
   const opcionesCat = useMemo(() => categorias.map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" })), [categorias]);
   const opcionesConcepto = useMemo(() => sugerencias.map((x) => ({ valor: x })), [sugerencias]);
@@ -258,27 +254,12 @@ export function CajaHoja({
 
   return (
     <div className="cjh">
-      {rapidos.length > 0 && (
-        <div className="cjh-rapidos">
-          <span>Conceptos rápidos</span>
-          {rapidos.map((c) => (
-            <button key={c.codigo} type="button" className={c.tipo === "INGRESO" ? "is-in" : "is-out"} title={c.nombre}
-              onClick={() => { setCatTxt(c.nombre); setError(""); enfocar(concepto.trim() ? (c.tipo === "INGRESO" ? "entrada" : "salida") : "concepto"); }}>
-              {c.tipo === "INGRESO" ? "+" : "−"} {c.nombre}
-            </button>
-          ))}
-        </div>
-      )}
       <div className="cjh-scroll" ref={scrollRef}>
         <table className="cjh-tabla">
           <thead>
             <tr>
-              <th className="cjh-n">#</th>
               <th>Fecha</th>
-              <th>Concepto / descripción</th>
-              <th>Categoría</th>
-              {conQuien && <th>¿De quién?</th>}
-              <th>Código</th>
+              <th>Concepto</th>
               <th className="num">Entradas $</th>
               <th className="num">Salidas $</th>
               <th className="num">Saldo $</th>
@@ -287,28 +268,24 @@ export function CajaHoja({
           </thead>
           <tbody>
             <tr className="cjh-inicial">
-              <td className="cjh-n" />
-              <td colSpan={conQuien ? 5 : 4}>Saldo inicial de la caja</td>
+              <td colSpan={2}>Saldo inicial de la caja</td>
               <td /><td />
               <td className="num"><b>{money(saldoInicial)}</b></td>
               <td />
             </tr>
-            {filas.map((f, i) => {
+            {filas.map((f) => {
               if (f.k === "cred") {
                 const c = f.c;
                 const anulado = c.status === "CANCELLED";
                 const abonado = Number(c.amount) - Number(c.balance);
                 return (
                   <tr key={`cred-${c.id}`} className={`cjh-cred ${anulado ? "is-anulado" : ""}`}>
-                    <td className="cjh-n">{i + 1}</td>
                     <td className="cjh-fecha">{fechaCorta(c.created_at)}</td>
                     <td>
                       {c.description ?? "—"}
+                      <span className="cjh-tags"><span className="cjh-tag">{etiquetaCat(c.categoria)}</span></span>
                       <small>💳 A crédito · 🏪 {c.proveedor_nombre ?? "—"}{anulado ? " · ANULADO" : Number(c.balance) < 0.005 ? " · pagada" : abonado > 0.005 ? ` · saldo ${money(Number(c.balance))}` : " · en Por Pagar"}</small>
                     </td>
-                    <td>{etiquetaCat(c.categoria)}</td>
-                    {conQuien && <td className="cjh-quien">—</td>}
-                    <td className="cjh-cod">—</td>
                     <td />
                     <td className="num cjh-sin">{money(Number(c.amount))}<small>no sale de caja</small></td>
                     <td className="num">{money(f.saldo)}</td>
@@ -324,11 +301,15 @@ export function CajaHoja({
               const origen = origenExterno(m);
               const entra = m.movement === "INCOME";
               return (
-                <tr key={m.id} className={`${entra ? "is-in" : "is-out"} ${anulado ? "is-anulado" : ""} ${esAnulacion ? "is-reverso" : ""}`}>
-                  <td className="cjh-n">{i + 1}</td>
+                <tr key={m.id} className={`${entra ? "is-in" : "is-out"} ${anulado ? "is-anulado" : ""} ${esAnulacion ? "is-reverso" : ""} ${origen ? "is-externo" : ""}`}>
                   <td className="cjh-fecha">{fechaCorta(m.created_at)}</td>
                   <td>
                     {m.description || etiquetaCat(m.category)}
+                    <span className="cjh-tags">
+                      <span className="cjh-tag">{etiquetaCat(m.category)}</span>
+                      {quienDeMovimiento(m) && <span className="cjh-tag is-quien">{quienDeMovimiento(m)}</span>}
+                      {m.codigo && m.codigo !== CODIGO && <span className="cjh-tag">cód. {m.codigo}</span>}
+                    </span>
                     {(m.subcategoria || m.proveedor_nombre || origen || anulado || esAnulacion || (mixto && m.medio === "BANCO") || m.maq_activo || m.area) && (
                       <small>
                         {[
@@ -348,9 +329,6 @@ export function CajaHoja({
                       </small>
                     )}
                   </td>
-                  <td>{etiquetaCat(m.category)}</td>
-                  {conQuien && <td className="cjh-quien">{quienDeMovimiento(m)}</td>}
-                  <td className="cjh-cod">{m.codigo || "001"}</td>
                   <td className="num cjh-entra">{entra ? money(Number(m.amount)) : ""}</td>
                   <td className="num cjh-sale">{entra ? "" : money(Number(m.amount))}</td>
                   <td className={`num cjh-saldo ${f.saldo < 0 ? "is-neg" : ""}`}>{money(f.saldo)}</td>
@@ -368,32 +346,31 @@ export function CajaHoja({
             })}
             {/* Fila de captura: como escribir la siguiente línea del Excel. */}
             <tr className="cjh-nueva">
-              <td className="cjh-n">＋</td>
-              <td className="cjh-fecha">Hoy</td>
+              <td className="cjh-fecha">Ahora</td>
               <td>
                 <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
-                  placeholder="Concepto (ej: refrigerio, JUAN PÉREZ…)" disabled={guardando} ariaLabel="Concepto o descripción"
+                  placeholder="Concepto (ej: refrigerio, diésel COS.10, JUAN PÉREZ…)" disabled={guardando} ariaLabel="Concepto o descripción"
                   onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiar} />
-              </td>
-              <td>
-                <CeldaSugerida inputRef={(el) => { refs.current.categoria = el; }} value={catTxt} opciones={opcionesCat} minimo={0} elegirPrimera
-                  placeholder="Categoría" disabled={guardando} ariaLabel="Categoría"
-                  className={catTxt && !cat ? "is-mal" : tipo === "INCOME" ? "is-in" : tipo === "EXPENSE" ? "is-out" : ""}
-                  onChange={(v) => { setCatTxt(v); setError(""); }} onEnter={(v) => siguiente("categoria", v)} onEscape={limpiar}
-                  onBlur={() => { if (cat) setCatTxt(cat.nombre); }} />
-              </td>
-              {conQuien && (
-                <td>
-                  <CeldaSugerida inputRef={(el) => { refs.current.quien = el; }} value={quienTxt} opciones={opcionesQuien} minimo={0} elegirPrimera
-                    placeholder={destinos[0]?.valor ?? "Esta caja"} disabled={guardando} ariaLabel="¿De quién es?"
-                    className={quienTxt && !quien ? "is-mal" : quien && quien.tipo !== "propio" ? "is-out" : ""}
-                    onChange={(v) => { setQuienTxt(v); setQuienManual(true); setError(""); }} onEnter={(v) => siguiente("quien", v)} onEscape={limpiar}
-                    onBlur={() => { if (quien && quienTxt) setQuienTxt(quien.valor); }} />
-                </td>
-              )}
-              <td>
-                <input ref={(el) => { refs.current.codigo = el; }} value={codigo} className="cjh-cod" maxLength={20} disabled={guardando}
-                  onChange={(e) => setCodigo(e.target.value)} onKeyDown={tecla("codigo")} aria-label="Código" />
+                <div className="cjh-nueva__tags">
+                  <label>
+                    <span>Categoría</span>
+                    <CeldaSugerida inputRef={(el) => { refs.current.categoria = el; }} value={catTxt} opciones={opcionesCat} minimo={0} elegirPrimera
+                      placeholder="Elige…" disabled={guardando} ariaLabel="Categoría"
+                      className={catTxt && !cat ? "is-mal" : tipo === "INCOME" ? "is-in" : tipo === "EXPENSE" ? "is-out" : ""}
+                      onChange={(v) => { setCatTxt(v); setError(""); }} onEnter={(v) => siguiente("categoria", v)} onEscape={limpiar}
+                      onBlur={() => { if (cat) setCatTxt(cat.nombre); }} />
+                  </label>
+                  {conQuien && (
+                    <label>
+                      <span>¿De quién?</span>
+                      <CeldaSugerida inputRef={(el) => { refs.current.quien = el; }} value={quienTxt} opciones={opcionesQuien} minimo={0} elegirPrimera
+                        placeholder={destinos[0]?.valor ?? "Esta caja"} disabled={guardando} ariaLabel="¿De quién es?"
+                        className={quienTxt && !quien ? "is-mal" : quien && quien.tipo !== "propio" ? "is-out" : ""}
+                        onChange={(v) => { setQuienTxt(v); setQuienManual(true); setError(""); }} onEnter={(v) => siguiente("quien", v)} onEscape={limpiar}
+                        onBlur={() => { if (quien && quienTxt) setQuienTxt(quien.valor); }} />
+                    </label>
+                  )}
+                </div>
               </td>
               <td>
                 <input ref={(el) => { refs.current.entrada = el; }} value={entrada} inputMode="decimal" className="num"
@@ -429,8 +406,7 @@ export function CajaHoja({
           </tbody>
           <tfoot>
             <tr>
-              <td className="cjh-n" />
-              <td colSpan={conQuien ? 5 : 4}>TOTALES DE LA SESIÓN</td>
+              <td colSpan={2}>TOTALES DE LA SESIÓN</td>
               <td className="num cjh-entra">{money(totEntradas)}</td>
               <td className="num cjh-sale">{money(totSalidas)}</td>
               <td className="num"><b>{money(saldoFinal)}</b></td>
@@ -441,9 +417,9 @@ export function CajaHoja({
       </div>
       <div className="cjh-pie">
         {error ? <span className="cjh-error">⚠️ {error}</span> : (
-          <span><kbd>Enter</kbd>/<kbd>Tab</kbd> pasa a la siguiente celda · <kbd>Enter</kbd> en el monto guarda · <kbd>Esc</kbd> limpia la fila · lo que pide más datos (equipo, sacos, repuestos, ventas…) abre su formulario
-            {conQuien && <> · <b>¿De quién?</b>: esta caja, 🚜 Transporte, 👷 anticipo a un operador o 🤝 un socio</>}
-            {puedeBanco && <> · <b>💳</b> = no salió de la gaveta (banco / tarjeta)</>}</span>
+          <span>Escribe el concepto y <kbd>Enter</kbd>: si ya se usó, la categoría se llena sola y pasa al monto · <kbd>Enter</kbd> en el monto guarda · <kbd>Esc</kbd> limpia
+            {puedeBanco && <> · <b>💳</b> = no salió de la gaveta (banco / tarjeta)</>}
+            <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (ventas, anticipos, Transporte…).</span></span>
         )}
         {banco && !error && <span className="cjh-aviso">💳 Esta salida no sale de la gaveta: entra lo mismo como «Retiro del banco».</span>}
       </div>
