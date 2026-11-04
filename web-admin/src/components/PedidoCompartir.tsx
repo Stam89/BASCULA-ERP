@@ -2,7 +2,7 @@
 // Compartir un PEDIDO con el cliente (WhatsApp / imagen / texto) con el total a
 // pagar. Solo lee los datos del pedido: no guarda ni cambia nada.
 // ─────────────────────────────────────────────────────────────────────────────
-import { useRef, useState } from "react";
+import { Fragment, useRef, useState } from "react";
 import { money } from "../format";
 
 export type PedidoCompartirLinea = {
@@ -31,6 +31,7 @@ const fechaCorta = (v: string) => {
   return Number.isNaN(d.getTime()) ? v : d.toLocaleDateString("es-EC", { day: "2-digit", month: "2-digit", year: "numeric" });
 };
 const qqTxt = (n: number) => (Number.isInteger(n) ? String(n) : n.enReal());
+const cabecera = { fontSize: 11, fontWeight: 700, color: "#64748b", textTransform: "uppercase", letterSpacing: 0.4 } as const;
 
 /** Número para wa.me: 0987654321 → 593987654321 (Ecuador). null si no sirve. */
 export function telefonoWhatsApp(tel: string | null | undefined): string | null {
@@ -133,29 +134,25 @@ export function PedidoCompartirModal({ pedido, negocio, titulo, onClose, avisar 
           </div>
           <div style={{ fontSize: 12.5, color: "#475569", marginTop: 2 }}>🧾 Pedido {pedido.numero}</div>
           <div style={{ fontSize: 13, marginTop: 8 }}>Cliente: <strong>{pedido.cliente}</strong></div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginTop: 10 }}>
-            <thead>
-              <tr style={{ color: "#64748b", textAlign: "left" }}>
-                <th style={{ padding: "4px 0", fontWeight: 600 }}>Producto</th>
-                <th style={{ padding: "4px 0", fontWeight: 600, textAlign: "right" }}>QQ</th>
-                <th style={{ padding: "4px 0", fontWeight: 600, textAlign: "right" }}>Subtotal</th>
-              </tr>
-            </thead>
-            <tbody>
-              {pedido.lineas.map((l, i) => (
-                <tr key={i} style={{ borderTop: "1px solid #f1f5f9" }}>
-                  <td style={{ padding: "6px 0" }}>
-                    <strong>{l.producto}</strong>{l.presentacion ? ` · ${l.presentacion}` : ""}
-                    <div style={{ fontSize: 11, color: "#64748b" }}>
-                      {l.bultos && l.bultos > 0 ? `${Math.round(l.bultos)} ${l.unidad} · ` : ""}{money(l.precio)} / QQ
-                    </div>
-                  </td>
-                  <td style={{ padding: "6px 0", textAlign: "right" }}>{qqTxt(l.qq)}</td>
-                  <td style={{ padding: "6px 0", textAlign: "right", fontWeight: 700 }}>{money(l.subtotal)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {/* En grilla y no en tabla: en el celular las tablas se dibujan como bloque y las columnas se pegaban («40$1,920.00»). */}
+          <div className="pedidoLineas" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", columnGap: 18, alignItems: "center", fontSize: 12.5, marginTop: 10 }}>
+            <span style={cabecera}>Producto</span>
+            <span style={{ ...cabecera, textAlign: "right" }}>QQ</span>
+            <span style={{ ...cabecera, textAlign: "right" }}>Subtotal</span>
+            {pedido.lineas.map((l, i) => (
+              <Fragment key={i}>
+                <div style={{ gridColumn: "1 / -1", borderTop: "1px solid #f1f5f9", margin: "6px 0" }} />
+                <div style={{ minWidth: 0 }}>
+                  <strong>{l.producto}</strong>{l.presentacion ? ` · ${l.presentacion}` : ""}
+                  <div style={{ fontSize: 11, color: "#64748b" }}>
+                    {l.bultos && l.bultos > 0 ? `${Math.round(l.bultos)} ${l.unidad} · ` : ""}{money(l.precio)}
+                  </div>
+                </div>
+                <span style={{ textAlign: "right", whiteSpace: "nowrap" }}>{qqTxt(l.qq)}</span>
+                <span style={{ textAlign: "right", whiteSpace: "nowrap", fontWeight: 700 }}>{money(l.subtotal)}</span>
+              </Fragment>
+            ))}
+          </div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, padding: "10px 12px", borderRadius: 10, background: "#dcfce7" }}>
             <span style={{ fontWeight: 700, color: "#166534", fontSize: 13 }}>TOTAL A PAGAR</span>
             <strong style={{ fontSize: 20, color: "#15803d" }}>{money(pedido.total)}</strong>
