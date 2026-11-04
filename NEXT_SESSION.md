@@ -9,6 +9,7 @@ Actualizado: 2026-11-04
 - **«¿Cuándo se hizo?»**: las compras a crédito salen (fuente `CREDITO`, Matriz y Transporte) con el día de la compra, el total y lo que se debe. Sus pagos ya no salen como otra compra. Un mantenimiento a crédito sale una sola vez, como mantenimiento.
 - Simulacro `fomento_transferencia` (48). El simulacro `campo` falla si la copia trae saldo en la CAJA de Transporte (asume 0): es por los datos.
 - **Eliminar todos los fomentos** (Fomentos › Archivos, solo administrador; `POST /settings/eliminar-fomentos`): clave, llave maestra y BORRAR, con respaldo antes. No borra si hay movimientos de caja vigentes o pagos de liquidación ligados. Agricultores, caja e inventario se quedan. Simulacro `fomentos_eliminar_todos`.
+- **Venta detalle por dólares**: las libras salen enteras hacia abajo ($10 a $0.48 = 20 lb, no 20.833) y el peso se puede cambiar a mano; así salen del inventario, pantalla y ticket (antes solo el ticket las redondeaba). Menos de 1 lb: exacto. El total sigue siendo el monto pedido.
 - Datos: Lira Azul se reactivó a pedido del dueño. Stock de producto terminado de STALYN y ROVINSON cargado por Saldos iniciales al 03/11/2026 sin costo (12 filas; Polvillo de ROVINSON en -18.10).
 
 ## Cambio anterior: 🔁 Reintentos sin duplicar y todo a la vista en celular y tablet (2026-11-04)

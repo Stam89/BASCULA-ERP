@@ -8742,7 +8742,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     const detalle = v.modo === "QQ"
       ? `${qqStr} QQ (${librasStr} lb) @ ${money(v.precioAplicado)}/QQ`
       : v.modo === "DOLARES"
-        ? `${money(v.total)} = ${librasStr} lb @ ${money(v.precioLibra)}/lb`
+        ? `${money(v.total)} = ${formatoCantidad(v.libras, 3)} lb`
       : `${librasStr} lb @ ${money(v.precioLibra)}/lb`;
 
     const porAsignar = esMatrizActiva && ventaDetalleDueno === "POR_ASIGNAR";
@@ -8789,21 +8789,20 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       (porAsignar ? " · 🕒 por asignar: al cierre decide de quién es el arroz" : "") +
       (cr ? ` · 📝 ${cr.pagado > 0 ? `pagó ${money(cr.pagado)} y ` : ""}queda debiendo ${money(cr.debe)} a ${cr.de} (Por Cobrar)` : "") +
       (venta.dueno ? ` · arroz de ${venta.dueno}: salió de su inventario${(venta.se_lo_debes ?? 0) > 0 ? ` y le debes ${money(venta.se_lo_debes ?? 0)}` : ""}` : ""), "success");
-    // Ticket térmico 80mm (comprobante de mostrador). Libras: por dólares se entregan libras enteras (10.63 → 10, pedido
-    // del dueño 2026-10-22); por libras, lo que se digitó (sin ceros de más).
-    const lbTicket = (n: number, modo: string) => modo === "DOLARES" ? String(Math.floor(n + 1e-9)) : String(Math.round(n * 100) / 100);
+    // Ticket térmico 80mm (comprobante de mostrador): las libras que se entregan (el cálculo ya las deja enteras por dólares).
+    const lbTicket = (n: number) => String(Math.round(n * 1000) / 1000);
     // 🖨️ «Al imprimir» (Impresoras): directo, preguntar antes o no imprimir; lo resuelve imprimirDocumento.
     printTicketVentaDetalle({
       producto: v.producto,
       cliente: venta.customer_name,
-      libras: lbTicket(v.libras, v.modo),
+      libras: lbTicket(v.libras),
       precioLibra: v.precioLibra,
       total: v.total,
       unidad: v.modo === "QQ" ? "QQ" : "lb",
-      cantidad: v.modo === "QQ" ? qqStr : lbTicket(v.libras, v.modo),
+      cantidad: v.modo === "QQ" ? qqStr : lbTicket(v.libras),
       precioUnitario: v.precioAplicado,
       ...(cr ? { pagado: cr.pagado, debe: cr.debe } : {}),
-      ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: lbTicket(l.libras, l.modo), total: l.total })) } : {}),
+      ...(v.lineas.length > 1 ? { lineas: v.lineas.map((l) => ({ producto: l.producto, libras: lbTicket(l.libras), total: l.total })) } : {}),
       ...(ac ? { nota: ac.tipo === "AGRICULTOR" ? "A su cuenta de agricultor" : "Cargado a su fomento" } : {})
     });
     setVentaDetalleDueno("POR_ASIGNAR");

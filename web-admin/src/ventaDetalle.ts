@@ -52,14 +52,20 @@ export function precioAplicadoDetalle(precioLibra: number, modo: ModoVentaDetall
  * Cobro de una venta al detalle. Devuelve null si falta la tarifa o la cantidad
  * no es un número válido (vacía cuenta como 0 → total 0).
  */
-export function calcularVentaDetalle({ cantidad, precioLibra, modo, descuentoQq = DESCUENTO_QQ_DEFECTO }: {
+export function calcularVentaDetalle({ cantidad, precioLibra, modo, descuentoQq = DESCUENTO_QQ_DEFECTO, librasEntregadas }: {
   cantidad: number; precioLibra: number; modo: ModoVentaDetalle; descuentoQq?: number;
+  /** Por dólares: las libras que de verdad se entregan, si el cajero las cambió. */
+  librasEntregadas?: number;
 }): VentaDetalleCalculo | null {
   const precioAplicado = precioAplicadoDetalle(precioLibra, modo, descuentoQq);
   if (precioAplicado == null || !Number.isFinite(cantidad) || cantidad < 0) return null;
   const enQQ = modo === "QQ";
   const enDolares = modo === "DOLARES";
-  const libras = redondear(enQQ ? cantidad * LIBRAS_POR_QQ : enDolares ? cantidad / precioAplicado : cantidad, 3);
+  // Por dólares se despacha en libras enteras, hacia abajo: $10 a $0.48 son 20 lb, no 20.833 (pedido del dueño 2026-11-04).
+  // Si no alcanza ni para una libra, se deja lo exacto.
+  const exactas = redondear(enDolares ? cantidad / precioAplicado : 0, 3);
+  const librasPorDolares = librasEntregadas != null && librasEntregadas > 0 ? redondear(librasEntregadas, 3) : exactas >= 1 ? Math.floor(exactas) : exactas;
+  const libras = redondear(enQQ ? cantidad * LIBRAS_POR_QQ : enDolares ? librasPorDolares : cantidad, 3);
   const qq = redondear(enQQ ? cantidad : libras / LIBRAS_POR_QQ, 5);
   const precioBase = enQQ ? redondear(precioLibra * LIBRAS_POR_QQ, 2) : precioLibra;
   return {

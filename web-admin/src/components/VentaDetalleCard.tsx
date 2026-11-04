@@ -80,6 +80,8 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
   const [modo, setModo] = useState<ModoVentaDetalle>("DOLARES");
   const [productId, setProductId] = useState("");
   const [cantidad, setCantidad] = useState("");
+  // Por dólares: libras que el cajero escribió a mano (null = las que calcula el sistema).
+  const [pesoTxt, setPesoTxt] = useState<string | null>(null);
   const [compradorTexto, setCompradorTexto] = useState("");
   // Descuento por QQ de ESTA venta: vacío = el del cliente (o el por defecto); se puede cambiar.
   const [descuentoTxt, setDescuentoTxt] = useState("");
@@ -95,6 +97,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
   const pillRefs = useRef<Partial<Record<ModoVentaDetalle, HTMLButtonElement | null>>>({});
 
   useEffect(() => { productoRef.current?.focus(); }, []);
+  useEffect(() => { setPesoTxt(null); }, [cantidad, productId, modo]);
 
   const producto = productos.find((p) => p.id === productId) ?? null;
   const precioLibra = producto?.precioLibra ?? 0;
@@ -110,8 +113,8 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
   // Total reactivo: se recalcula al cambiar el producto (trae la tarifa), la
   // cantidad o el modo. Total = Cantidad × PrecioAplicado.
   const calculo = useMemo(
-    () => calcularVentaDetalle({ cantidad: cantidad === "" ? 0 : Number(cantidad), precioLibra, modo, descuentoQq }),
-    [cantidad, precioLibra, modo, descuentoQq]
+    () => calcularVentaDetalle({ cantidad: cantidad === "" ? 0 : Number(cantidad), precioLibra, modo, descuentoQq, librasEntregadas: pesoTxt ? Number(pesoTxt) : undefined }),
+    [cantidad, precioLibra, modo, descuentoQq, pesoTxt]
   );
   const hayCantidad = cantidad !== "" && Number(cantidad) > 0;
 
@@ -224,7 +227,7 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
       </div>
       <p className="vdCard__ayuda">
         La venta descuenta inventario y registra Caja en una sola operación. {enDolares
-          ? <>Escriba cuánto dinero pide el cliente y el sistema calcula las libras.</>
+          ? <>Escriba cuánto dinero pide el cliente y el sistema calcula las libras enteras. Si entrega otra cantidad, cámbiela en el peso.</>
           : enQQ
           ? <>Por QQ se cobra el quintal a <strong>{money(descuentoQq)} menos</strong> del precio base ({origenDesc}).</>
           : <>Por libra se cobra la tarifa base.</>}
@@ -248,8 +251,16 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
         </label>
         <label>
           <span>{enDolares ? "Peso a entregar (libras)" : "Total $ (Monto a cobrar)"}</span>
-          <input name="total_dolares" className="vdTotal" readOnly tabIndex={-1} aria-live="polite"
-            value={calculo && hayCantidad ? (enDolares ? calculo.libras.toFixed(3) : calculo.total.enReal()) : ""} placeholder="0.00" />
+          {enDolares ? (
+            <input name="peso_entregar" type="number" inputMode="decimal" min="0" step="any" autoComplete="off" placeholder="0"
+              value={pesoTxt ?? (calculo && hayCantidad ? String(calculo.libras) : "")}
+              onChange={(e) => setPesoTxt(e.target.value)}
+              onBlur={() => { if (pesoTxt === "") setPesoTxt(null); }}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void registrar(); } }} />
+          ) : (
+            <input name="total_dolares" className="vdTotal" readOnly tabIndex={-1} aria-live="polite"
+              value={calculo && hayCantidad ? calculo.total.enReal() : ""} placeholder="0.00" />
+          )}
         </label>
       </div>
 
@@ -314,13 +325,13 @@ export function VentaDetalleCard({ productos, personas, onRegistrar, onAviso, en
             <div>
               <div className="vdResumen__k">Equivalencia</div>
               <div className="vdResumen__v vdResumen__v--sec">
-                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${calculo.libras.toFixed(3)} lb · ${formatoCantidad(calculo.qq)} QQ`}
+                {enQQ ? `${calculo.libras.toFixed(3)} libras` : `${enDolares ? formatoCantidad(calculo.libras, 3) : calculo.libras.toFixed(3)} lb · ${formatoCantidad(calculo.qq)} QQ`}
               </div>
             </div>
           </div>
           <div className="vdResumen__total">
             <div className="vdResumen__k">{enDolares
-              ? `${calculo.libras.toFixed(3)} lb × ${formatoPrecio(calculo.precioAplicado)}/lb`
+              ? `Se entregan ${formatoCantidad(calculo.libras, 3)} lb · tarifa ${formatoPrecio(calculo.precioAplicado)}/lb`
               : `Total a cobrar · ${formatoCantidad(calculo.cantidad)} ${unidad} × ${formatoPrecio(calculo.precioAplicado)}`}</div>
             <div className="vdResumen__monto">{money(calculo.total)}</div>
           </div>
