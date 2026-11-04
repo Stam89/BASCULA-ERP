@@ -5533,6 +5533,18 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
   /* Tabla dentro de una tarjeta (detalle expandido, recibo): también en tarjetitas, sin sombra */
   body.campoActivo table.tablaTarjeta table.tablaTarjeta > tbody > tr { box-shadow: none; background: #f8fafc; margin-bottom: 6px; }
   body.campoActivo table.tablaTarjeta td > table { width: 100%; }
+  /* Partes: la casilla va en la esquina y la Fecha sigue siendo el título de la tarjeta. En una lista larga la barra de
+     cobrar se quedaba arriba, fuera de la vista: va fija al fondo de la pantalla. */
+  body.campoActivo table.tablaTarjeta > tbody > tr:has(> td.partesMarca) { position: relative; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca { position: absolute; top: 9px; right: 12px; padding: 0; font-size: 13px; font-weight: 600; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca:empty { display: none; }
+  body.campoActivo table.tablaTarjeta td.partesMarca input { max-width: none; width: 22px; height: 22px; }
+  body.campoActivo .partesMarca span { display: inline; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca + td { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; border-top: 0; }
+  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca + td::before { content: none; }
+  body.campoActivo .partesTodos { display: block; width: 100%; min-height: 40px; margin-top: 8px; }
+  body.campoActivo .partesCobro { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 30; margin: 0; box-shadow: 0 6px 24px rgba(15, 23, 42, .25); }
+  body.campoActivo .partesCobro + div { padding-bottom: 190px; }
 }
 /* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
@@ -5976,6 +5988,8 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .prest__tabla input { width: 100%; min-width: 84px; padding: 4px 6px; font-size: 12.5px; }
 .prest__tabla input[type="date"] { min-width: 128px; }
 .prest__tabla tr.is-pagada td { color: var(--c-text-muted); }
+.prest__estado { white-space: nowrap; }
+.prest__cuotaAcc { display: inline-flex; gap: 4px; vertical-align: middle; }
 .prest__tabla tr.is-vencida td { background: #fef2f2; }
 .prest__pagoGrid { display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center; font-size: 14px; }
 .prest__pagoGrid input { width: 130px; text-align: right; }
@@ -5988,6 +6002,11 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .prest__modal .buttonRow > button, .prest__pago .buttonRow > button { flex: 1 1 auto; }
 .btnDanger { background: transparent; color: #b91c1c; border: 1px solid #fecaca; border-radius: 8px; padding: 7px 14px; font-weight: 700; cursor: pointer; }
 @media (max-width: 640px) {
+  /* En el teléfono los botones de la cuota bajan bajo el estado: sin esto quedaban escondidos a la derecha de la tabla. */
+  .prest__tabla th, .prest__tabla td { padding-left: 5px; padding-right: 5px; }
+  .prest__estado { white-space: normal; }
+  .prest__estado .chip { white-space: normal; }
+  .prest__cuotaAcc { display: flex; flex-wrap: wrap; margin-top: 4px; }
   .prest__tipo { grid-template-columns: 1fr; }
   .prest__headDer { margin-left: 0; width: 100%; }
   .prest__headDer > * { flex: 1 1 auto; }
@@ -6731,6 +6750,10 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .partesCobro label { margin: 0; font-size: 12px; }
 .partesCobro input { width: 96px; }
 .partesCobro__total { font-weight: 800; color: #0f172a; }
+.partesMarca { width: 34px; }
+.partesMarca label { display: inline-flex; align-items: center; gap: 6px; margin: 0; cursor: pointer; }
+.partesMarca input { width: 18px; height: 18px; min-width: 0; flex: none; margin: 0; padding: 0; }
+.partesMarca span, .partesTodos { display: none; }
 .cjh-tabla th:nth-child(1) { width: 124px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 104px; } .cjh-tabla th:nth-child(5) { width: 112px; } .cjh-tabla th:nth-child(6) { width: 150px; }
 .cjh-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .cjh-tag { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; white-space: nowrap; }

@@ -333,18 +333,18 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
                           <b>{money(c.estado === "PAGADA" ? (c.pagado_total ?? c.total) : c.total)}</b>
                           <small className="prest__desg"><span>capital {money(c.capital)}</span><span>interés {money(interes)}</span>{otros > 0 && <span>otros {money(otros)}</span>}</small>
                         </td>
-                        <td style={{ whiteSpace: "nowrap" }}>
+                        <td className="prest__estado">
                           {c.estado === "PAGADA"
                             ? <><span className="chip ok">✓ Pagada{c.pagada_fuera ? " por fuera" : ""}</span>
                               {c.pagada_fuera && puedeEditar && <button type="button" className="btnGhost" title="Volver a pendiente" disabled={busy} onClick={() => deshacerFuera(detalle, c)}>↺</button>}
                               {c.pagada_at && <small className="prest__desg">{new Date(c.pagada_at).toLocaleDateString("es-EC")}</small>}</>
                             : <>
                               {vencida && <span className="chip bad" style={{ marginRight: 4 }}>Vencida</span>}
-                              {puedeEditar && detalle.estado === "VIGENTE" && <>
+                              {puedeEditar && detalle.estado === "VIGENTE" && <span className="prest__cuotaAcc">
                                 <button type="button" className="btnGhost" title="Pagar esta cuota" disabled={!cajaAbiertaId} onClick={() => abrirPago(detalle, c.id)}>💵</button>
                                 <button type="button" className="btnGhost" title="Ya se pagó por fuera de la caja: baja la deuda sin mover la caja" disabled={busy} onClick={() => pagadaFuera(detalle, c)}>✓</button>
                                 <button type="button" className="btnGhost" title="Corregir con la tabla del banco" onClick={() => setEditar({ p: detalle, c, fecha: c.fecha_vencimiento.slice(0, 10), capital: c.capital.toFixed(2), interes: c.interes.toFixed(2), otros: c.otros.toFixed(2) })}>✏️</button>
-                              </>}
+                              </span>}
                             </>}
                         </td>
                       </tr>

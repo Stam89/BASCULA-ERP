@@ -28294,10 +28294,10 @@ Motivo (obligatorio):`, ""));
                   <p className="muted">
                     Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
                     combustible, pilado, selección, pedidos, ventas, compras, inventario (productos, insumos, sacos y repuestos a 0), caja, gastos, nómina,
-                    anticipos, liquidaciones, fomentos, préstamos, agricultores, clientes (con sus tarifas), personal administrativo, cuentas por cobrar/pagar, saldos iniciales,
+                    anticipos, liquidaciones, {resetForm.conservar ? "" : "fomentos, préstamos, agricultores, "}clientes (con sus tarifas), personal administrativo, cuentas por cobrar/pagar, saldos iniciales,
                     conciliación bancaria, notificaciones, cifras manuales del Resultado mensual <strong>y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha,
                     partes diarios, nómina de operadores, caja de transporte y CxP), historial de auditoría y sincronización.
-                    Se conservan usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
+                    Se conservan {resetForm.conservar && <strong>agricultores, fomentos y préstamos, </strong>}usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
                     equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, los rubros del
                     Resultado mensual (sus cifras manuales sí se borran) <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
                     La báscula y la «Bajada de carro» vuelven a contar <strong>desde el día del borrado</strong> (los tickets se vuelven a descargar solos;

@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-10-30
+Actualizado: 2026-11-04
 
 ## Último cambio: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
 - **Borrado**: casilla «Conservar agricultores, fomentos y préstamos» (`conservar_cartera`, `CARTERA` en datos-prueba.ts; marcada por defecto). Las cuotas ya vencidas quedan `pagada_fuera`; los préstamos ANULADO se borran.
@@ -8,6 +8,8 @@ Actualizado: 2026-10-30
 - **Caja**: fecha en la hoja (`fecha` en POST /cash/:id/movements y /equipment/transporte/gasto). `fechaValidaDeCaja`: desde que se abrió la caja hasta hoy y nunca en un mes cerrado; `fecharMovimientosDeCaja` mueve lo de la transacción (created_at = now()). La fecha se queda para pasar varios del mismo día; Esc vuelve a hoy.
 - **Transporte**: marcar partes y «Cobrar marcados» (`/campo/partes/cobrar-varios`, un precio de cosecha y uno de flete, todo o nada; `cobrarParte` compartido).
 - Simulacro `arranque_cartera` (52 comprobaciones).
+- **Celular**: la primera celda de una tabla de Transporte es el título de la tarjeta (`tablasMovil.ts`), así que `.partesMarca` va en la esquina y la Fecha sigue de título; sin encabezado, «Marcar todos» es `.partesTodos` y la barra `.partesCobro` queda fija al fondo. En Préstamos los botones de la cuota bajan bajo el estado (`.prest__cuotaAcc`).
+- **Ojo con el ✓ de la cuota**: el interés entra al Estado de Resultados solo por el movimiento de caja (`JOIN cash_movements`). Desde el arranque se paga con «Pagar cuota»; el ✓ es para lo anterior.
 
 ## Cambio anterior: 🔍 Arreglos de la auditoría, listos para empezar de cero (2026-11-03)
 - Pedido del dueño: arreglar la app sin tocar los valores (van a arrancar de cero con «Borrar datos de prueba»). Simulacro `arreglos_auditoria`.

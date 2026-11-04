@@ -301,6 +301,12 @@ export default function PartesModule() {
             <button type="button" className="btnSecondary" onClick={() => setFiltro({ from: "", to: "", activo_id: "", estado: "" })}>Limpiar</button>
           )}
         </div>
+        {cobrables.length > 0 && (
+          <button type="button" className="btnGhost partesTodos" disabled={cobrandoLote}
+            onClick={() => setMarcados(new Set(enLote.length === cobrables.length ? [] : cobrables.map((p) => p.id)))}>
+            {enLote.length === cobrables.length ? "Quitar marcas" : `☑ Marcar los ${cobrables.length} por cobrar`}
+          </button>
+        )}
         {enLote.length > 0 && (
           <div className="partesCobro">
             <strong>{enLote.length} parte(s) · {qqFmt(enLote.reduce((s, p) => s + p.qq, 0))} QQ</strong>
@@ -314,7 +320,7 @@ export default function PartesModule() {
         <div style={{ overflowX: "auto" }}>
           <table className="cajaTable" style={{ marginTop: 8 }}>
             <thead><tr>
-              <th><input type="checkbox" aria-label="Marcar todos los por cobrar" disabled={cobrables.length === 0} checked={cobrables.length > 0 && enLote.length === cobrables.length}
+              <th className="partesMarca"><input type="checkbox" title="Marcar todos los por cobrar" aria-label="Marcar todos los por cobrar" disabled={cobrables.length === 0} checked={cobrables.length > 0 && enLote.length === cobrables.length}
                 onChange={(e) => setMarcados(new Set(e.target.checked ? cobrables.map((p) => p.id) : []))} /></th>
               <th>Fecha</th><th>Operador</th><th>Máquina</th><th>Cliente</th>
               <th className="num">QQ trabajados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
@@ -325,7 +331,7 @@ export default function PartesModule() {
               ) : partesVista.map((p) => {
                 return (
                 <tr key={p.id}>
-                  <td>{p.estado === "por_cobrar" && !p.cobro_automatico && <input type="checkbox" aria-label={`Marcar parte de ${p.cliente}`} checked={marcados.has(p.id)} onChange={() => marcar(p.id)} />}</td>
+                  <td className="partesMarca">{p.estado === "por_cobrar" && !p.cobro_automatico && <label><input type="checkbox" aria-label={`Marcar parte de ${p.cliente}`} checked={marcados.has(p.id)} onChange={() => marcar(p.id)} /><span>Marcar</span></label>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
                   <td>
                     {/* Sin chofer no es un error: el pago sale del informe que trae el chofer. */}
