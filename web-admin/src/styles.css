@@ -6007,6 +6007,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   .prest__estado { white-space: normal; }
   .prest__estado .chip { white-space: normal; }
   .prest__cuotaAcc { display: flex; flex-wrap: wrap; margin-top: 4px; }
+  .prest__cuotaAcc button { padding: 4px 6px; min-width: 0; }
   .prest__tipo { grid-template-columns: 1fr; }
   .prest__headDer { margin-left: 0; width: 100%; }
   .prest__headDer > * { flex: 1 1 auto; }
