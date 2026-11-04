@@ -16,6 +16,7 @@ import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 import { calcularLimiteFomento } from "../../services/fomento-limite.js";
 import { hoyEc } from "../../utils/fechas.js";
 import { cruzarGastoPorSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
+import { registrarPagoConBanco } from "../../services/pagado-con-banco.js";
 
 export const fomentosRouter = Router();
 
@@ -88,6 +89,9 @@ const entregaSchema = z.object({
   concepto:         z.string().optional(),
   cash_register_id: z.string().uuid().optional(),
   medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional(),
+  // 🏦 Se transfirió (al agricultor o a quien hizo el trabajo, p. ej. la fangueada): en una caja de efectivo no sale de la gaveta.
+  pagado_con_banco: z.boolean().optional(),
+  transferido_a:    z.string().trim().max(120).optional(),
   // "Saldos en contra": fila de saldo de cosecha pasada con interés fijo por meses.
   es_saldo_anterior: z.boolean().optional().default(false),
   meses_interes_fijo: z.number().int().min(1).max(60).optional()
@@ -1036,14 +1040,21 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
     if (data.cash_register_id && !data.es_saldo_anterior) {
       const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
       tipoCaja = caja.tipo;
-      await avisarSobregiro(client, data.cash_register_id, data.valor, req);
     }
+    const transferencia = !!data.pagado_con_banco && tipoCaja !== null;
+    // Caja de efectivo: el banco no se lleva en el ERP, así que la gaveta no cambia. Caja mixta: sale de su lado de banco.
+    const noTocaGaveta = transferencia && tipoCaja === "EFECTIVO";
+    if (tipoCaja && !noTocaGaveta) await avisarSobregiro(client, data.cash_register_id!, data.valor, req);
+    const conceptoEntrega = [
+      data.concepto?.trim() || (data.es_saldo_anterior ? "Saldo en contra cosecha pasada" : null),
+      transferencia ? (data.transferido_a ? `Transferido a ${data.transferido_a}` : "Transferencia") : null
+    ].filter(Boolean).join(" · ") || null;
     // El saldo arrastrado no depende de la fecha; se deja en CURRENT_DATE (default).
     const entrega = await client.query(
       `INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior, meses_interes_fijo)
        VALUES ($1, COALESCE($2, CURRENT_DATE), $3, $4, $5, $6) RETURNING *`,
       [fomentoId, data.fecha ?? null, data.valor,
-       data.concepto ?? (data.es_saldo_anterior ? "Saldo en contra cosecha pasada" : null),
+       conceptoEntrega,
        data.es_saldo_anterior ?? false,
        data.es_saldo_anterior ? (data.meses_interes_fijo ?? null) : null]
     );
@@ -1051,6 +1062,8 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
     // Un saldo ARRASTRADO no es un desembolso nuevo de caja: no genera egreso.
     if (data.cash_register_id && !data.es_saldo_anterior) {
       const agricultor = fomentoBloqueado.rows[0]?.farmer_name ?? "agricultor";
+      const detalle = conceptoEntrega ? ` · ${conceptoEntrega}` : "";
+      const descripcion = `${socio ? `Fomento de ${socio.name} entregado a ${agricultor}` : `Fomento entregado a ${agricultor}`}${detalle}`.slice(0, 450);
       const mov = await client.query<{ id: string }>(
         // De otro socio: GASTO_POR_SOCIO (no es fomento de la Matriz) con la categoría real FOMENTO_ENTREGA, que no
         // cuenta como gasto del socio (es plata que el agricultor le devuelve en su liquidación).
@@ -1058,10 +1071,16 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio, por_cuenta_de, categoria_por_cuenta)
          VALUES ($1, 'EXPENSE', $6, 'fomento_entregas', $2, $3, $4, $5, $7, $8) RETURNING id`,
         [data.cash_register_id, entrega.rows[0].id, data.valor,
-         socio ? `Fomento de ${socio.name} entregado a ${agricultor}` : `Fomento entregado a ${agricultor}`,
-         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago),
+         descripcion,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", transferencia ? "BANCO" : data.medio_pago),
          socio ? "GASTO_POR_SOCIO" : "FOMENTO_ENTREGA", socio?.id ?? null, socio ? "FOMENTO_ENTREGA" : null]
       );
+      if (noTocaGaveta) {
+        await registrarPagoConBanco(client, {
+          cajaId: data.cash_register_id, gastoId: mov.rows[0].id, monto: data.valor, concepto: descripcion,
+          userId: (req as AuthenticatedRequest).user?.id ?? null
+        });
+      }
       if (socio) {
         const cruce = await cruzarGastoPorSocio(client, {
           movimientoId: mov.rows[0].id, pagadorId: accionistaId, socio, monto: data.valor,

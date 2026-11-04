@@ -4090,6 +4090,8 @@ export function App() {
   const [cajaFomentoAccion, setCajaFomentoAccion] = useState<"entrega"|"pago">("entrega");
   const [cajaFomentoMonto, setCajaFomentoMonto] = useState("");
   const [cajaFomentoConcepto, setCajaFomentoConcepto] = useState("");
+  // Entrega por transferencia: a quién llegó el dinero si no fue al agricultor (p. ej. quien hizo la fangueada).
+  const [fomentoTransferidoA, setFomentoTransferidoA] = useState("");
   const [cajaFomentosCargando, setCajaFomentosCargando] = useState(false);
   const [cajaFomentosError, setCajaFomentosError] = useState("");
   const [cajaFomentoGuardando, setCajaFomentoGuardando] = useState(false);
@@ -9555,11 +9557,13 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       valor: Number(fomentoEntregaForm.valor),
       concepto: fomentoEntregaForm.concepto || undefined,
       cash_register_id: dashboard.current_cash_register?.id,
-      ...cuerpoMedio(medioOperacion)
+      ...cuerpoEntregaFomento()
     });
+    const aviso = entregaEsTransferencia() ? avisoTransferenciaFomento() : null;
     setMedioOperacion("EFECTIVO");
+    setFomentoTransferidoA("");
     setFomentoEntregaForm({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
-    addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
+    addToast(aviso ?? "Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
     if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
@@ -10182,24 +10186,28 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     const endpoint = cajaFomentoAccion === "entrega"
       ? `/fomentos/${cajaFomentoId}/entregas`
       : `/fomentos/${cajaFomentoId}/pagos`;
+    const esEntrega = cajaFomentoAccion === "entrega";
+    const porTransferencia = esEntrega && entregaEsTransferencia();
     setCajaFomentoGuardando(true);
     try {
       const r = await apiPost<{ entregado_por_matriz?: { socio: string; descontado: number; por_cobrar: number } }>(endpoint, {
         fecha: fechaLocalIso(),
         valor,
-        concepto: cajaFomentoConcepto.trim() || (cajaFomentoAccion === "entrega" ? "Entrega de insumos" : "Pago de fomento"),
+        concepto: cajaFomentoConcepto.trim() || (porTransferencia ? undefined : esEntrega ? "Entrega de insumos" : "Pago de fomento"),
         cash_register_id: registerId,
-        ...cuerpoMedio(medioOperacion)
+        ...(esEntrega ? cuerpoEntregaFomento() : cuerpoMedio(medioOperacion))
       });
+      const aviso = porTransferencia ? avisoTransferenciaFomento() : null;
       setCajaFomentoMonto("");
       setCajaFomentoConcepto("");
+      setFomentoTransferidoA("");
       setMedioOperacion("EFECTIVO");
       const porSocio = r?.entregado_por_matriz;
       addToast(porSocio
         ? `Entregado ${money(valor)} del fomento de ${porSocio.socio} (${seleccionado.farmer_name}) con esta caja.` +
           (porSocio.descontado > 0.005 ? ` Se descontó ${money(porSocio.descontado)} de lo que se le debía a ${porSocio.socio}.` : "") +
           (porSocio.por_cobrar > 0.005 ? ` ${porSocio.socio} queda debiendo ${money(porSocio.por_cobrar)} (Por Cobrar).` : "")
-        : cajaFomentoAccion === "entrega" ? "Entrega registrada en caja" : "Pago registrado en caja", "success");
+        : aviso ?? (esEntrega ? "Entrega registrada en caja" : "Pago registrado en caja"), "success");
       if (porSocio) setCajaFomentoId("");
       await Promise.all([
         refreshCajaFomentos().catch((error) => addToast(`La operación se registró, pero no se pudo actualizar Fomentos: ${error instanceof Error ? error.message : "error"}`, "error")),
@@ -10916,6 +10924,18 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     return dashboard.current_cash_register?.tipo === "MIXTO" ? { medio_pago: medio } : {};
   }
   const cajaEsMixta = dashboard.current_cash_register?.tipo === "MIXTO";
+  // La entrega de un fomento puede ir por transferencia también desde una caja de efectivo (ahí no sale de la gaveta).
+  const cajaAdmiteTransferencia = cajaEsMixta || dashboard.current_cash_register?.tipo === "EFECTIVO";
+  function entregaEsTransferencia() { return cajaAdmiteTransferencia && medioOperacion === "BANCO"; }
+  function cuerpoEntregaFomento() {
+    return {
+      ...cuerpoMedio(medioOperacion),
+      ...(entregaEsTransferencia() ? { pagado_con_banco: true, transferido_a: fomentoTransferidoA.trim() || undefined } : {})
+    };
+  }
+  function avisoTransferenciaFomento() {
+    return `Transferencia registrada${fomentoTransferidoA.trim() ? ` a ${fomentoTransferidoA.trim()}` : ""}${cajaEsMixta ? "" : ": no salió de la gaveta"}`;
+  }
 
   async function pagarCuenta(payableId: string, amount: number, medio: "EFECTIVO" | "BANCO" = medioOperacion) {
     const registerId = dashboard.current_cash_register?.id;
@@ -21789,17 +21809,20 @@ Motivo (obligatorio):`, ""));
                           placeholder={cajaFomentoAccion === "entrega" ? "Entrega de insumos / semilla / etc." : "Abono / pago parcial / etc."} />
                       </label>
 
-                      {cajaEsMixta && (
-                        <MedioPagoSelector
-                          value={medioOperacion}
-                          onChange={setMedioOperacion}
-                          pregunta={cajaFomentoAccion === "entrega" ? "¿La entrega sale en efectivo o por el banco?" : "¿El pago ingresó en efectivo o al banco?"} />
+                      {cajaFomentoAccion === "entrega" && cajaAdmiteTransferencia && (
+                        <EntregaFomentoMedio medio={medioOperacion} onMedio={setMedioOperacion} mixta={cajaEsMixta}
+                          transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
+                          onFangueada={() => setCajaFomentoConcepto("Fangueada")} />
+                      )}
+                      {cajaFomentoAccion === "pago" && cajaEsMixta && (
+                        <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El pago ingresó en efectivo o al banco?" />
                       )}
 
                       <button type="submit" disabled={cajaFomentoGuardando || cajaFomentosCargando || !!cajaFomentosError}
                         style={{ width: "100%", padding: "9px 0", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14,
                           background: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "#16a34a", color: "#fff" }}>
-                        {cajaFomentoGuardando ? "Guardando…" : cajaFomentoAccion === "entrega" ? "⬇ Registrar Entrega (sale de caja)" : "⬆ Registrar Pago (entra a caja)"}
+                        {cajaFomentoGuardando ? "Guardando…" : cajaFomentoAccion === "pago" ? "⬆ Registrar Pago (entra a caja)"
+                          : entregaEsTransferencia() ? `🏦 Registrar Transferencia${cajaEsMixta ? "" : " (no sale de la gaveta)"}` : "⬇ Registrar Entrega (sale de caja)"}
                       </button>
                     </form>
 
@@ -22947,9 +22970,13 @@ Motivo (obligatorio):`, ""));
                             onChange={e => setFomentoEntregaForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
                         </label>
-                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿La entrega sale en efectivo o por el banco?" />}
+                        {cajaAdmiteTransferencia && (
+                          <EntregaFomentoMedio medio={medioOperacion} onMedio={setMedioOperacion} mixta={cajaEsMixta}
+                            transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
+                            onFangueada={() => setFomentoEntregaForm(p => ({...p, concepto: "Fangueada"}))} />
+                        )}
                         <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
-                          Registrar Entrega
+                          {entregaEsTransferencia() ? "Registrar Transferencia" : "Registrar Entrega"}
                         </button>
                       </form>
                     </details>
@@ -29820,6 +29847,31 @@ function MedioPagoSelector({ value, onChange, pregunta }: { value: "EFECTIVO" | 
       <span>{pregunta ?? "¿En efectivo o por el banco?"}</span>
       <label className={value === "EFECTIVO" ? "is-on" : ""}><input type="radio" checked={value === "EFECTIVO"} onChange={() => onChange("EFECTIVO")} /> 💵 Efectivo</label>
       <label className={value === "BANCO" ? "is-on" : ""}><input type="radio" checked={value === "BANCO"} onChange={() => onChange("BANCO")} /> 🏦 Banco / transferencia</label>
+    </div>
+  );
+}
+
+/** Entrega de un fomento: en efectivo o por transferencia, al agricultor o a quien hizo el trabajo (la fangueada). */
+function EntregaFomentoMedio({ medio, onMedio, mixta, transferidoA, onTransferidoA, onFangueada }: {
+  medio: "EFECTIVO" | "BANCO"; onMedio: (m: "EFECTIVO" | "BANCO") => void; mixta: boolean;
+  transferidoA: string; onTransferidoA: (v: string) => void; onFangueada: () => void;
+}) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <button type="button" className="btnSecondary" onClick={onFangueada} style={{ fontSize: 12, padding: "3px 10px", marginBottom: 8 }}>🚜 Es una fangueada</button>
+      <MedioPagoSelector value={medio} onChange={onMedio} pregunta="¿La entrega sale en efectivo o por transferencia?" />
+      {medio === "BANCO" && (
+        <>
+          <label style={{ fontSize: 12, fontWeight: 600, display: "block", marginTop: 8 }}>¿A quién se le transfirió?
+            <input value={transferidoA} maxLength={120} onChange={(e) => onTransferidoA(e.target.value)}
+              placeholder="Vacío = al mismo agricultor"
+              style={{ display: "block", width: "100%", padding: "7px 10px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 3 }} />
+          </label>
+          <small className="muted" style={{ display: "block", marginTop: 4 }}>
+            Suma a la deuda del agricultor{mixta ? " y sale del banco de esta caja." : ", pero no sale de la gaveta."}
+          </small>
+        </>
+      )}
     </div>
   );
 }

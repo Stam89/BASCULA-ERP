@@ -8,9 +8,10 @@ import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 // 🔎 «¿CUÁNDO SE HIZO?»: buscador rápido de reparaciones, cambios y compras
 // para responder al instante "¿qué día se arregló/cambió/compró X?".
 // Solo LECTURA. Dos ámbitos INDEPENDIENTES (nunca se mezclan):
-//  · matriz     → egresos de las cajas de la Matriz + mantenimientos de planta.
-//  · transporte → egresos de la caja de Transporte y Cosechadora +
+//  · matriz     → egresos de las cajas de la Matriz + compras a crédito + mantenimientos de planta.
+//  · transporte → egresos de la caja de Transporte y Cosechadora + compras a crédito +
 //                 mantenimientos de su flota (vehículos, cosechadora).
+// Una compra a crédito sale UNA vez, con el día de la compra y el total: sus pagos no se repiten como otra compra.
 export const historialRouter = Router();
 
 type Fila = {
@@ -31,6 +32,20 @@ const SQL_MATRIZ = `
    WHERE r.accionista_id = $1 AND cm.movement = 'EXPENSE'
      AND cm.reversed_at IS NULL AND cm.reversal_of IS NULL
      AND COALESCE(cm.reference_type, '') <> 'equipment_maintenance'
+     AND NOT (cm.reference_type = 'accounts_payable' AND EXISTS (
+       SELECT 1 FROM accounts_payable ap
+        WHERE ap.reference_type = 'gasto_credito'
+          AND (ap.id = cm.reference_id OR ap.id IN (
+            SELECT mc.cuenta_id FROM cash_movement_cuentas mc WHERE mc.cash_movement_id = cm.id AND mc.tabla = 'accounts_payable'))))
+  UNION ALL
+  SELECT 'CREDITO', ap.id, ap.created_at, COALESCE(cc.nombre, ap.categoria), ap.subcategoria, NULL, NULL, ap.description,
+         sup.name, NULL, ap.amount::float,
+         CASE WHEN ap.balance > 0.005 THEN 'A crédito · debe $' || to_char(ap.balance, 'FM999,999,990.00') ELSE 'A crédito · pagada' END
+    FROM accounts_payable ap
+    LEFT JOIN cash_categories cc ON cc.codigo = ap.categoria
+    LEFT JOIN suppliers sup ON sup.id = ap.supplier_id
+   WHERE ap.accionista_id = $1 AND ap.reference_type = 'gasto_credito' AND ap.status <> 'CANCELLED'
+     AND NOT (ap.categoria = 'MANTENIMIENTO_EQUIPO' AND EXISTS (SELECT 1 FROM equipment_maintenance em WHERE em.payable_id = ap.id))
   UNION ALL
   SELECT 'MANTENIMIENTO', em.id, em.created_at, 'Mantenimiento' || COALESCE(' · ' || em.maintenance_type, ''),
          em.section, COALESCE(e.name, em.maquina), em.area,
@@ -62,7 +77,20 @@ const SQL_TRANSPORTE = `
    WHERE m.signo = 'salida' AND m.par_id IS NULL
      AND m.reversado_at IS NULL AND m.movimiento_origen_id IS NULL
      AND COALESCE(m.naturaleza, 'operativo') NOT IN ('apertura_caja')
-     AND NOT EXISTS (SELECT 1 FROM campo_mantenimientos mt WHERE mt.movimiento_id = m.id)`;
+     AND NOT EXISTS (SELECT 1 FROM campo_mantenimientos mt WHERE mt.movimiento_id = m.id)
+     AND NOT EXISTS (SELECT 1 FROM campo_cxp p WHERE p.id = m.cxp_id AND p.origen = 'EGRESO_CREDITO')
+  UNION ALL
+  SELECT 'CREDITO', p.id, p.fecha::timestamptz, COALESCE(cat.nombre, 'Gasto'), NULL,
+         a.nombre || COALESCE(' (' || a.placa_codigo || ')', ''), NULL, p.concepto, p.acreedor, NULL, p.monto::float,
+         CASE WHEN p.monto - COALESCE(pg.pagado, 0) > 0.005
+              THEN 'A crédito · debe $' || to_char(p.monto - COALESCE(pg.pagado, 0), 'FM999,999,990.00') ELSE 'A crédito · pagada' END
+    FROM campo_cxp p
+    LEFT JOIN campo_categorias_gasto cat ON cat.id = p.categoria_id
+    LEFT JOIN campo_activos a ON a.id = p.activo_id
+    LEFT JOIN (SELECT cxp_id, SUM(monto) AS pagado FROM campo_movimientos
+                WHERE signo = 'salida' AND cxp_id IS NOT NULL AND reversado_at IS NULL GROUP BY cxp_id) pg ON pg.cxp_id = p.id
+   WHERE p.origen = 'EGRESO_CREDITO'
+     AND NOT EXISTS (SELECT 1 FROM campo_mantenimientos mt WHERE mt.cxp_id = p.id)`;
 
 /** Texto en minúsculas y sin tildes (para buscar "rodamiento" = "Rodamiento"). */
 const normaliza = (t: string) => t.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");

@@ -86,7 +86,7 @@ export function BuscadorHistorial({ ambito, titulo }: { ambito: "matriz" | "tran
       <h2 style={{ margin: 0 }}>🔎 ¿Cuándo se hizo? <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· {titulo}</span></h2>
       <p className="muted" style={{ margin: "4px 0 12px", fontSize: 12.5 }}>
         Escribe qué se arregló, cambió o compró (ej: <em>rodamiento</em>, <em>banda secadora</em>, <em>llanta</em>, <em>aceite</em>) y te dice el día.
-        Busca en los egresos de Caja (descripción, subcategoría, máquina y área) y en los mantenimientos.
+        Busca en los egresos de Caja (descripción, subcategoría, máquina y área), en las compras a crédito y en los mantenimientos.
       </p>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 3fr) repeat(2, minmax(120px, 1fr))", gap: 10, alignItems: "end" }} className="buscadorHistorialGrid">

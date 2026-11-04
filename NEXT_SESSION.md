@@ -2,14 +2,21 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🔁 Reintentos sin duplicar y todo a la vista en celular y tablet (2026-11-04)
+## Último cambio: 🏦 Fomento por transferencia y compras a crédito en el buscador (2026-11-04)
+- **Fomento**: la entrega se puede transferir también desde una caja de EFECTIVO (las dos reales lo son; antes no salía el selector y todo bajaba de la gaveta). `pagado_con_banco` y `transferido_a` en `POST /fomentos/:id/entregas`: suma a la deuda con el interés normal, va el egreso FOMENTO_ENTREGA y su RETIRO_BANCO enlazado (`registrarPagoConBanco`), sin aviso de sobregiro. Caja mixta: sale por su lado de banco. El concepto queda «Fangueada · Transferido a X» y también va en la descripción de Caja, así se encuentra en «¿Cuándo se hizo?». Anular el egreso anula las dos líneas. Pantalla: `EntregaFomentoMedio` en Caja › Fomentos y en el detalle del fomento.
+- **Pendiente**: un PAGO de fomento que llega por transferencia a una caja de efectivo sigue sumando a la gaveta.
+- **«¿Cuándo se hizo?»**: las compras a crédito salen (fuente `CREDITO`, Matriz y Transporte) con el día de la compra, el total y lo que se debe. Sus pagos ya no salen como otra compra. Un mantenimiento a crédito sale una sola vez, como mantenimiento.
+- Simulacro `fomento_transferencia` (48). El simulacro `campo` falla si la copia trae saldo en la CAJA de Transporte (asume 0): es por los datos.
+- Datos: Lira Azul se reactivó a pedido del dueño.
+
+## Cambio anterior: 🔁 Reintentos sin duplicar y todo a la vista en celular y tablet (2026-11-04)
 - **Envío único** (`http/envio-unico.ts`, tabla `envios_recibidos`, migración 20261135): la web manda `X-Envio-Id` en cada escritura (`api.ts`). Si la respuesta se pierde y se repite lo mismo, el servidor contesta lo de la primera vez. Lo que falla o pide confirmar libera el id. Sin id o si la tabla falla, todo sigue como antes. El id solo se reusa si no hubo respuesta (30 min). Espera máxima por envío: 90 s. Simulacro `envio_unico`; `SIM_ENVIO_ID=1` hace que todos los simulacros manden id.
 - **Celular**: en todo el ERP la tabla que no cabe pasa sola a tarjetas (`tablasDelErp` y `noCabe` en `campo/tablasMovil.ts`, ≤ 700 px) y la que cabe se queda como tabla; también si crece después (el vigilante mira cambios, `<details>` abiertos y giro del teléfono). `enTarjetas` la fuerza. La primera celda es el título y la etiqueta junta las filas de encabezado («CASC 0.11»). Con dibujo propio, fuera de esto: `.cjh-tabla, .cuentasTabla, .basculaTicketsTable, .nomHist`. CSS ya no depende de `body.campoActivo`. Las pestañas (`cajaSubNav`, `ventasTabs`, `segmented`) bajan de línea.
 - **Tablet y portátil**: hasta 1500 px la última columna con botones de un `.cajaTable` o `.tablaConAcciones` queda fija a la derecha (con el menú lateral, a 1280 px quedan menos de 1000 para la tabla); Hoja de Caja y líneas del pedido ajustan anchos.
 - **Pedido para compartir**: `.pedidoLineas` en grilla con clase, sin «/ QQ». En el celular toda grilla con `grid-template-columns` en línea pasa a una sola columna y las tablas de un modal se dibujan como bloque: para columnas fijas, usar una clase.
 - **Fechas**: Fomentos proponía la fecha UTC (de noche, mañana): ahora `hoyLocal()`. `useRecargaAlCambiarDia`: si cambió el día y nadie tocó la app hoy, recarga (con servidor arriba).
 - **Índices**: migración 20261136 para cuando crezcan los datos.
-- **Pedidos y sacos**: un saco en 0 nunca bloquea (al preparar queda en negativo y sale en Sacos por comprar; simulacro `pedido_saco_negativo`). El bloqueo real era la cobertura de la pantalla: `respaldoDeMarca` no contaba los bultos llenos de las marcas (`idsTerminado`), el servidor sí. Datos: Lira Azul está desactivada (no sale para pedir) y Lira Verde no tiene sacos en el catálogo (`sin_saco`, no se descuentan).
+- **Pedidos y sacos**: un saco en 0 nunca bloquea (al preparar queda en negativo y sale en Sacos por comprar; simulacro `pedido_saco_negativo`). El bloqueo real era la cobertura de la pantalla: `respaldoDeMarca` no contaba los bultos llenos de las marcas (`idsTerminado`), el servidor sí. Datos: Lira Verde no tiene sacos en el catálogo (`sin_saco`, no se descuentan).
 - **Barrido de pantallas**: recorrer menú y pestañas midiendo controles fuera de la vista encontró todo lo de celular y tablet. Para probar con permisos limitados: usuarios inventados en una COPIA con clave propia; nunca firmar sesión de una persona real ni tocar el servidor real con eso.
 
 ## Cambio anterior: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
