@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { money } from "../format";
+import { CLASE_DE_CATEGORIA, NOMBRE_CORTO, categoriaPorNombreCorto, detectarMaquina, nombreCortoPorConcepto } from "./cajaHojaMaquina";
 
 // 📋 CAJA TIPO HOJA DE CÁLCULO (pedido del dueño 2026-10-30): los movimientos de la sesión en filas continuas, como su
 // Excel de caja (FECHA · CONCEPTO · CATEGORÍA · CÓDIGO · ENTRADAS · SALIDAS · SALDO), con el saldo acumulado fila por
 // fila y una fila de captura al final: Enter o Tab pasa de celda en celda y Enter en el monto guarda.
-// Solo registra movimientos SIMPLES (categoría + monto + detalle). Las categorías que piden más datos (equipo, sacos,
-// repuestos, activo fijo…) abren el formulario completo con lo escrito.
+// Registra movimientos SIMPLES (categoría + monto + detalle) y el trabajo en una máquina (máquina + qué se hizo + monto).
+// Lo que pide más datos (sacos, activo fijo, repuestos para bodega…) abre el formulario completo con lo escrito.
 
 export type HojaMov = {
   id: string; movement: "INCOME" | "EXPENSE"; category: string; amount: string | number; description: string | null;
@@ -22,7 +23,7 @@ export type HojaCredito = {
 export type HojaCategoria = { codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO" };
 /** 🧭 «¿De quién?» (pedido del dueño 2026-10-30): de esta caja, de Transporte (una máquina o general), un anticipo a
  *  un operador de Transporte, o un gasto de un socio. Cada uno sigue su flujo (cruces, vale, deuda), no un egreso suelto. */
-export type HojaDestino = { valor: string; tipo: "propio" | "transporte" | "anticipo" | "socio"; id?: string; detalle?: string; claves?: string[] };
+export type HojaDestino = { valor: string; tipo: "propio" | "transporte" | "anticipo" | "socio" | "planta"; id?: string; detalle?: string; claves?: string[]; area?: string; section?: string };
 export type HojaNueva = {
   movement: "INCOME" | "EXPENSE"; category: string; amount: number; description: string; codigo: string; medio: "EFECTIVO" | "BANCO";
   destino?: HojaDestino;
@@ -92,16 +93,27 @@ export function CajaHoja({
   const conQuien = destinos.length > 0;
   const [error, setError] = useState("");
   const [guardando, setGuardando] = useState(false);
+  // Trabajo sin máquina: se pregunta cuál, y queda el formulario para lo que va a bodega.
+  const [pideMaquina, setPideMaquina] = useState<{ codigo: string; monto: number | null } | null>(null);
   const refs = useRef<Partial<Record<Celda, HTMLInputElement | null>>>({});
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const nombreCat = useMemo(() => new Map(categorias.map((c) => [c.codigo, c.nombre])), [categorias]);
+  const maquinasPlanta = useMemo(() => destinos.flatMap((d) => (d.tipo === "planta" && d.area && d.section ? [{ ...d, area: d.area, section: d.section }] : [])), [destinos]);
+  const hayPlanta = maquinasPlanta.length > 0;
+  // Reparación, repuesto o material: se guardan aquí mismo si dicen para qué máquina.
+  const esTrabajo = (codigo: string) => hayPlanta && !!CLASE_DE_CATEGORIA[codigo];
+  // Transporte y socios siguen su flujo; la máquina de la planta solo en un trabajo. Lo demás abre el formulario si lo pide.
+  const saltaFormulario = (d: HojaDestino | null, codigo: string) =>
+    !!d && d.tipo !== "propio" && (d.tipo !== "planta" || esTrabajo(codigo));
   // Categoría escrita → la del catálogo (nombre exacto; si no, la única que empieza o contiene lo escrito).
   const resolverCat = (txt: string): HojaCategoria | null => {
     const t = sinTilde(txt.replace(/^[+−-]\s*/, ""));
     if (!t) return null;
     const exacta = categorias.find((c) => sinTilde(c.nombre) === t || sinTilde(c.codigo) === t);
     if (exacta) return exacta;
+    const corta = categoriaPorNombreCorto(t);
+    if (corta && hayPlanta) { const c = categorias.find((x) => x.codigo === corta); if (c) return c; }
     const empieza = categorias.filter((c) => sinTilde(c.nombre).startsWith(t));
     if (empieza.length === 1) return empieza[0];
     const contiene = categorias.filter((c) => sinTilde(c.nombre).includes(t));
@@ -130,12 +142,17 @@ export function CajaHoja({
     const maquinas = destinos.filter((d) => d.tipo === "transporte" && d.id)
       .map((d) => ({ d, c: [...(d.claves ?? [])].filter((x) => x.length >= 4).filter((x) => k.includes(x)).sort((a, b) => b.length - a.length)[0] ?? "" }))
       .filter((x) => x.c).sort((a, b) => b.c.length - a.c.length);
-    return maquinas[0]?.d ?? null;
+    return maquinas[0]?.d ?? detectarMaquina(txt, maquinasPlanta);
   };
   const quien = resolverQuien(quienTxt);
   const esAnticipo = quien?.tipo === "anticipo";
   const cat = resolverCat(catTxt);
   const tipo: "INCOME" | "EXPENSE" | null = esAnticipo ? "EXPENSE" : cat ? (cat.tipo === "INGRESO" ? "INCOME" : "EXPENSE") : null;
+  // Mientras escribe el concepto, la máquina aparece sola (si la cajera no la eligió a mano).
+  useEffect(() => {
+    if (!quienManual && conQuien) setQuienTxt(detectarQuien(concepto)?.valor ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [concepto, quienManual, destinos]);
 
   // Memoria: el mismo concepto escrito antes sugiere su categoría.
   const catPorConcepto = useMemo(() => {
@@ -181,25 +198,31 @@ export function CajaHoja({
   };
   const limpiar = () => {
     setConcepto(""); setCatTxt(""); setEntrada(""); setSalida(""); setError("");
-    setQuienTxt(""); setQuienManual(false); setBanco(false); enfocar("concepto");
+    setQuienTxt(""); setQuienManual(false); setBanco(false); setPideMaquina(null); enfocar("concepto");
   };
 
   const limpiarTodo = () => { setFecha(hoy); limpiar(); };
 
   const guardar = async (forzada?: HojaCategoria | null) => {
-    setError("");
-    const destino = conQuien ? resolverQuien(quienTxt) : null;
+    setError(""); setPideMaquina(null);
+    let destino = conQuien ? resolverQuien(quienTxt) : null;
     if (conQuien && !destino) { setError(`No hay «${quienTxt.trim()}» en ¿De quién?. Elígelo de la lista.`); enfocar("quien"); return; }
     const anticipo = destino?.tipo === "anticipo";
     const cat = forzada ?? resolverCat(catTxt);
     const tipo = anticipo ? "EXPENSE" : cat ? (cat.tipo === "INGRESO" ? "INCOME" : "EXPENSE") : null;
     if (!cat && !anticipo) { setError(catTxt.trim() ? `No hay una categoría «${catTxt.trim()}». Elígela de la lista.` : "Escribe la categoría."); enfocar("categoria"); return; }
+    // Una entrada o un gasto corriente que nombra una máquina sigue siendo de esta caja.
+    if (tipo === "INCOME" && destino?.tipo === "planta") destino = destinos[0];
     const deOtro = !!destino && destino.tipo !== "propio";
     if (tipo === "INCOME" && deOtro) { setError("Solo una salida puede ser de Transporte, de un operador o de un socio."); enfocar("quien"); return; }
     if (tipo === "INCOME" && banco) { setError("«💳 No es efectivo» es solo para salidas."); return; }
     const monto = r2(Number((tipo === "INCOME" ? entrada : salida).replace(",", ".")));
     // Lo que pide más datos (o tiene su propio flujo, como las ventas) abre su formulario; de Transporte/socio no.
-    if (cat && !deOtro && esCompleja(cat.codigo, tipo!)) { onFormularioCompleto(tipo!, cat.codigo, concepto.trim(), monto > 0 ? monto : null); limpiar(); return; }
+    if (cat && tipo === "EXPENSE" && esTrabajo(cat.codigo) && !deOtro) {
+      setPideMaquina({ codigo: cat.codigo, monto: monto > 0 ? monto : null });
+      setError("¿En qué máquina? Escríbela en el concepto o elígela en «Para qué»."); enfocar("quien"); return;
+    }
+    if (cat && !saltaFormulario(destino, cat.codigo) && esCompleja(cat.codigo, tipo!)) { onFormularioCompleto(tipo!, cat.codigo, concepto.trim(), monto > 0 ? monto : null); limpiar(); return; }
     if (!(monto > 0)) { setError(`Escribe el monto en ${tipo === "INCOME" ? "Entradas" : "Salidas"}.`); enfocar(tipo === "INCOME" ? "entrada" : "salida"); return; }
     if (concepto.trim().length < 2) { setError("Escribe el concepto o la descripción."); enfocar("concepto"); return; }
     setGuardando(true);
@@ -218,22 +241,23 @@ export function CajaHoja({
     if (c === "concepto") {
       const previa = catPorConcepto.get(sinTilde(valor ?? concepto));
       if (previa && !catTxt && nombreCat.get(previa)) setCatTxt(nombreCat.get(previa)!);
-      // Si el concepto nombra una máquina de Transporte o un anticipo a un operador, «¿De quién?» se llena solo.
-      const detectado = !quienManual ? detectarQuien(valor ?? concepto) : null;
-      if (detectado) setQuienTxt(detectado.valor);
+      // Si el concepto nombra una máquina o un anticipo a un operador, «Para qué» se llena solo.
+      const detectado = !quienManual ? detectarQuien(valor ?? concepto) : quien;
+      if (detectado && !quienManual) setQuienTxt(detectado.valor);
+      // Con la máquina y un concepto que ya dice qué se hizo («Rodamiento motor piladora») no se pregunta.
+      const dicho = detectado?.tipo === "planta" && !catTxt ? nombreCortoPorConcepto(valor ?? concepto) : null;
+      if (dicho) setCatTxt(dicho);
       // Con la categoría ya conocida (la recuerda del mismo concepto) se salta directo al monto.
-      const conocida = resolverCat(catTxt || (previa ? nombreCat.get(previa) ?? "" : ""));
+      const conocida = resolverCat(catTxt || dicho || (previa ? nombreCat.get(previa) ?? "" : ""));
       if (detectado?.tipo === "anticipo") enfocar("salida");
       else if (conocida) {
-        const deOtro = !!detectado && detectado.tipo !== "propio";
-        if (!deOtro && esCompleja(conocida.codigo, conocida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) enfocar("categoria");
+        if (!saltaFormulario(detectado, conocida.codigo) && !esTrabajo(conocida.codigo) && esCompleja(conocida.codigo, conocida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) enfocar("categoria");
         else enfocar(conocida.tipo === "INGRESO" ? "entrada" : "salida");
       } else enfocar("categoria");
     } else if (c === "categoria") {
       const elegida = resolverCat(valor ?? catTxt);
-      if (elegida) setCatTxt(elegida.nombre);
-      const deOtro = !!quien && quien.tipo !== "propio";
-      if (elegida && !deOtro && esCompleja(elegida.codigo, elegida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) { guardar(elegida); return; }
+      if (elegida && !categoriaPorNombreCorto(valor ?? catTxt)) setCatTxt(elegida.nombre);
+      if (elegida && !esTrabajo(elegida.codigo) && !saltaFormulario(quien, elegida.codigo) && esCompleja(elegida.codigo, elegida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) { guardar(elegida); return; }
       enfocar(elegida ? (elegida.tipo === "INGRESO" ? "entrada" : "salida") : "categoria");
     } else if (c === "quien") {
       const elegido = resolverQuien(valor ?? quienTxt);
@@ -248,7 +272,10 @@ export function CajaHoja({
     guardar();
   };
 
-  const opcionesCat = useMemo(() => categorias.map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" })), [categorias]);
+  const opcionesCat = useMemo(() => [
+    ...(hayPlanta ? NOMBRE_CORTO.filter((n) => categorias.some((c) => c.codigo === n.codigo)).map((n) => ({ valor: n.valor, detalle: n.detalle, tono: "is-out" })) : []),
+    ...categorias.map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" }))
+  ], [categorias, hayPlanta]);
   const opcionesConcepto = useMemo(() => sugerencias.map((x) => ({ valor: x })), [sugerencias]);
   const opcionesQuien = useMemo(() => destinos.map((d) => ({ valor: d.valor, detalle: d.detalle, tono: d.tipo === "propio" ? "" : d.tipo === "socio" ? "is-in" : "is-out" })), [destinos]);
 
@@ -258,6 +285,8 @@ export function CajaHoja({
     if (m.reference_type === "campo_cxp") return /Anticipo a /.test(d) ? `👷 ${(d.match(/Anticipo a ([^:(·]+)/)?.[1] ?? "operador").trim()}` : "🚜 Transporte";
     if (m.category === "GASTO_POR_SOCIO") return `🤝 ${(d.match(/^Gasto de ([^:]+):/)?.[1] ?? "socio").trim()}`;
     if (m.reference_type === "pagado_con_banco") return "💳 Banco";
+    const maquina = d.match(/^Mantenimiento [^/]+\/([^:]+):/)?.[1] ?? d.match(/\[uso: [^\]]*›\s*([^\]]+)\]/)?.[1];
+    if (maquina) return `🔧 ${maquina.trim()}`;
     return "";
   };
   const etiquetaCat = (codigo: string | null | undefined) => (codigo ? nombreCat.get(codigo) ?? codigo.replace(/_/g, " ").toLowerCase() : "—");
@@ -363,7 +392,7 @@ export function CajaHoja({
               </td>
               <td>
                 <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
-                  placeholder="Concepto (ej: refrigerio, diésel COS.10, JUAN PÉREZ…)" disabled={guardando} ariaLabel="Concepto o descripción"
+                  placeholder="Concepto (ej: refrigerio, diésel COS.10, motor piladora…)" disabled={guardando} ariaLabel="Concepto o descripción"
                   onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiarTodo} />
                 <div className="cjh-nueva__tags">
                   <label>
@@ -372,11 +401,11 @@ export function CajaHoja({
                       placeholder="Elige…" disabled={guardando} ariaLabel="Categoría"
                       className={catTxt && !cat ? "is-mal" : tipo === "INCOME" ? "is-in" : tipo === "EXPENSE" ? "is-out" : ""}
                       onChange={(v) => { setCatTxt(v); setError(""); }} onEnter={(v) => siguiente("categoria", v)} onEscape={limpiarTodo}
-                      onBlur={() => { if (cat) setCatTxt(cat.nombre); }} />
+                      onBlur={() => { if (cat && !categoriaPorNombreCorto(catTxt)) setCatTxt(cat.nombre); }} />
                   </label>
                   {conQuien && (
                     <label>
-                      <span>¿De quién?</span>
+                      <span>{hayPlanta ? "¿Para qué?" : "¿De quién?"}</span>
                       <CeldaSugerida inputRef={(el) => { refs.current.quien = el; }} value={quienTxt} opciones={opcionesQuien} minimo={0} elegirPrimera
                         placeholder={destinos[0]?.valor ?? "Esta caja"} disabled={guardando} ariaLabel="¿De quién es?"
                         className={quienTxt && !quien ? "is-mal" : quien && quien.tipo !== "propio" ? "is-out" : ""}
@@ -430,8 +459,14 @@ export function CajaHoja({
         </table>
       </div>
       <div className="cjh-pie">
+        {pideMaquina && (
+          <button type="button" className="cjh-masDatos" disabled={guardando}
+            onClick={() => { onFormularioCompleto("EXPENSE", pideMaquina.codigo, concepto.trim(), pideMaquina.monto); limpiar(); }}>
+            Va a bodega o son varios: abrir formulario
+          </button>
+        )}
         {error ? <span className="cjh-error">⚠️ {error}</span> : (
-          <span>Escribe el concepto y <kbd>Enter</kbd>: si ya se usó, la categoría se llena sola y pasa al monto · <kbd>Enter</kbd> en el monto guarda · <kbd>Esc</kbd> limpia
+          <span>Escribe el concepto y <kbd>Enter</kbd>: si nombra una máquina, se reconoce sola; pon qué se hizo y el monto · <kbd>Enter</kbd> en el monto guarda · <kbd>Esc</kbd> limpia
             {puedeBanco && <> · <b>💳</b> = no salió de la gaveta (banco / tarjeta)</>}
             {movimientos.some((m) => origenExterno(m)) && <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (pedidos, anticipos, compras…).</span>}</span>
         )}

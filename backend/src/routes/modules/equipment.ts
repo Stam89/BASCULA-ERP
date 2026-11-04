@@ -7,7 +7,8 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { avisarSobregiro, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
+import { etiquetaMaquina, resolverMaquina } from "../../services/maquinas.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
@@ -468,6 +469,69 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
    }
    if (fechaMov) await fecharMovimientosDeCaja(client, body.cash_register_id, fechaMov);
    return r;
+  });
+  res.status(201).json(out);
+}));
+
+// 🔧 Desde la hoja de Caja (pedido del dueño 2026-11-04): máquina + qué se hizo + monto, sin el formulario completo.
+// Sale de la caja y queda en la hoja de vida de esa máquina. Varios repuestos o compra para bodega van por el formulario.
+equipmentRouter.post("/planta/gasto", asyncRoute(async (req, res) => {
+  await exigirMatriz(req);
+  const body = z.object({
+    cash_register_id: z.string().uuid(),
+    maquina_id: z.string().uuid(),
+    clase: z.enum(["REPARACION", "REPUESTO", "MATERIAL"]),
+    monto: z.number().positive().max(1_000_000).transform(round2),
+    description: z.string().trim().min(2).max(500),
+    pagado_con_banco: z.boolean().optional(),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.body);
+  const auth = req as AuthenticatedRequest;
+  const accionistaId = auth.accionistaId ?? null;
+  const userId = auth.user?.id ?? null;
+  const out = await inTransaction(async (client) => {
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, accionistaId);
+    const maquina = await resolverMaquina(client, body.maquina_id);
+    const fechaMov = await fechaValidaDeCaja(client, body.cash_register_id, body.fecha);
+    if (!body.pagado_con_banco) await avisarSobregiro(client, body.cash_register_id, body.monto, req);
+    let movimientoId: string;
+    let hojaId: string | null = null;
+    if (body.clase === "REPUESTO") {
+      const compra = await registrarCompraRepuestos(client, {
+        items: [{
+          nuevo: { nombre: body.description.slice(0, 120), referencia: null, unidad: "UNIDAD", stock_minimo: 0 },
+          cantidad: 1, costo_unitario: body.monto, uso_inmediato: true, maquina_id: maquina.id
+        }],
+        cashRegisterId: body.cash_register_id, accionistaId, userId, proveedor: null, aCredito: false
+      });
+      movimientoId = String(compra.cash_movement_id);
+    } else {
+      const esMaterial = body.clase === "MATERIAL";
+      hojaId = (await client.query(
+        `INSERT INTO equipment_maintenance (equipment_id, area, section, maintenance_type, description, amount, created_by, labor_cost, parts_cost)
+         VALUES (NULL, $1, $2, 'CORRECTIVO', $3, $4, $5, $6, $7) RETURNING id`,
+        [maquina.area, maquina.section, body.description, body.monto, userId, esMaterial ? 0 : body.monto, esMaterial ? body.monto : 0]
+      )).rows[0].id;
+      movimientoId = (await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, maq_activo, area)
+         VALUES ($1, 'EXPENSE', 'MANTENIMIENTO_EQUIPO', 'equipment_maintenance', $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [body.cash_register_id, hojaId, body.monto, `Mantenimiento ${maquina.area}/${maquina.section}: ${body.description}`.slice(0, 500), userId, maquina.section, maquina.area]
+      )).rows[0].id;
+    }
+    if (body.pagado_con_banco) {
+      await registrarPagoConBanco(client, {
+        cajaId: body.cash_register_id, gastoId: movimientoId, monto: body.monto, concepto: `${etiquetaMaquina(maquina)}: ${body.description}`, userId
+      });
+    }
+    if (fechaMov) {
+      await fecharMovimientosDeCaja(client, body.cash_register_id, fechaMov);
+      await client.query(
+        `UPDATE equipment_maintenance SET created_at = (SELECT created_at FROM cash_movements WHERE id = $1)
+          WHERE id = $2 OR cash_movement_id = $1`,
+        [movimientoId, hojaId]
+      );
+    }
+    return { maquina: etiquetaMaquina(maquina), total: body.monto, cash_movement_id: movimientoId };
   });
   res.status(201).json(out);
 }));

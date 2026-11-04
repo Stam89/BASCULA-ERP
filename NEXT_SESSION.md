@@ -2,7 +2,13 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🏦 Fomento por transferencia y compras a crédito en el buscador (2026-11-04)
+## Último cambio: 🔧 Trabajo en una máquina desde la hoja de Caja (2026-11-04)
+- Pedido del dueño: la cajera se mareaba con el formulario. En la hoja de la Matriz: concepto + qué se hizo + monto, sin formulario. `cajaHojaMaquina.ts`: `detectarMaquina` reconoce la sección del catálogo por lo escrito («motor piladora» → PILADORA · MOTOR; solo «motor» no adivina) y llena «¿Para qué?» mientras se escribe; nombres cortos Reparación, Compra de repuesto y Materiales; «rodamiento»/«reparación» en el concepto llenan el qué se hizo.
+- `POST /equipment/planta/gasto` {maquina_id, clase, monto, description, pagado_con_banco, fecha}: reparación y material = MANTENIMIENTO_EQUIPO con su hoja de vida; repuesto = compra de uso inmediato (REPUESTOS, no crea catálogo ni bodega). Sin máquina no guarda: pregunta cuál y ofrece el formulario para bodega o varios repuestos. Las cajas de socios siguen igual.
+- «¿Cuándo se hizo?»: un repuesto instalado sale una vez, como mantenimiento. Simulacro `hoja_maquina` (30).
+- Datos: stock de STALYN aquí corregido a pedido del dueño al corte 03/11/2026: 0.11 1,071.54; 3/4 -12.19; fino 6.30; polvillo 161.51 (Corriente, Rechazo, Envejecido y Victor Jara sin cambio).
+
+## Cambio anterior: 🏦 Fomento por transferencia y compras a crédito en el buscador (2026-11-04)
 - **Fomento**: la entrega se puede transferir también desde una caja de EFECTIVO (las dos reales lo son; antes no salía el selector y todo bajaba de la gaveta). `pagado_con_banco` y `transferido_a` en `POST /fomentos/:id/entregas`: suma a la deuda con el interés normal, va el egreso FOMENTO_ENTREGA y su RETIRO_BANCO enlazado (`registrarPagoConBanco`), sin aviso de sobregiro. Caja mixta: sale por su lado de banco. El concepto queda «Fangueada · Transferido a X» y también va en la descripción de Caja, así se encuentra en «¿Cuándo se hizo?». Anular el egreso anula las dos líneas. Pantalla: `EntregaFomentoMedio` en Caja › Fomentos y en el detalle del fomento.
 - **Pago por transferencia**: `pagado_con_banco` en `POST /fomentos/:id/pagos`: baja la deuda y la gaveta no cambia (entra PAGO_FOMENTO y sale TRASPASO_INTERNO enlazado, `registrarCobroEnBanco`). Anular el ingreso anula las dos.
 - **Permisos de Fomentos** (pedido del dueño): `PERM:FOMENTO_GASTO_ADM` (tasa, por entrega, cobrar hasta; también lo abre EDITAR_PRECIOS) y `PERM:FOMENTO_ELIMINAR` (fomento, entregas y pagos; excepción a «anular solo administrador», que sigue para todo lo demás). Por accionista, en Permisos especiales. Eliminar un fomento con movimientos de caja vigentes da 409, también al administrador.

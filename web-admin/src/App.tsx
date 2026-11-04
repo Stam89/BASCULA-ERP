@@ -1,4 +1,5 @@
 import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
+import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
@@ -5148,9 +5149,22 @@ export function App() {
       await refreshCaja(registerId);
       return;
     }
+    // 🔧 Reparación, repuesto o material de una máquina de la planta: sale de la caja y entra a su hoja de vida.
+    const clase = d?.tipo === "planta" ? CLASE_DE_CATEGORIA[f.category] : undefined;
+    if (d?.tipo === "planta" && clase) {
+      await apiPost("/equipment/planta/gasto", {
+        cash_register_id: registerId, maquina_id: d.id, clase, monto: f.amount, description: f.description,
+        pagado_con_banco: f.banco || undefined, fecha: f.fecha, ...cuerpoMedio(f.medio)
+      });
+      addToast(`🔧 ${money(f.amount)} en ${d.section}: quedó en su hoja de vida${f.banco ? " (pagado con banco, no sale de la gaveta)" : ""}`, "success");
+      await refreshCaja(registerId);
+      return;
+    }
     await apiPost(`/cash/${registerId}/movements`, {
       movement: f.movement, category: f.category, amount: f.amount, description: f.description, codigo: f.codigo, fecha: f.fecha,
       medio: dashboard.current_cash_register?.tipo === "MIXTO" ? f.medio : undefined,
+      maq_activo: d?.tipo === "planta" ? d.section : undefined,
+      area: d?.tipo === "planta" ? d.area : undefined,
       // 🤝 Gasto de un socio que paga esta caja (se cruza con lo que la Matriz le debe).
       por_cuenta_de: f.movement === "EXPENSE" && d?.tipo === "socio" ? d.id : undefined,
       pagado_con_banco: f.movement === "EXPENSE" && f.banco ? true : undefined
@@ -20496,6 +20510,7 @@ Motivo (obligatorio):`, ""));
                       const puedeTransporte = isAdmin || (accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []).includes("Transporte / Cosechadora");
                       const destinosHoja: HojaDestino[] = esMatrizActiva ? [
                         { valor: matrizName || "Esta caja", tipo: "propio", detalle: "gasto de esta caja" },
+                        ...maquinasPlanta.map((m) => ({ valor: `🔧 ${m.area} · ${m.section}`, tipo: "planta" as const, id: m.id, area: m.area, section: m.section, detalle: "máquina de la planta" })),
                         ...(puedeTransporte ? [
                           { valor: "🚜 Transporte (general)", tipo: "transporte" as const, detalle: "sin máquina" },
                           ...fletaActivos.map((a) => ({ valor: `🚜 Transporte · ${a.nombre}`, tipo: "transporte" as const, id: a.id, detalle: a.tipo ?? "máquina",

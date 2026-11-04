@@ -32,6 +32,10 @@ const SQL_MATRIZ = `
    WHERE r.accionista_id = $1 AND cm.movement = 'EXPENSE'
      AND cm.reversed_at IS NULL AND cm.reversal_of IS NULL
      AND COALESCE(cm.reference_type, '') <> 'equipment_maintenance'
+     -- Repuesto instalado ya: sale como mantenimiento de su máquina, no dos veces (lo que fue a bodega sí queda aquí).
+     AND NOT (cm.reference_type = 'repuesto_compra' AND cm.amount <= 0.005 + (
+       SELECT COALESCE(SUM(em.amount), 0) FROM equipment_maintenance em
+        WHERE em.cash_movement_id = cm.id AND COALESCE(em.status, '') <> 'ANULADO'))
      AND NOT (cm.reference_type = 'accounts_payable' AND EXISTS (
        SELECT 1 FROM accounts_payable ap
         WHERE ap.reference_type = 'gasto_credito'

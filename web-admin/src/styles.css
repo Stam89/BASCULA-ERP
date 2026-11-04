@@ -4603,6 +4603,7 @@ textarea::placeholder {
 .orderItemsGrid__vacio { padding: 20px 12px !important; text-align: center; color: #9ca3af; font-weight: 600; }
 .orderItemsGrid__tabla tfoot td { background: #f0fdf4; font-weight: 800; padding: 8px 10px; }
 /* Tarjeta del pedido para compartir. Va aquí y no en línea: en el celular toda grilla en línea pasa a una sola columna. */
+.cjh-masDatos { font-size: 12px; padding: 3px 10px; border-radius: 6px; border: 1px solid #cbd5e1; background: #fff; cursor: pointer; margin-right: 8px; }
 .pedidoLineas { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 18px; align-items: center; font-size: 12.5px; margin-top: 10px; }
 @media (max-width: 1400px) {
   /* Tablet y portátil: la fila de captura cabe sin deslizar; en el celular va en tarjetas. */
