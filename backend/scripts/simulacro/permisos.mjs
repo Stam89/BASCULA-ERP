@@ -85,6 +85,16 @@ try {
   }
   check(await st(caj, "PATCH", `/fomentos/${fake}`, { notes: "x" }) !== 403, "C. editar datos del fomento (sin tocar la tasa) no exige el permiso");
 
+  // ── C1b. Permisos propios de Fomentos: solo abren Fomentos ──
+  const fomP = await crear("sim_fomento_perm", ["Caja", "EDIT:Caja", "Fomentos", "EDIT:Fomentos", "PERM:FOMENTO_GASTO_ADM", "PERM:FOMENTO_ELIMINAR"]);
+  const nada = "00000000-0000-0000-0000-000000000000";
+  check(await st(fomP, "DELETE", `/fomentos/${nada}`) === 404, "C1b. con el permiso pasa a eliminar un fomento (404: no existe)");
+  check(await st(fomP, "DELETE", `/fomentos/${nada}/entregas/${nada}`) === 404, "C1b. y una entrega");
+  check(await st(fomP, "PATCH", `/fomentos/${nada}/interes-fijo`, { meses: 2 }) !== 403, "C1b. y cambia el gasto administrativo");
+  check(await st(caj, "PATCH", `/fomentos/${nada}/interes-fijo`, { meses: 2 }) === 403, "C1b. sin el permiso no");
+  check(await st(cajP, "PATCH", `/fomentos/${nada}/interes-fijo`, { meses: 2 }) !== 403, "C1b. Editar precios lo sigue abriendo");
+  check(await st(fomP, "POST", `/cash/movements/${nada}/reverse`, { reason: "prueba de permisos" }) === 403, "C1b. pero anular en Caja sigue siendo del administrador");
+
   // ── C2. Reportes con sub-pestañas marcadas: solo las marcadas ──
   const rep = await crear("sim_reportes_ventas", ["Reportes", "SUB:Reportes:ventas"]);
   check(await st(rep, "GET", "/reports/sales?from=2026-10-01&to=2026-10-08") === 200, "C2. con «Reportes › Ventas» marcado puede ver el reporte de ventas");

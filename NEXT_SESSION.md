@@ -4,7 +4,8 @@ Actualizado: 2026-11-04
 
 ## Último cambio: 🏦 Fomento por transferencia y compras a crédito en el buscador (2026-11-04)
 - **Fomento**: la entrega se puede transferir también desde una caja de EFECTIVO (las dos reales lo son; antes no salía el selector y todo bajaba de la gaveta). `pagado_con_banco` y `transferido_a` en `POST /fomentos/:id/entregas`: suma a la deuda con el interés normal, va el egreso FOMENTO_ENTREGA y su RETIRO_BANCO enlazado (`registrarPagoConBanco`), sin aviso de sobregiro. Caja mixta: sale por su lado de banco. El concepto queda «Fangueada · Transferido a X» y también va en la descripción de Caja, así se encuentra en «¿Cuándo se hizo?». Anular el egreso anula las dos líneas. Pantalla: `EntregaFomentoMedio` en Caja › Fomentos y en el detalle del fomento.
-- **Pendiente**: un PAGO de fomento que llega por transferencia a una caja de efectivo sigue sumando a la gaveta.
+- **Pago por transferencia**: `pagado_con_banco` en `POST /fomentos/:id/pagos`: baja la deuda y la gaveta no cambia (entra PAGO_FOMENTO y sale TRASPASO_INTERNO enlazado, `registrarCobroEnBanco`). Anular el ingreso anula las dos.
+- **Permisos de Fomentos** (pedido del dueño): `PERM:FOMENTO_GASTO_ADM` (tasa, por entrega, cobrar hasta; también lo abre EDITAR_PRECIOS) y `PERM:FOMENTO_ELIMINAR` (fomento, entregas y pagos; excepción a «anular solo administrador», que sigue para todo lo demás). Por accionista, en Permisos especiales. Eliminar un fomento con movimientos de caja vigentes da 409, también al administrador.
 - **«¿Cuándo se hizo?»**: las compras a crédito salen (fuente `CREDITO`, Matriz y Transporte) con el día de la compra, el total y lo que se debe. Sus pagos ya no salen como otra compra. Un mantenimiento a crédito sale una sola vez, como mantenimiento.
 - Simulacro `fomento_transferencia` (48). El simulacro `campo` falla si la copia trae saldo en la CAJA de Transporte (asume 0): es por los datos.
 - Datos: Lira Azul se reactivó a pedido del dueño.

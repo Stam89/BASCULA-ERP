@@ -42,11 +42,30 @@ try {
   check(efectivo.concepto === "Semilla", "C2. el concepto no cambia", efectivo.concepto);
   check(await gaveta() === inicial - 10, "C3. esa sí sale de la gaveta", await gaveta());
 
+  // C2. Pago del agricultor por transferencia.
+  const antesPago = await gaveta();
+  const pago = exigir(await api("POST", `/fomentos/${fom.id}/pagos`, { fecha: "2026-11-04", valor: 15, concepto: "Abono", cash_register_id: cajaId, pagado_con_banco: true }, ceyro), "C4. el agricultor paga $15 por transferencia");
+  check(pago.concepto === "Abono · Transferencia", "C5. el pago queda marcado", pago.concepto);
+  check(await gaveta() === antesPago, "C6. no entra a la gaveta", await gaveta());
+  const ingreso = (await q("SELECT id FROM cash_movements WHERE reference_type='fomento_pagos' AND reference_id=$1", [pago.id]))[0];
+  const salida = (await q("SELECT id, category, movement FROM cash_movements WHERE reference_type='pagado_con_banco' AND reference_id=$1", [ingreso.id]))[0];
+  check(salida?.category === "TRASPASO_INTERNO" && salida?.movement === "EXPENSE", "C7. su contrapartida no es gasto", salida);
+  const conPago = exigir(await api("GET", `/fomentos/${fom.id}`, undefined, ceyro), "C8. detalle");
+  check(Number(conPago.total_pagado) === 15, "C9. baja la deuda", conPago.total_pagado);
+  const sinBorrar = await api("DELETE", `/fomentos/${fom.id}`, undefined, ceyro);
+  check(sinBorrar.status === 409, "C10. un fomento con caja no se elimina", mostrar(sinBorrar));
+  exigir(await api("POST", `/cash/movements/${ingreso.id}/reverse`, { reason: "sim anula pago" }, ceyro), "C11. se anula el pago");
+  check(await gaveta() === antesPago, "C12. la gaveta sigue igual", await gaveta());
+  const vivosPago = await q("SELECT count(*)::int n FROM cash_movements WHERE id = ANY($1) AND reversed_at IS NULL", [[ingreso.id, salida.id]]);
+  check(vivosPago[0].n === 0, "C13. las dos líneas del pago quedan anuladas", vivosPago);
+  const efPago = exigir(await api("POST", `/fomentos/${fom.id}/pagos`, { fecha: "2026-11-04", valor: 5, cash_register_id: cajaId }, ceyro), "C14. pago en efectivo");
+  check(efPago.concepto === null && await gaveta() === antesPago + 5, "C15. ese sí entra a la gaveta", await gaveta());
+
   // D. Anular.
   const soloBanco = await api("POST", `/cash/movements/${banco.id}/reverse`, { reason: "sim" }, ceyro);
   check(soloBanco.status === 409, "D1. la entrada del banco sola no se anula", mostrar(soloBanco));
   exigir(await api("POST", `/cash/movements/${egreso.id}/reverse`, { reason: "sim anula" }, ceyro), "D2. se anula el egreso");
-  check(await gaveta() === inicial - 10, "D3. la gaveta sigue igual tras anular", await gaveta());
+  check(await gaveta() === inicial - 5, "D3. la gaveta sigue igual tras anular", await gaveta());
   const vivos = await q("SELECT count(*)::int n FROM cash_movements WHERE id = ANY($1) AND reversed_at IS NULL", [[egreso.id, banco.id]]);
   check(vivos[0].n === 0, "D4. las dos líneas quedan anuladas", vivos);
   exigir(await api("DELETE", `/fomentos/${fom.id}/entregas/${ent.id}`, undefined, ceyro), "D5. ya se puede quitar la entrega");

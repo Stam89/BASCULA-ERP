@@ -1848,6 +1848,8 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "PERMISOS ESPECIALES", rows: [
     { key: "PERM:EDITAR_PRECIOS", label: "Permitir Editar Precios y Tarifas" },
     { key: "PERM:SALDOS_INICIALES", label: "Permitir cargar Saldos iniciales (lo ve en su Inicio)" },
+    { key: "PERM:FOMENTO_GASTO_ADM", label: "Fomentos: cambiar gasto administrativo (tasa, por entrega, cobrar hasta)" },
+    { key: "PERM:FOMENTO_ELIMINAR", label: "Fomentos: eliminar fomentos, entregas y pagos" },
   ] },
 ];
 const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.key));
@@ -5225,6 +5227,9 @@ export function App() {
   // permiso especial «Anular / Eliminar» ya no se puede dar a otros usuarios.
   const canAnular = isAdmin;
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
+  // Fomentos tiene sus propios permisos (pedido del dueño 2026-11-04): el resto de anular sigue siendo solo del administrador.
+  const canGastoAdmFomento = canEditarPrecios || activeAllowedPerms.has("PERM:FOMENTO_GASTO_ADM");
+  const canEliminarFomento = isAdmin || activeAllowedPerms.has("PERM:FOMENTO_ELIMINAR");
   // 📥 Saldos iniciales para un usuario que no es administrador (pedido del dueño 2026-10-30): con este permiso
   // especial en el accionista activo, la tarjeta sale en su Inicio (Configuración sigue siendo solo del administrador).
   const canSaldosIniciales = isAdmin || activeAllowedPerms.has("PERM:SALDOS_INICIALES");
@@ -9559,7 +9564,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       cash_register_id: dashboard.current_cash_register?.id,
       ...cuerpoEntregaFomento()
     });
-    const aviso = entregaEsTransferencia() ? avisoTransferenciaFomento() : null;
+    const aviso = fomentoPorTransferencia() ? avisoTransferenciaFomento() : null;
     setMedioOperacion("EFECTIVO");
     setFomentoTransferidoA("");
     setFomentoEntregaForm({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
@@ -9633,11 +9638,12 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       valor: Number(fomentoPagoForm.valor),
       concepto: fomentoPagoForm.concepto || undefined,
       cash_register_id: dashboard.current_cash_register?.id,
-      ...cuerpoMedio(medioOperacion)
+      ...cuerpoPagoFomento()
     });
+    const aviso = avisoPagoFomento();
     setMedioOperacion("EFECTIVO");
     setFomentoPagoForm({ fecha: hoyLocal(), valor: "", concepto: "" });
-    addToast("Pago registrado", "success");
+    addToast(aviso, "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
     if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
@@ -10187,7 +10193,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ? `/fomentos/${cajaFomentoId}/entregas`
       : `/fomentos/${cajaFomentoId}/pagos`;
     const esEntrega = cajaFomentoAccion === "entrega";
-    const porTransferencia = esEntrega && entregaEsTransferencia();
+    const porTransferencia = esEntrega && fomentoPorTransferencia();
     setCajaFomentoGuardando(true);
     try {
       const r = await apiPost<{ entregado_por_matriz?: { socio: string; descontado: number; por_cobrar: number } }>(endpoint, {
@@ -10195,9 +10201,9 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
         valor,
         concepto: cajaFomentoConcepto.trim() || (porTransferencia ? undefined : esEntrega ? "Entrega de insumos" : "Pago de fomento"),
         cash_register_id: registerId,
-        ...(esEntrega ? cuerpoEntregaFomento() : cuerpoMedio(medioOperacion))
+        ...(esEntrega ? cuerpoEntregaFomento() : cuerpoPagoFomento())
       });
-      const aviso = porTransferencia ? avisoTransferenciaFomento() : null;
+      const aviso = porTransferencia ? avisoTransferenciaFomento() : !esEntrega ? avisoPagoFomento() : null;
       setCajaFomentoMonto("");
       setCajaFomentoConcepto("");
       setFomentoTransferidoA("");
@@ -10926,12 +10932,18 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   const cajaEsMixta = dashboard.current_cash_register?.tipo === "MIXTO";
   // La entrega de un fomento puede ir por transferencia también desde una caja de efectivo (ahí no sale de la gaveta).
   const cajaAdmiteTransferencia = cajaEsMixta || dashboard.current_cash_register?.tipo === "EFECTIVO";
-  function entregaEsTransferencia() { return cajaAdmiteTransferencia && medioOperacion === "BANCO"; }
+  function fomentoPorTransferencia() { return cajaAdmiteTransferencia && medioOperacion === "BANCO"; }
   function cuerpoEntregaFomento() {
     return {
       ...cuerpoMedio(medioOperacion),
-      ...(entregaEsTransferencia() ? { pagado_con_banco: true, transferido_a: fomentoTransferidoA.trim() || undefined } : {})
+      ...(fomentoPorTransferencia() ? { pagado_con_banco: true, transferido_a: fomentoTransferidoA.trim() || undefined } : {})
     };
+  }
+  function cuerpoPagoFomento() {
+    return { ...cuerpoMedio(medioOperacion), ...(fomentoPorTransferencia() ? { pagado_con_banco: true } : {}) };
+  }
+  function avisoPagoFomento() {
+    return fomentoPorTransferencia() ? `Pago por transferencia registrado${cajaEsMixta ? "" : ": no entró a la gaveta"}` : "Pago registrado";
   }
   function avisoTransferenciaFomento() {
     return `Transferencia registrada${fomentoTransferidoA.trim() ? ` a ${fomentoTransferidoA.trim()}` : ""}${cajaEsMixta ? "" : ": no salió de la gaveta"}`;
@@ -21814,15 +21826,15 @@ Motivo (obligatorio):`, ""));
                           transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
                           onFangueada={() => setCajaFomentoConcepto("Fangueada")} />
                       )}
-                      {cajaFomentoAccion === "pago" && cajaEsMixta && (
-                        <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El pago ingresó en efectivo o al banco?" />
+                      {cajaFomentoAccion === "pago" && cajaAdmiteTransferencia && (
+                        <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El pago llegó en efectivo o por transferencia?" />
                       )}
 
                       <button type="submit" disabled={cajaFomentoGuardando || cajaFomentosCargando || !!cajaFomentosError}
                         style={{ width: "100%", padding: "9px 0", borderRadius: 6, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 14,
                           background: cajaFomentoAccion === "entrega" ? "var(--c-brand)" : "#16a34a", color: "#fff" }}>
-                        {cajaFomentoGuardando ? "Guardando…" : cajaFomentoAccion === "pago" ? "⬆ Registrar Pago (entra a caja)"
-                          : entregaEsTransferencia() ? `🏦 Registrar Transferencia${cajaEsMixta ? "" : " (no sale de la gaveta)"}` : "⬇ Registrar Entrega (sale de caja)"}
+                        {cajaFomentoGuardando ? "Guardando…" : cajaFomentoAccion === "pago" ? (fomentoPorTransferencia() ? `🏦 Registrar Pago${cajaEsMixta ? " (entra al banco)" : " (no entra a la gaveta)"}` : "⬆ Registrar Pago (entra a caja)")
+                          : fomentoPorTransferencia() ? `🏦 Registrar Transferencia${cajaEsMixta ? "" : " (no sale de la gaveta)"}` : "⬇ Registrar Entrega (sale de caja)"}
                       </button>
                     </form>
 
@@ -22755,13 +22767,13 @@ Motivo (obligatorio):`, ""));
                           ✏️ Editar
                         </button>
                       )}
-                      {canEditarPrecios && (
+                      {canGastoAdmFomento && (
                         <button type="button" onClick={() => setFomentoInteresFijoModalOpen(true)}
                           style={{ background: "#fff", color: "#92400e", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                           ⚙️ Gasto adm. por entrega
                         </button>
                       )}
-                      {canAnular && (
+                      {canEliminarFomento && (
                         <button type="button" onClick={() => setConfirmarEliminarFomento({ id: fomentoDetalle.id, nombre: fomentoDetalle.farmer_name })}
                           style={{ background: "#fff", color: "#dc2626", border: "1px solid #dc2626", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                           🗑️ Eliminar Fomento
@@ -22803,7 +22815,7 @@ Motivo (obligatorio):`, ""));
                         <>
                           <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).enReal()}%</strong>
                           <span style={{ fontSize: 10, color: "var(--c-muted)" }}>mensual</span>
-                          {canEditarPrecios && (
+                          {canGastoAdmFomento && (
                             <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).enReal()); }}
                               style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
                               ✏ Editar %
@@ -22881,7 +22893,7 @@ Motivo (obligatorio):`, ""));
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#b45309" }}>{money(Number(e.interes))}</td>
                                 <td style={{ padding: "4px 8px", textAlign: "right", fontWeight: 700 }}>{money(Number(e.suman))}</td>
                                 <td style={{ padding: "4px 8px" }}>
-                                  {canAnular && (
+                                  {canEliminarFomento && (
                                     <button type="button" title="Eliminar entrega"
                                       onClick={() => setConfirmarEntrega({ fomentoId: fomentoDetalle.id, entregaId: e.id, valor: Number(e.valor), fecha: e.fecha?.slice(0, 10) ?? "" })}
                                       style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 14 }}>✕</button>
@@ -22976,7 +22988,7 @@ Motivo (obligatorio):`, ""));
                             onFangueada={() => setFomentoEntregaForm(p => ({...p, concepto: "Fangueada"}))} />
                         )}
                         <button type="submit" style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
-                          {entregaEsTransferencia() ? "Registrar Transferencia" : "Registrar Entrega"}
+                          {fomentoPorTransferencia() ? "Registrar Transferencia" : "Registrar Entrega"}
                         </button>
                       </form>
                     </details>
@@ -23003,7 +23015,7 @@ Motivo (obligatorio):`, ""));
                                 <td style={{ padding: "4px 8px", textAlign: "right", color: "#16a34a", fontWeight: 700 }}>{money(Number(p.valor))}</td>
                                 <td style={{ padding: "4px 8px" }}>{p.concepto ?? "—"}</td>
                                 <td style={{ padding: "4px 8px" }}>
-                                  {canAnular && (
+                                  {canEliminarFomento && (
                                     <button type="button" title="Eliminar"
                                       onClick={() => deleteFomentoPago(fomentoDetalle.id, p.id).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo eliminar el pago", "error"))}
                                       style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", fontSize: 13 }}>✕</button>
@@ -23041,10 +23053,10 @@ Motivo (obligatorio):`, ""));
                             onChange={e => setFomentoPagoForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Abono / pago total" />
                         </label>
-                        {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El agricultor pagó en efectivo o por el banco?" />}
+                        {cajaAdmiteTransferencia && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El agricultor pagó en efectivo o por transferencia?" />}
                         <button type="submit" style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
                           💵 Registrar Pago
-                          {dashboard.current_cash_register && " (entra a caja)"}
+                          {dashboard.current_cash_register && (fomentoPorTransferencia() ? (cajaEsMixta ? " (entra al banco)" : " (no entra a la gaveta)") : " (entra a caja)")}
                         </button>
                       </form>
                     </details>

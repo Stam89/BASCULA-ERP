@@ -396,7 +396,17 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
  * Precios y Tarifas») en el accionista activo. Los botones ya se ocultan sin el permiso; esto
  * hace que el servidor diga lo mismo. Va después de resolveAccionista.
  */
-export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS" | "SALDOS_INICIALES") {
+type Permiso = "ANULAR" | "EDITAR_PRECIOS" | "SALDOS_INICIALES" | "FOMENTO_GASTO_ADM" | "FOMENTO_ELIMINAR";
+const SIN_PERMISO: Record<Permiso, string> = {
+  ANULAR: "Solo el administrador puede anular, eliminar o reabrir registros.",
+  SALDOS_INICIALES: "No tienes permiso para cargar saldos iniciales en este accionista. Pide el permiso «Cargar Saldos iniciales» a un administrador.",
+  EDITAR_PRECIOS: "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador.",
+  FOMENTO_GASTO_ADM: "No tienes permiso para cambiar el gasto administrativo. Pide el permiso «Fomentos: cambiar gasto administrativo» a un administrador.",
+  FOMENTO_ELIMINAR: "No tienes permiso para eliminar en Fomentos. Pide el permiso «Fomentos: eliminar» a un administrador."
+};
+
+/** `alterno`: otro permiso que también abre la misma acción. */
+export function requirePermiso(permiso: Permiso, alterno?: Permiso) {
   return (req: Request, _res: Response, next: NextFunction) => {
     const user = (req as AuthenticatedRequest).user;
     if (!user) { next(new ApiError(401, "Sesión requerida")); return; }
@@ -411,12 +421,9 @@ export function requirePermiso(permiso: "ANULAR" | "EDITAR_PRECIOS" | "SALDOS_IN
       const row = fresh.rows[0];
       if (!row || !row.is_active) { next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.")); return; }
       // Anular / eliminar / reabrir: SOLO el administrador (pedido del dueño 2026-10-21); el permiso especial ya no basta.
-      if (row.role_name === "ADMINISTRADOR" || (permiso !== "ANULAR" && (row.allowed_modules ?? []).includes(`PERM:${permiso}`))) { next(); return; }
-      next(new ApiError(403, permiso === "ANULAR"
-        ? "Solo el administrador puede anular, eliminar o reabrir registros."
-        : permiso === "SALDOS_INICIALES"
-          ? "No tienes permiso para cargar saldos iniciales en este accionista. Pide el permiso «Cargar Saldos iniciales» a un administrador."
-          : "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador."));
+      const tiene = (p?: Permiso) => !!p && p !== "ANULAR" && (row.allowed_modules ?? []).includes(`PERM:${p}`);
+      if (row.role_name === "ADMINISTRADOR" || tiene(permiso) || tiene(alterno)) { next(); return; }
+      next(new ApiError(403, SIN_PERMISO[permiso]));
     }, next);
   };
 }

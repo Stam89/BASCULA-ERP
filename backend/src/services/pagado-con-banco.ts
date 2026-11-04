@@ -29,7 +29,19 @@ export async function registrarPagoConBanco(client: PoolClient, opts: {
   return String(entra.rows[0].id);
 }
 
-/** Al anular el gasto: se anula también su entrada del banco (si la tiene). */
+/** Lo contrario: un cobro que llegó al banco. Entra el ingreso y sale lo mismo como traspaso, así la gaveta no cambia. */
+export async function registrarCobroEnBanco(client: PoolClient, opts: {
+  cajaId: string; ingresoId: string; monto: number; concepto: string; userId?: string | null;
+}): Promise<void> {
+  await client.query(
+    `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
+     VALUES ($1, 'EXPENSE', 'TRASPASO_INTERNO', $2, $3, $4, $5, $6, 'EFECTIVO')`,
+    [opts.cajaId, REF_PAGADO_CON_BANCO, opts.ingresoId, opts.monto,
+     `💳 Llegó al banco por transferencia (no entró a la gaveta): ${opts.concepto}`.slice(0, 500), opts.userId ?? null]
+  );
+}
+
+/** Al anular el movimiento: se anula también su línea del banco (si la tiene). */
 export async function anularPagoConBanco(client: PoolClient, opts: {
   gastoId: string; cajaDestino: string; motivo: string; userId?: string | null;
 }): Promise<boolean> {
@@ -41,8 +53,9 @@ export async function anularPagoConBanco(client: PoolClient, opts: {
   if (!par) return false;
   await client.query(
     `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
-     VALUES ($1, 'EXPENSE', $2, $3, $4, 'reversal', $5, $5, $6, $7)`,
-    [opts.cajaDestino, par.category, par.amount, `Anulación: ${opts.motivo} (lo que se pagó con el banco)`, par.id, opts.userId ?? null, par.medio]
+     VALUES ($1, $8, $2, $3, $4, 'reversal', $5, $5, $6, $7)`,
+    [opts.cajaDestino, par.category, par.amount, `Anulación: ${opts.motivo} (lo que se pagó con el banco)`, par.id, opts.userId ?? null, par.medio,
+     par.movement === "INCOME" ? "EXPENSE" : "INCOME"]
   );
   await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1",
     [par.id, opts.userId ?? null, opts.motivo]);

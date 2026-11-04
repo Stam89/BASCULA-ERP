@@ -705,7 +705,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
     if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
-    if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta entrada es la del banco de un gasto pagado con tarjeta: anula ese gasto y esta se anula sola.");
+    if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta línea es la del banco: anula el movimiento al que acompaña y esta se anula sola.");
     if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
     // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
     await revertirMovimientoDePrestamo(client, m);

@@ -16,7 +16,7 @@ import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 import { calcularLimiteFomento } from "../../services/fomento-limite.js";
 import { hoyEc } from "../../utils/fechas.js";
 import { cruzarGastoPorSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
-import { registrarPagoConBanco } from "../../services/pagado-con-banco.js";
+import { registrarCobroEnBanco, registrarPagoConBanco } from "../../services/pagado-con-banco.js";
 
 export const fomentosRouter = Router();
 
@@ -102,7 +102,9 @@ const pagoSchema = z.object({
   valor:            z.number().positive(),
   concepto:         z.string().optional(),
   cash_register_id: z.string().uuid().optional(),
-  medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional()
+  medio_pago:       z.enum(["EFECTIVO", "BANCO"]).optional(),
+  // 🏦 El agricultor pagó por transferencia: en una caja de efectivo no entra a la gaveta.
+  pagado_con_banco: z.boolean().optional()
 });
 
 const SELECT_FOMENTO = `
@@ -832,7 +834,7 @@ fomentosRouter.post("/", asyncRoute(async (req, res) => {
 }));
 
 // Cambiar la tasa (renta) es «editar precios y tarifas»; el resto de la edición, no.
-fomentosRouter.patch("/:id", (req, res, next) => (req.body?.renta !== undefined ? requirePermiso("EDITAR_PRECIOS")(req, res, next) : next()), asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id", (req, res, next) => (req.body?.renta !== undefined ? requirePermiso("FOMENTO_GASTO_ADM", "EDITAR_PRECIOS")(req, res, next) : next()), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.id);
   const parsed = fomentoSchema.partial().parse(req.body);
@@ -897,7 +899,7 @@ fomentosRouter.patch("/:id", (req, res, next) => (req.body?.renta !== undefined 
 // marca (o desmarca) TODAS las entregas del fomento como saldo anterior con N meses
 // fijos. `activo:false` vuelve al interés dinámico por días. Modificador directo
 // sobre el saldo de la cuenta (regla de negocio del cliente).
-fomentosRouter.patch("/:id/interes-fijo", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id/interes-fijo", requirePermiso("FOMENTO_GASTO_ADM", "EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({
     activo: z.boolean(),
@@ -929,7 +931,7 @@ fomentosRouter.patch("/:id/interes-fijo", requirePermiso("EDITAR_PRECIOS"), asyn
 
 // Interés de UNA entrega: por días (meses = null) o N meses fijos (1–24). Así cada entrega lleva lo suyo:
 // a una 1 mes, a otra 2 meses, y las demás por días. No se permite en un fomento ya cerrado por su cuenta.
-fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", requirePermiso("FOMENTO_GASTO_ADM", "EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({ meses: z.number().int().min(1).max(24).nullable() }).parse(req.body);
   const fomentoId = String(req.params.id);
@@ -949,7 +951,7 @@ fomentosRouter.patch("/:id/entregas/:entregaId/interes-fijo", requirePermiso("ED
 
 // 📅 Fecha HASTA la que se cobra el gasto administrativo «por días» de UNA entrega (null = hasta hoy / hasta la cuenta).
 // Pedido del dueño 2026-10-29: la entrega es del 29/07 y se le cobra hasta el 28/08 (después ya no sube).
-fomentosRouter.patch("/:id/entregas/:entregaId/interes-hasta", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+fomentosRouter.patch("/:id/entregas/:entregaId/interes-hasta", requirePermiso("FOMENTO_GASTO_ADM", "EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const body = z.object({ fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable() }).parse(req.body);
   const fomentoId = String(req.params.id);
@@ -971,10 +973,25 @@ fomentosRouter.patch("/:id/entregas/:entregaId/interes-hasta", requirePermiso("E
   res.json(full.rows[0]);
 }));
 
-fomentosRouter.delete("/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:id", requirePermiso("FOMENTO_ELIMINAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
-  const result = await pool.query("DELETE FROM fomentos WHERE id = $1 AND accionista_id = $2", [req.params.id, accionistaId]);
-  if (!result.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+  const fomentoId = String(req.params.id);
+  await inTransaction(async (client) => {
+    await assertFomentoAccionista(client, fomentoId, accionistaId);
+    // Si algo de este fomento movió la caja, borrarlo la dejaría descuadrada contra el fomento.
+    const conCaja = await client.query(
+      `SELECT 1 FROM cash_movements m
+        WHERE m.reversal_of IS NULL AND m.reversed_at IS NULL
+          AND ((m.reference_type = 'fomento_entregas' AND m.reference_id IN (SELECT id FROM fomento_entregas WHERE fomento_id = $1))
+            OR (m.reference_type = 'fomento_pagos' AND m.reference_id IN (SELECT id FROM fomento_pagos WHERE fomento_id = $1)))
+        LIMIT 1`,
+      [fomentoId]
+    );
+    if (conCaja.rowCount) {
+      throw new ApiError(409, "Este fomento tiene entregas o pagos que movieron la caja: anula primero esos movimientos en Caja (administrador) y luego elimínalo.");
+    }
+    await client.query("DELETE FROM fomentos WHERE id = $1 AND accionista_id = $2", [fomentoId, accionistaId]);
+  });
   res.json({ ok: true });
 }));
 
@@ -1108,7 +1125,7 @@ async function exigirSinMovimientoDeCajaVigente(client: PoolClient, referenceTyp
   }
 }
 
-fomentosRouter.delete("/:fomentoId/entregas/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:fomentoId/entregas/:id", requirePermiso("FOMENTO_ELIMINAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
   const entregaId = String(req.params.id);
@@ -1165,11 +1182,12 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
       const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
       tipoCaja = caja.tipo;
     }
+    const transferencia = !!data.pagado_con_banco && tipoCaja !== null;
+    const conceptoPago = [data.concepto?.trim(), transferencia ? "Transferencia" : null].filter(Boolean).join(" · ") || null;
     const pago = await client.query(
       `INSERT INTO fomento_pagos (fomento_id, cash_register_id, fecha, valor, concepto)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [fomentoId, data.cash_register_id ?? null, data.fecha, data.valor,
-       data.concepto ?? null]
+      [fomentoId, data.cash_register_id ?? null, data.fecha, data.valor, conceptoPago]
     );
 
     // Si hay caja, registrar el ingreso
@@ -1178,14 +1196,20 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
         "SELECT farmer_name FROM fomentos WHERE id = $1",
         [fomentoId]
       );
-      await client.query(
+      const descripcion = `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}${transferencia ? " · Transferencia" : ""}`;
+      const ingreso = await client.query<{ id: string }>(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
-         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4, $5)`,
-        [data.cash_register_id, pago.rows[0].id, data.valor,
-         `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}`,
-         medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
+         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4, $5) RETURNING id`,
+        [data.cash_register_id, pago.rows[0].id, data.valor, descripcion,
+         medioParaCaja(tipoCaja ?? "EFECTIVO", transferencia ? "BANCO" : data.medio_pago)]
       );
+      if (transferencia && tipoCaja === "EFECTIVO") {
+        await registrarCobroEnBanco(client, {
+          cajaId: data.cash_register_id, ingresoId: ingreso.rows[0].id, monto: data.valor, concepto: descripcion,
+          userId: (req as AuthenticatedRequest).user?.id ?? null
+        });
+      }
     }
     return pago.rows[0];
   });
@@ -1193,7 +1217,7 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
-fomentosRouter.delete("/:fomentoId/pagos/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+fomentosRouter.delete("/:fomentoId/pagos/:id", requirePermiso("FOMENTO_ELIMINAR"), asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const fomentoId = String(req.params.fomentoId);
   await inTransaction(async (client) => {
