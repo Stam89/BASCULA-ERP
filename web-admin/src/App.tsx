@@ -9140,7 +9140,12 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     const marca = products.find((p) => p.id === brandProductId);
     const inventoryProductId = getInventoryProductForBrand(marca?.name || "") || brandProductId;
     const rawProductId = rawBackingProductId(inventoryProductId);
-    const terminadoQq = stockPropioPorProducto(inventoryProductId);
+    // Los bultos ya llenos de las marcas de ese arroz (Conejo → Corriente) también respaldan, igual que en el servidor:
+    // sin esto una marca con bultos llenos salía en 0 y la pantalla no dejaba pedirla aunque había arroz.
+    const idsTerminado = [inventoryProductId, ...products
+      .filter((p) => p.product_type === "PACKAGED_GOOD" && p.id !== inventoryProductId && getInventoryProductForBrand(p.name) === inventoryProductId)
+      .map((p) => p.id)];
+    const terminadoQq = round2(idsTerminado.reduce((a, id) => a + Math.max(0, stockPropioPorProducto(id)), 0));
     // Subproducto (arrocillo, polvillo, rechazo): lo respalda la cáscara del socio por su rendimiento (igual que el servidor).
     const codigoInv = products.find((p) => p.id === inventoryProductId)?.code ?? "";
     const rendSub = !rawProductId ? rendimientoSubproducto[codigoInv] : undefined;
@@ -9155,6 +9160,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       .reduce((sum, item) => sum + Number(item.quantity), 0));
     return {
       inventoryProductId,
+      idsTerminado,
       rawProductId,
       rawProductName: rawProductId ? products.find((p) => p.id === rawProductId)?.name ?? "Cáscara"
         : rendSub != null ? `cáscara (${cascaraTotalQq.enReal()} QQ × ${(rendSub * 100).toFixed(1)}% al pilarla)` : null,
@@ -18674,7 +18680,7 @@ Motivo (obligatorio):`, ""));
                       <div style={{ marginTop: 4, display: "grid", gap: 2 }}>
                         {(() => {
                           // Por separado: lo que está AQUÍ en la piladora y lo que está ALLÁ (selección / envejecido).
-                          const filasProd = stockVenta.filter((st) => st.product_id === respaldo.inventoryProductId && st.ownership === "OWNED");
+                          const filasProd = stockVenta.filter((st) => respaldo.idsTerminado.includes(st.product_id ?? "") && st.ownership === "OWNED");
                           const aqui = round2(filasProd.filter((st) => st.warehouse_type !== "EXTERNO").reduce((a2, st) => a2 + Number(st.quantity), 0));
                           const alla = new Map<string, number>();
                           for (const st of filasProd.filter((x) => x.warehouse_type === "EXTERNO")) {

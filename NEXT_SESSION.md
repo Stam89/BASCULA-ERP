@@ -9,6 +9,7 @@ Actualizado: 2026-11-04
 - **Pedido para compartir**: `.pedidoLineas` en grilla con clase, sin «/ QQ». En el celular toda grilla con `grid-template-columns` en línea pasa a una sola columna y las tablas de un modal se dibujan como bloque: para columnas fijas, usar una clase.
 - **Fechas**: Fomentos proponía la fecha UTC (de noche, mañana): ahora `hoyLocal()`. `useRecargaAlCambiarDia`: si cambió el día y nadie tocó la app hoy, recarga (con servidor arriba).
 - **Índices**: migración 20261136 para cuando crezcan los datos.
+- **Pedidos y sacos**: un saco en 0 nunca bloquea (al preparar queda en negativo y sale en Sacos por comprar; simulacro `pedido_saco_negativo`). El bloqueo real era la cobertura de la pantalla: `respaldoDeMarca` no contaba los bultos llenos de las marcas (`idsTerminado`), el servidor sí. Datos: Lira Azul está desactivada (no sale para pedir) y Lira Verde no tiene sacos en el catálogo (`sin_saco`, no se descuentan).
 - **Barrido de pantallas**: recorrer menú y pestañas midiendo controles fuera de la vista encontró todo lo de celular y tablet. Para probar con permisos limitados: usuarios inventados en una COPIA con clave propia; nunca firmar sesión de una persona real ni tocar el servidor real con eso.
 
 ## Cambio anterior: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
