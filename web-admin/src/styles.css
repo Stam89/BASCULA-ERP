@@ -4602,6 +4602,8 @@ textarea::placeholder {
 .orderItemsGrid__infoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 16px; }
 .orderItemsGrid__vacio { padding: 20px 12px !important; text-align: center; color: #9ca3af; font-weight: 600; }
 .orderItemsGrid__tabla tfoot td { background: #f0fdf4; font-weight: 800; padding: 8px 10px; }
+/* Tarjeta del pedido para compartir. Va aquí y no en línea: en el celular toda grilla en línea pasa a una sola columna. */
+.pedidoLineas { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 18px; align-items: center; font-size: 12.5px; margin-top: 10px; }
 @media (max-width: 1400px) {
   /* Tablet y portátil: la fila de captura cabe sin deslizar; en el celular va en tarjetas. */
   .orderItemsGrid__tabla { min-width: 0; }

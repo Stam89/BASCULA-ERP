@@ -135,7 +135,7 @@ export function PedidoCompartirModal({ pedido, negocio, titulo, onClose, avisar 
           <div style={{ fontSize: 12.5, color: "#475569", marginTop: 2 }}>🧾 Pedido {pedido.numero}</div>
           <div style={{ fontSize: 13, marginTop: 8 }}>Cliente: <strong>{pedido.cliente}</strong></div>
           {/* En grilla y no en tabla: en el celular las tablas se dibujan como bloque y las columnas se pegaban («40$1,920.00»). */}
-          <div className="pedidoLineas" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto auto", columnGap: 18, alignItems: "center", fontSize: 12.5, marginTop: 10 }}>
+          <div className="pedidoLineas">
             <span style={cabecera}>Producto</span>
             <span style={{ ...cabecera, textAlign: "right" }}>QQ</span>
             <span style={{ ...cabecera, textAlign: "right" }}>Subtotal</span>
