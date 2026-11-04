@@ -27,7 +27,8 @@ try {
   const mov = async (movement, category, amount, txt) => exigir(await api("POST", "/cash/movements", { cash_register_id: caja.id, movement, category, amount, description: txt }, matriz, SOBRE), txt);
   const catGasto = "GAS";
   await mov("EXPENSE", catGasto, 100, `1. gasto operativo $100 (${catGasto})`);
-  await mov("EXPENSE", "PAGO_MANO_OBRA", 50, "2. pago de mano de obra $50");
+  // La mano de obra la registra Nómina (a mano la categoría está desactivada): en la COPIA se inserta igual que ese flujo.
+  await q("INSERT INTO cash_movements (cash_register_id, movement, category, amount, description) VALUES ($1,'EXPENSE','PAGO_MANO_OBRA',50,'2. pago de mano de obra $50')", [caja.id]);
   // Un pago entre socios lo registra Por Pagar (a mano ya no se puede): en la COPIA se inserta igual que ese flujo.
   await q("INSERT INTO cash_movements (cash_register_id, movement, category, amount, description) VALUES ($1,'EXPENSE','PAGO_ENTRE_SOCIOS',40,'3. pago entre socios $40 (no es gasto)')", [caja.id]);
   const errado = await mov("EXPENSE", catGasto, 30, "4. gasto registrado por error $30");

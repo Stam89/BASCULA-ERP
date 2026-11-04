@@ -69,6 +69,8 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   const q = async (sql, p) => (await c.query(sql, p)).rows;
   const admin = (await q("SELECT u.id, u.name, u.username, u.role_id, r.name AS role_name FROM users u JOIN roles r ON r.id=u.role_id WHERE r.name='ADMINISTRADOR' LIMIT 1"))[0];
   const matriz = (await q("SELECT id FROM accionistas WHERE tipo='MATRIZ' LIMIT 1"))[0].id;
+  // Corte del arranque vigente: lo mueve el «Borrar datos de prueba», no es una fecha fija.
+  const arranque = (await q("SELECT COALESCE(corte_arranque::text, '2026-10-14') c FROM app_settings WHERE socio_id IS NULL LIMIT 1"))[0]?.c ?? "2026-10-14";
   const token = signToken({ id: admin.id, username: admin.username, name: admin.name, role_id: admin.role_id, role_name: admin.role_name, allowed_modules: null });
   const api = async (method, path, body, acc = matriz, extra = {}) => {
     const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, {
@@ -87,7 +89,7 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   };
   const cerrar = async () => { await new Promise((r) => server.close(r)); await c.end(); await pool.end().catch(() => {}); };
   const apiComo = (userId, username, nombre, acc = matriz) => { const tk = signToken({ id: userId, username, name: nombre, role_id: null, role_name: null, allowed_modules: null }); return async (method, path, body) => { const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, { method, headers: { "content-type": "application/json", authorization: `Bearer ${tk}`, "x-accionista-id": acc }, body: body === undefined ? undefined : JSON.stringify(body) }); const t = await r.text(); let d = t; try { d = JSON.parse(t); } catch {} return { status: r.status, ok: r.ok, data: d }; }; };
-  return { api, apiComo, descargar, q, matriz, admin, cerrar, c };
+  return { api, apiComo, descargar, q, matriz, arranque, admin, cerrar, c };
 }
 
 let fallas = 0; const lineas = [];

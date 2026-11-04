@@ -6737,6 +6737,34 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjh-nueva__tags .cjh-combo { flex: 1; min-width: 0; }
 .cjh-nueva__tags input { padding: 4px 6px; font-size: 12px; border-color: #e2e8f0; }
 .cjh-leyenda { display: block; margin-top: 2px; color: #94a3b8; }
+/* Hoja en el celular: cada movimiento es una tarjeta, sin mover de lado para llegar al monto (2026-11-03). */
+@media (max-width: 700px) {
+  .cjh-tabla { display: block; min-width: 0; }
+  .cjh-tabla thead { display: none; }
+  .cjh-tabla tbody, .cjh-tabla tfoot { display: block; }
+  .cjh-tabla tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 8px; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
+  .cjh-tabla td, .cjh-tabla tbody tr:nth-child(even):not(.cjh-nueva) td { display: block; border: 0; padding: 0; background: transparent !important; width: auto; min-width: 0; }
+  .cjh-tabla td:empty { display: none; }
+  .cjh-tabla td.cjh-fecha { grid-column: 1 / -1; font-size: 11.5px; color: #64748b; }
+  .cjh-tabla tfoot tr { background: #e2e8f0; }
+  .cjh-tabla tfoot td { position: static; }
+  .cjh-tabla tbody tr:not(.cjh-inicial) td:nth-child(2) { grid-column: 1 / -1; }
+  .cjh-tabla td.cjh-acc { grid-column: 1 / -1; width: auto; }
+  .cjh-tabla .num { text-align: left; }
+  .cjh-tabla td.cjh-entra:not(:empty)::before { content: "Entró "; font-weight: 400; color: #64748b; }
+  .cjh-tabla td.cjh-sale:not(:empty)::before { content: "Salió "; font-weight: 400; color: #64748b; }
+  .cjh-tabla td.cjh-saldo:not(:empty)::before { content: "Saldo "; font-weight: 400; color: #64748b; }
+  .cjh-inicial td:first-child, .cjh-tabla tfoot td:first-child { grid-column: 1 / -1; }
+  .cjh-nueva { background: #fffbeb; }
+  .cjh-nueva td.cjh-fecha { display: none; }
+  .cjh-nueva td:nth-child(3)::before { content: "Entró"; }
+  .cjh-nueva td:nth-child(4)::before { content: "Salió"; }
+  .cjh-nueva td:nth-child(3)::before, .cjh-nueva td:nth-child(4)::before { display: block; font-size: 11px; font-weight: 700; color: #64748b; }
+  .cjh-nueva input { font-size: 16px; padding: 8px; }
+  .cjh-nueva__tags input { font-size: 14px; }
+  .cjh-nueva td.cjh-acc { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+  .cjh-nueva td.cjh-acc .cjh-guardar { flex: 1; padding: 9px; font-size: 14px; }
+}
 /* Caja: barra de arriba (Resumen global + formulario completo como botón chico) */
 .cjx-barra { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 10px 0; }
 .cjx-barra__res { display: inline-flex; align-items: center; gap: 6px; padding: 9px 14px; border-radius: 10px; border: 1px solid #c7d2fe; background: #eef2ff; color: #3730a3; font-weight: 700; cursor: pointer; }
@@ -6761,8 +6789,6 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjh-nueva td.cjh-n { color: #b45309; font-weight: 800; }
 .cjh-guardar { background: #0f766e !important; color: #fff !important; border-color: #0f766e !important; font-weight: 700; padding: 5px 10px !important; }
 .cjh-tabla tfoot td { position: sticky; bottom: 0; background: #e2e8f0; font-weight: 800; color: #0f172a; border-color: #cbd5e1; }
-.cjh-tabla th:nth-child(3), .cjh-tabla td:nth-child(3) { min-width: 230px; }
-.cjh-tabla th:nth-child(4), .cjh-tabla td:nth-child(4) { min-width: 170px; }
 .cjh-combo { position: relative; }
 .cjh-lista { position: fixed; z-index: 60; margin: 0; padding: 4px; list-style: none; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, .16); max-height: 260px; overflow: auto; }
 .cjh-lista li { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #1e293b; }

@@ -19,6 +19,7 @@ import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
 import { REF_BORRADOR_CASCARA, sincronizarCascaraBorrador, sincronizarInventarioBorrador, tunelesDelBorrador } from "../../services/borrador-pilado-inventario.js";
 import { fechaPiladoValida, fecharProcesoEn } from "../../services/fecha-pilado.js";
+import { leerCorteArranque } from "../../utils/corte-mes.js";
 
 export const processingRouter = Router();
 
@@ -545,7 +546,7 @@ async function exigirLoteDelProceso(client: PoolClient, processingBatchId: strin
 }
 
 export async function cerrarProcesoProduccion(processingBatchId: string, body: FinishProductionInput) {
-  const fechaPilado = fechaPiladoValida(body.fecha_pilado);
+  const fechaPilado = fechaPiladoValida(body.fecha_pilado, await leerCorteArranque(pool));
   return inTransaction(async (client) => {
     const batchResult = await client.query(
       `SELECT b.*, l.farmer_id AS lot_farmer_id, l.is_maquila AS lot_is_maquila,
@@ -808,10 +809,10 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
-         (accionista_id, reference_type, reference_id, description, amount, balance)
-         VALUES ($1, 'pilado_service', $2, $3, $4, $4)
+         (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
+         VALUES ($1, $5, 'pilado_service', $2, $3, $4, $4)
          RETURNING id`,
-        [matrizId, maquilaOrderId, desc, serviceAmount]
+        [matrizId, maquilaOrderId, desc, serviceAmount, esDeOtroAccionista ? null : farmerId]
       );
       receivableId = receivable.rows[0].id;
 

@@ -18,7 +18,7 @@ try {
         WHERE p.accionista_id IN ($1,$2) AND r.accionista_id IN ($1,$2) AND p.accionista_id <> r.accionista_id)`;
   await q(`UPDATE accounts_payable SET balance=0, status='PAID' WHERE ${ENTRE}`, [stalyn, rovinson]);
   await q(`UPDATE accounts_receivable SET balance=0, status='PAID' WHERE ${ENTRE}`, [stalyn, rovinson]);
-  exigir(await api("POST", "/saldos-iniciales/cxp", { corte: "2026-10-14", contraparte_tipo: "SOCIO", contraparte_id: rovinson, monto: 300, detalle: "SIM deuda con ROVINSON" }, stalyn), "0b. STALYN le debe $300 a ROVINSON");
+  exigir(await api("POST", "/saldos-iniciales/cxp", { corte: S.arranque, contraparte_tipo: "SOCIO", contraparte_id: rovinson, monto: 300, detalle: "SIM deuda con ROVINSON" }, stalyn), "0b. STALYN le debe $300 a ROVINSON");
   const cli = exigir(await api("POST", "/customers", { full_name: "SIM CLIENTE CRUCE" }, stalyn), "0c. cliente de STALYN");
   const ar = (await q("INSERT INTO accounts_receivable (accionista_id, customer_id, reference_type, description, amount, balance, status) VALUES ($1,$2,'sales','SIM venta',120,120,'CONFIRMED') RETURNING id", [stalyn, cli.id]))[0].id;
   const s0 = await saldoR();

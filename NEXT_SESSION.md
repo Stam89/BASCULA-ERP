@@ -2,7 +2,18 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 💼 Nómina desde el proceso guardado (2026-11-03)
+## Último cambio: 🔍 Arreglos de la auditoría, listos para empezar de cero (2026-11-03)
+- Pedido del dueño: arreglar la app sin tocar los valores (van a arrancar de cero con «Borrar datos de prueba»). Simulacro `arreglos_auditoria`.
+- **Balance**: suma `fomentos_por_cobrar` (capital de la cartera activa, sin interés) y avisa `inventario_detalle.qq_sin_costo` (QQ en $0 por falta de precio de referencia).
+- **Estado de Resultados**: `ingresos.otros_ingresos` (categorías de tipo INGRESO hechas a mano, sobrante de arqueo y retención de báscula; fuera lo de `INGRESOS_NO_OPERATIVOS`) e `intereses_fomentos` (fomentos cerrados en el período). En la Matriz el combustible ya no se cuenta dos veces (está en sus gastos de Caja): `NO_ES_MATRIZ`.
+- **Arranque**: ya no es fijo. `app_settings.corte_arranque` lo pone el borrado (día anterior); `leerCorteArranque`. `CORTE_ARRANQUE` queda como respaldo. El borrado también reinicia «Contar tickets desde» (`bascula_config`).
+- **Transporte**: el parte de flete de báscula lleva el día del viaje (`fechaDeTicket`) y sugiere el último operador del carro (sin operador el viaje no llegaba a la nómina); «del grupo» en resultados = accionistas (los agricultores son terceros); las notas avisan partes sin facturar.
+- **Otros**: la llave maestra se oculta en la auditoría (y la migración 20261133 tapa la que había); fechas de noche en hora de Ecuador (`toDateOnly`, despachos, lotes, reportes); la Por Cobrar del servicio de pilada queda con `farmer_id`; socios pueden usar RETIRO_BANCO; en la hoja, DEVOLUCION_FOMENTO y COBRO_MAQUILA abren el formulario (ahí se enlazan). Hoja de Caja en tarjetas en el celular.
+- Sin cambiar a propósito: `npm audit fix` toca 138 paquetes de Firebase y no se puede probar sin la tablet real; zod pide cambio de versión mayor.
+- Resultado: en base recién borrada pasan 100 de 116 simulacros (los otros piden datos previos); con copia de datos actuales, 97 y ninguna falla nueva; 13 de esas fallas son por datos y pasan en base limpia o con respaldo viejo. Pantallas vacías revisadas: sin errores.
+- Para probar «desde cero»: restaurar copia, correr `vaciarDatosDePrueba`, reponer tickets y agricultores (lo que baja Firebase) y apuntar `DATABASE_URL` a esa base antes del simulacro.
+
+## Cambio anterior: 💼 Nómina desde el proceso guardado (2026-11-03)
 - «Guardar Proceso» ya crea el pago de pilador, estibador y polvillo: `sincronizarNominaBorrador` (labor.ts), filas `worker_payments` con reference_type `milling_draft` (reference_id = túnel). Los nombres van en `report.pilador_name / estibador_name / polvillo_worker_name`. Sin nombre no hay fila (la pantalla avisa).
 - Cada guardado ACTUALIZA la fila PENDING (no suma otra). Lo PAID se resta por ROL: queda pendiente solo la diferencia. Bajar lo guardado por debajo de lo pagado no crea saldo negativo.
 - Al finalizar, `createProductionWorkerPayments` borra lo pendiente del borrador (conserva nombre y descuento), pasa lo PAID a `processing_batch` (así anular lo frena) y crea solo lo que falta. Descartar con algo PAID = 409.

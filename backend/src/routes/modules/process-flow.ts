@@ -22,6 +22,7 @@ import { getRates } from "./labor.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
 import { diaSecadorSql, esDiaPagableSecador } from "../../utils/secador-workday.js";
 import { pesosPorTiempoCompartido } from "../../utils/reparto-combustible.js";
+import { fechaEc, hoyEc } from "../../utils/fechas.js";
 
 export const processFlowRouter = Router();
 
@@ -215,7 +216,7 @@ export async function autoGenerarPagoSecador(client: PoolClient, dryingReportId:
   if (String(rep.status) !== "COMPLETED" && rep.dry_start_at == null) return;
   const worker = String(rep.operator_name ?? "").trim();
   if (!worker) return; // sin secador asignado: no hay a quién pagar.
-  const workDate = toDateOnly(rep.work_date) ?? new Date().toISOString().slice(0, 10);
+  const workDate = toDateOnly(rep.work_date) ?? hoyEc();
 
   // El dueño cubre guardianía y secado los sábados y domingos. El reporte y el
   // proceso industrial se conservan intactos; únicamente se impide la nómina.
@@ -342,8 +343,10 @@ async function recontarJornadasSecador(client: PoolClient, dias: Array<{ worker:
 // (del body), o null si no hay fecha válida. Para fechar la nómina de cuadrilla.
 function toDateOnly(value: unknown): string | null {
   if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.toISOString().slice(0, 10);
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : fechaEc(value);
   const s = String(value).trim();
+  // Una hora con zona («…T02:30:00Z») es de noche en Ecuador: el día es el de aquí, no el de Greenwich.
+  if (/T.*(Z|[+-]\d{2}(:?\d{2})?)$/.test(s) && !Number.isNaN(new Date(s).getTime())) return fechaEc(new Date(s));
   return s ? s.slice(0, 10) : null;
 }
 
@@ -2143,7 +2146,7 @@ async function createDryingReport(
 
   // El código del lote se propone automático (con sufijo -S/-P según el servicio),
   // pero se puede escribir otro.
-  const opDate = toDateOnly(input.filled_at) ?? toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
+  const opDate = toDateOnly(input.filled_at) ?? toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? hoyEc();
   const lotCode = (input.lot_code ?? "").trim() || await nextSequentialLotCode(client, opDate, lotOperationType);
   const dup = await client.query("SELECT 1 FROM lots WHERE lot_code = $1", [lotCode]);
   if (dup.rowCount) throw new ApiError(409, `Ya existe un lote con el código "${lotCode}".`);
@@ -2285,7 +2288,7 @@ async function createDryingReport(
     // Solo al FINALIZAR el tendal se paga a la cuadrilla y se marca el vaciado a
     // bodega. Mientras está "En proceso" (multi-día) NO se paga. El empaque de
     // recepción define el modo (SACOS → Ensacado; si no, A granel).
-    const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? new Date().toISOString().slice(0, 10);
+    const wd = toDateOnly(input.dry_end_at) ?? toDateOnly(input.dry_start_at) ?? hoyEc();
     await registrarPagoCuadrillaTendal(client, {
       dryingReportId: tunnel.rows[0].id,
       lotCode,
@@ -2516,7 +2519,7 @@ export async function updateDryingReport(
   // registra el cobro y el vaciado a bodega.
   if (String(updated.rows[0].dry_method ?? "").toUpperCase() === "TENDAL" && status === "COMPLETED") {
     const lc = await client.query("SELECT lot_code, accionista_id FROM lots WHERE id = $1", [updated.rows[0].lot_id]);
-    const wd = toDateOnly(dryEndAt) ?? toDateOnly(updated.rows[0].dry_start_at) ?? new Date().toISOString().slice(0, 10);
+    const wd = toDateOnly(dryEndAt) ?? toDateOnly(updated.rows[0].dry_start_at) ?? hoyEc();
     await registrarPagoCuadrillaTendal(client, {
       dryingReportId: dryingId,
       lotCode: lc.rows[0]?.lot_code ?? "",

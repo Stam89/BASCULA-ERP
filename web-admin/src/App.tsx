@@ -1309,7 +1309,7 @@ type FinanzasData = {
     activo: {
       corriente: {
         efectivo: number; bancos: number; cuentas_por_cobrar: number;
-        anticipos_agricultores: number; inventario: number; total: number;
+        anticipos_agricultores: number; fomentos_por_cobrar?: number; inventario: number; total: number;
         inventario_detalle: { materia_prima: number; producto_terminado: number; subproductos: number; costo_qq_materia_prima: number; costo_qq_terminado: number };
       };
       no_corriente: { activos_fijos: number; depreciacion_acumulada: number; total: number };
@@ -1320,7 +1320,7 @@ type FinanzasData = {
     cuadre: number;
   };
   resultados: {
-    ingresos: { ventas: number; servicio_pilado: number; total: number };
+    ingresos: { ventas: number; servicio_pilado: number; otros_ingresos?: number; intereses_fomentos?: number; total: number };
     costo_ventas: { mercaderia_vendida: number; combustible_secado: number; servicios_recibidos?: number; total: number };
     utilidad_bruta: number; margen_bruto_pct: number;
     gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
@@ -2076,6 +2076,8 @@ const CATEGORIA_MATERIALES = "MATERIALES_CONSUMIBLES";
 const CASH_REUSE: Record<string, "pilado" | "fomento" | "agricultor"> = {
   PAGO_SERVICIO_PILADO: "pilado",
   FOMENTOS: "fomento",
+  // Lo que un agricultor devuelve de su fomento se registra en Fomentos: ahí baja su deuda (a mano en Caja no bajaba).
+  DEVOLUCION_FOMENTO: "fomento",
   PAGO_AGRICULTOR: "agricultor"
 };
 const LB_TO_KG = 0.45359237;
@@ -18002,7 +18004,7 @@ Motivo (obligatorio):`, ""));
 
               <label style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", margin: "8px 0 4px" }}>
                 <span style={{ fontWeight: 700 }}>📅 ¿Qué día se piló?</span>
-                <input type="date" value={fechaPilado} min="2026-10-15" max={hoyLocal()}
+                <input type="date" value={fechaPilado} max={hoyLocal()}
                   onChange={(e) => setFechaPilado(e.target.value || hoyLocal())} style={{ maxWidth: 170 }} />
                 {fechaPilado !== hoyLocal() && (
                   <small style={{ color: "#b45309", fontWeight: 600 }}>Producción de un día anterior: queda con fecha {fechaPilado.split("-").reverse().join("/")}</small>
@@ -20468,7 +20470,7 @@ Motivo (obligatorio):`, ""));
                           sugerencias={[...sug].filter((x) => x.length >= 2).slice(0, 1500)}
                           mixto={dashboard.current_cash_register?.tipo === "MIXTO"}
                           puedeAnular={canAnular}
-                          esCompleja={(codigo, mov) => (mov === "INCOME" && (codigo === "VENTA_DETALLE" || codigo === "VENTA_MAYOR"))
+                          esCompleja={(codigo, mov) => (mov === "INCOME" && (codigo === "VENTA_DETALLE" || codigo === "VENTA_MAYOR" || codigo === "COBRO_MAQUILA" || CASH_REUSE[codigo] === "fomento"))
                             || (mov === "EXPENSE" && (codigo === "MANTENIMIENTO_EQUIPO" || codigo === "REPUESTOS"
                             || codigo === "COMPRA_ACTIVO_FIJO" || codigo === CATEGORIA_MATERIALES || esCategoriaSacos(codigo)))}
                           destinos={destinosHoja}
@@ -21207,7 +21209,7 @@ Motivo (obligatorio):`, ""));
                               <div className="alertBox" style={{ marginTop: 6, fontSize: 12.5, lineHeight: 1.5 }}>
                                 Para pagarle a un agricultor hay que elegir <b>qué se le paga</b> (así baja su deuda). ¿No aparece?
                                 <br />• Si es plata <b>adelantada</b> por cáscara que va a entregar → <button type="button" className="vdTarifaLink" onClick={() => setCajaSubTab("anticipo")}>💸 Anticipos</button>
-                                <br />• Si se le debía <b>desde antes del 15/10</b> → agrégalo en {isAdmin ? <button type="button" className="vdTarifaLink" onClick={() => irATarjeta("📥 Saldos iniciales")}>⚙️ Configuración › 💰 Contabilidad › 📥 Saldos iniciales</button> : "Configuración › Contabilidad › Saldos iniciales (lo hace el administrador)"} (Por pagar) y vuelve aquí
+                                <br />• Si se le debía <b>desde antes del arranque</b> → agrégalo en {isAdmin ? <button type="button" className="vdTarifaLink" onClick={() => irATarjeta("📥 Saldos iniciales")}>⚙️ Configuración › 💰 Contabilidad › 📥 Saldos iniciales</button> : "Configuración › Contabilidad › Saldos iniciales (lo hace el administrador)"} (Por pagar) y vuelve aquí
                                 <br />• Si es de una cáscara <b>de hoy</b> → primero hazle su liquidación
                               </div>
                             )}

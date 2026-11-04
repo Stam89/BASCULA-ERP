@@ -26,7 +26,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 import { nextCode } from "../../utils/codes.js";
-import { CORTE_ARRANQUE, esCorteValido } from "../../utils/corte-mes.js";
+import { esCorteValido, leerCorteArranque } from "../../utils/corte-mes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 
 export const saldosInicialesRouter = Router();
@@ -38,9 +38,10 @@ const fechaSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha inválida (AA
 /** 2026-09-30 → 30/09/2026 */
 const fechaTexto = (f: string) => f.split("-").reverse().join("/");
 
-function validarCorte(corte: string): void {
-  if (!esCorteValido(corte)) {
-    throw new ApiError(400, `El corte debe ser el último día del mes o el día del arranque (${fechaTexto(CORTE_ARRANQUE)}).`);
+async function validarCorte(corte: string): Promise<void> {
+  const arranque = await leerCorteArranque(pool);
+  if (!esCorteValido(corte, arranque)) {
+    throw new ApiError(400, `El corte debe ser el último día del mes o el día del arranque (${fechaTexto(arranque)}).`);
   }
   const hoy = new Date().toLocaleDateString("en-CA", { timeZone: ZONA });
   if (corte > hoy) throw new ApiError(400, "El corte no puede ser una fecha futura.");
@@ -126,7 +127,7 @@ saldosInicialesRouter.get("/", asyncRoute(async (req, res) => {
     // Corte sugerido: el último día del mes anterior (hora de Ecuador).
     pool.query(`SELECT to_char(date_trunc('month', now() AT TIME ZONE '${ZONA}')::date - 1, 'YYYY-MM-DD') AS corte`)
   ]);
-  res.json({ corte_sugerido: corte.rows[0].corte, corte_arranque: CORTE_ARRANQUE, registros: filas.rows });
+  res.json({ corte_sugerido: corte.rows[0].corte, corte_arranque: await leerCorteArranque(pool), registros: filas.rows });
 }));
 
 // ── Catálogos para elegir (clientes, agricultores, proveedores, socios, productos)
@@ -171,7 +172,7 @@ async function registrarCuenta(
   accionistaId: string,
   userId: string | null
 ) {
-  validarCorte(body.corte);
+  await validarCorte(body.corte);
   if (body.fecha_deuda && body.fecha_deuda > body.corte) {
     throw new ApiError(400, "La fecha de la deuda no puede ser posterior al corte.");
   }
@@ -253,7 +254,7 @@ const inventarioSchema = z.object({
 saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
   const { accionistaId, userId } = contexto(req as AuthenticatedRequest);
   const body = inventarioSchema.parse(req.body);
-  validarCorte(body.corte);
+  await validarCorte(body.corte);
   const out = await inTransaction(async (client) => {
     const prod = await client.query("SELECT id, code, name, product_type FROM products WHERE id = $1", [body.product_id]);
     if (!prod.rows[0]) throw new ApiError(404, "Producto no encontrado");
@@ -340,7 +341,7 @@ const anticipoSchema = z.object({
 saldosInicialesRouter.post("/anticipos", asyncRoute(async (req, res) => {
   const { accionistaId, userId } = contexto(req as AuthenticatedRequest);
   const body = anticipoSchema.parse(req.body);
-  validarCorte(body.corte);
+  await validarCorte(body.corte);
   if (body.fecha_deuda && body.fecha_deuda > body.corte) {
     throw new ApiError(400, "La fecha del anticipo no puede ser posterior al corte.");
   }

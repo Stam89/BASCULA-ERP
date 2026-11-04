@@ -5,6 +5,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 import { CATEGORIAS_NO_OPERATIVAS } from "../../services/resultado-mensual.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const reportsRouter = Router();
 
@@ -15,12 +16,8 @@ function parseRange(query: unknown): { from: string; to: string } {
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   });
   const { from, to } = schema.parse(query);
-  const today = new Date();
-  const firstOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-  return {
-    from: from ?? firstOfMonth.toISOString().slice(0, 10),
-    to: to ?? today.toISOString().slice(0, 10)
-  };
+  const hoy = hoyEc();
+  return { from: from ?? `${hoy.slice(0, 8)}01`, to: to ?? hoy };
 }
 
 // Cada informe es INDIVIDUAL del accionista activo (el del menú lateral, que

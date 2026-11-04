@@ -9,6 +9,11 @@ describe("esCorteValido", () => {
     expect(esCorteValido("2026-10-13")).toBe(false);
     expect(esCorteValido("2026-11-14")).toBe(false);
   });
+  it("un arranque nuevo a mitad de mes también vale", () => {
+    expect(esCorteValido("2026-11-14", "2026-11-14")).toBe(true);
+    expect(esCorteValido("2026-10-14", "2026-11-14")).toBe(false);
+    expect(esCorteValido("2026-11-30", "2026-11-14")).toBe(true);
+  });
 });
 
 describe("esFinDeMes", () => {

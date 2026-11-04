@@ -6,8 +6,10 @@ import { pool } from "../db/pool.js";
 import { ApiError } from "../http/error-handler.js";
 
 // Crea un Parte Diario originado en Báscula (origen='bascula'). El parte guarda
-// el cliente enlazado y su nombre historico, operador NULL y la referencia en
-// observaciones. Valida cliente y maquina.
+// el cliente enlazado y su nombre historico y la referencia en observaciones. El
+// operador sale como en el formulario: el último que manejó la máquina o el de su
+// ficha (se puede cambiar); sin operador, ese viaje no llegaría a su nómina.
+// Valida cliente y maquina.
 export async function crearParteDesdeBascula(input: {
   fecha?: string | null; cliente_id: string; maquina_id: string; qq: number; referencia: string; origen_uid?: string; created_by?: string | null;
 }) {
@@ -17,7 +19,12 @@ export async function crearParteDesdeBascula(input: {
   if (!maq) throw new ApiError(404, "Máquina/vehículo no encontrado");
   const parte = (await pool.query(
     `INSERT INTO campo_partes (fecha, activo_id, operador, cliente, cliente_id, qq, observaciones, estado, origen, origen_uid, created_by)
-     VALUES (COALESCE($1::date, CURRENT_DATE), $2, NULL, $3, $4, $5, $6, 'por_cobrar', 'bascula', $8, $7)
+     VALUES (COALESCE($1::date, CURRENT_DATE), $2,
+             COALESCE((SELECT p.operador FROM campo_partes p
+                        WHERE p.activo_id = $2 AND NULLIF(btrim(p.operador), '') IS NOT NULL
+                        ORDER BY p.fecha DESC, p.created_at DESC LIMIT 1),
+                      (SELECT NULLIF(btrim(a.operador), '') FROM campo_activos a WHERE a.id = $2)),
+             $3, $4, $5, $6, 'por_cobrar', 'bascula', $8, $7)
      ON CONFLICT DO NOTHING
      RETURNING *`,
     [input.fecha ?? null, input.maquina_id, cli.nombre, input.cliente_id, input.qq, input.referencia, input.created_by ?? null, input.origen_uid ?? input.referencia]
@@ -32,6 +39,8 @@ export async function crearParteDesdeBascula(input: {
 // romana no se debe frenar por esto).
 export async function dispararFleteInternoBascula(input: {
   placa?: string | null; accionistaId: string; isMaquila: boolean; quintals: number; ticketNumber?: string | null; sourceId: string; createdBy?: string | null;
+  /** Día del viaje (el del ticket): el operador cobra por día y el ticket se puede ingresar días después. */
+  fecha?: string | null;
 }): Promise<void> {
   try {
     // Maquila = servicio de pilado de la matriz: no es un flete cobrable a socio.
@@ -67,7 +76,7 @@ export async function dispararFleteInternoBascula(input: {
     const dup = await pool.query("SELECT 1 FROM campo_partes WHERE origen_uid = $1 LIMIT 1", [origenUid]);
     if (dup.rowCount) return;
 
-    await crearParteDesdeBascula({ cliente_id: cli.id, maquina_id: veh.id, qq: Number(input.quintals), referencia, origen_uid: origenUid, created_by: input.createdBy ?? null });
+    await crearParteDesdeBascula({ fecha: input.fecha ?? null, cliente_id: cli.id, maquina_id: veh.id, qq: Number(input.quintals), referencia, origen_uid: origenUid, created_by: input.createdBy ?? null });
   } catch (err) {
     console.warn("[campo/bascula] no se pudo crear el flete interno:", (err as Error).message);
   }

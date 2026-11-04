@@ -164,7 +164,7 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   const preservables = Object.keys(CATALOGOS_PRESERVADOS);
   const existing = await db.query(
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
-    [[...WIPE_TABLES, ...preservables, "insumos", "sack_inventory", "tunnel_status", "bajada_carro_config"]]
+    [[...WIPE_TABLES, ...preservables, "insumos", "sack_inventory", "tunnel_status", "bajada_carro_config", "bascula_config"]]
   );
   const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
   const tables = WIPE_TABLES.filter((t) => present.has(t));
@@ -232,6 +232,20 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   if (present.has("bajada_carro_config")) {
     await db.query(
       `UPDATE bajada_carro_config SET desde = (now() AT TIME ZONE 'America/Guayaquil')::date, desde_numero = NULL, updated_at = now()`
+    );
+  }
+
+  // Empezar de cero es un arranque nuevo: los saldos iniciales van al cierre del día anterior, aunque sea a mitad de mes.
+  await db.query(
+    `UPDATE app_settings SET corte_arranque = (now() AT TIME ZONE 'America/Guayaquil')::date - 1 WHERE socio_id IS NULL`
+  );
+
+  // Los tickets vuelven a bajar de Firebase: si «Contar tickets desde» quedara en un número viejo, los ya pasados
+  // reaparecerían como «por ingresar». Igual que la bajada: arranca el día del borrado y el admin lo puede mover.
+  if (present.has("bascula_config")) {
+    await db.query(
+      `INSERT INTO bascula_config (id, desde, desde_numero, updated_at) VALUES (1, (now() AT TIME ZONE 'America/Guayaquil')::date, NULL, now())
+       ON CONFLICT (id) DO UPDATE SET desde = EXCLUDED.desde, desde_numero = NULL, updated_at = now()`
     );
   }
 

@@ -19,7 +19,7 @@ try {
   const oso25 = async () => Number((await q("SELECT COALESCE(SUM(quantity),0)::float s FROM inventory_movements WHERE product_id=$1 AND accionista_id=$2 AND sack_weight_lb=25", [oso, acc]))[0].s);
   const base0 = oso25();
 
-  exigir(await api("POST", "/saldos-iniciales/inventario", { corte: "2026-10-14", product_id: oso, cantidad: 5, sack_weight_lb: 25, detalle: "20 bultos de 25 lb (@ arroba)" }, acc), "1. saldo inicial: 20 bultos de Oso 25 lb (5 QQ)");
+  exigir(await api("POST", "/saldos-iniciales/inventario", { corte: S.arranque, product_id: oso, cantidad: 5, sack_weight_lb: 25, detalle: "20 bultos de 25 lb (@ arroba)" }, acc), "1. saldo inicial: 20 bultos de Oso 25 lb (5 QQ)");
   const b0 = await base0;
   check(cerca(await oso25(), b0 + 5), "2. el inventario de Oso guarda el peso del saco (25 lb)", await oso25());
   const emp = exigir(await api("GET", "/inventory/empacado", undefined, acc), "3. Inventario › empacado por presentación");

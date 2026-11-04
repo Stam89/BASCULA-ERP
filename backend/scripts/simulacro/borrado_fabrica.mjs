@@ -19,4 +19,12 @@ try {
   check(pend.n === 0, "3. Nómina sin saldo pendiente después del borrado", pend);
   const users = (await q("SELECT count(*)::int n FROM users"))[0].n, prods = (await q("SELECT count(*)::int n FROM products"))[0].n;
   check(users > 0 && prods > 0, "4. se conservan usuarios y productos", { users, prods });
+  const corte = (await q("SELECT desde::text d, desde_numero n FROM bascula_config WHERE id = 1"))[0];
+  const hoyEc = (await q("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text d"))[0].d;
+  check(corte?.d === hoyEc && corte?.n === null, "5. «Contar tickets desde» vuelve al día del borrado (los tickets viejos no reaparecen)", corte);
+  const arr = (await api("GET", "/saldos-iniciales")).data.corte_arranque;
+  const ayer = (await q("SELECT ((now() AT TIME ZONE 'America/Guayaquil')::date - 1)::text d"))[0].d;
+  check(arr === ayer, "6. el arranque nuevo es el día anterior al borrado", arr);
+  const saldo = await api("POST", "/saldos-iniciales/cxc", { corte: ayer, contraparte_tipo: "CLIENTE", nombre: "SIM ARRANQUE NUEVO", monto: 25 });
+  check(saldo.status === 201, "7. acepta saldos iniciales a ese corte, aunque sea a mitad de mes", saldo.status);
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); await c.query("ROLLBACK").catch(() => {}); check(false, "excepción"); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }

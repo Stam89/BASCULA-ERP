@@ -11,6 +11,7 @@ import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../a
 import type { PoolClient } from "pg";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { traerDesdeAlla } from "../../services/traer-alla.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const selectionRouter = Router();
 
@@ -299,7 +300,7 @@ selectionRouter.post("/batches", asyncRoute(async (req, res) => {
     let flete: Awaited<ReturnType<typeof registrarFleteEnvejecido>> | null = null;
     if (body.flete) {
       flete = await registrarFleteEnvejecido(tx, {
-        batchId, batchNumber, accionistaId, fecha: body.service_date ?? new Date().toISOString().slice(0, 10),
+        batchId, batchNumber, accionistaId, fecha: body.service_date ?? hoyEc(),
         qq: inputQq, flete: body.flete as FleteEnvejecido, createdBy: body.created_by ?? null
       });
       await tx.query(

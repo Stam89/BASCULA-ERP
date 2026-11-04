@@ -13,8 +13,8 @@ export type FinancialOverviewData = {
     fecha: string;
     activo: {
       corriente: {
-        efectivo: number; bancos: number; cuentas_por_cobrar: number; anticipos_agricultores: number;
-        inventario: number; total: number; inventario_detalle: { costo_qq_materia_prima: number };
+        efectivo: number; bancos: number; cuentas_por_cobrar: number; anticipos_agricultores: number; fomentos_por_cobrar?: number;
+        inventario: number; total: number; inventario_detalle: { costo_qq_materia_prima: number; qq_sin_costo?: number };
       };
       no_corriente: { activos_fijos: number; depreciacion_acumulada: number; total: number };
       total: number;
@@ -25,7 +25,7 @@ export type FinancialOverviewData = {
     cuentas_al_dia_de_hoy?: boolean;
   };
   resultados: {
-    ingresos: { ventas: number; servicio_pilado: number; total: number };
+    ingresos: { ventas: number; servicio_pilado: number; otros_ingresos?: number; intereses_fomentos?: number; total: number };
     costo_ventas: { mercaderia_vendida: number; combustible_secado: number; servicios_recibidos?: number; total: number };
     utilidad_bruta: number; margen_bruto_pct: number;
     gastos_operativos: { gastos_generales: number; mano_obra: number; depreciacion: number; total: number };
@@ -121,7 +121,8 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO CORRIENTE</td></tr>
           <tr><td>Efectivo en caja</td><td className="num">{money(data.balance.activo.corriente.efectivo)}</td></tr><tr><td>Bancos</td><td className="num">{money(data.balance.activo.corriente.bancos)}</td></tr>
           <tr><td>Cuentas por cobrar</td><td className="num">{money(data.balance.activo.corriente.cuentas_por_cobrar)}</td></tr><tr><td>Anticipos a agricultores</td><td className="num">{money(data.balance.activo.corriente.anticipos_agricultores)}</td></tr>
-          <tr><td>Inventarios<small className="muted" style={{ display: "block" }}>valorizado a ${data.balance.activo.corriente.inventario_detalle.costo_qq_materia_prima}/QQ (costo promedio)</small></td><td className="num">{money(data.balance.activo.corriente.inventario)}</td></tr>
+          <tr><td>Fomentos por cobrar<small className="muted" style={{ display: "block" }}>capital prestado que falta recuperar (sin interés)</small></td><td className="num">{money(data.balance.activo.corriente.fomentos_por_cobrar ?? 0)}</td></tr>
+          <tr><td>Inventarios<small className="muted" style={{ display: "block" }}>valorizado a ${data.balance.activo.corriente.inventario_detalle.costo_qq_materia_prima}/QQ (costo promedio)</small>{(data.balance.activo.corriente.inventario_detalle.qq_sin_costo ?? 0) > 0 && <small style={{ display: "block", color: "#b45309" }}>⚠️ {data.balance.activo.corriente.inventario_detalle.qq_sin_costo} QQ valen $0: aún no tienen costo. Pon el precio de referencia en Parámetros contables.</small>}</td><td className="num">{money(data.balance.activo.corriente.inventario)}</td></tr>
           <tr style={{ fontWeight: 700 }}><td>Total activo corriente</td><td className="num">{money(data.balance.activo.corriente.total)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>ACTIVO NO CORRIENTE</td></tr><tr><td>Propiedad, planta y equipo</td><td className="num">{money(data.balance.activo.no_corriente.activos_fijos)}</td></tr><tr><td>(-) Depreciación acumulada</td><td className="num">{money(data.balance.activo.no_corriente.depreciacion_acumulada)}</td></tr>
           <tr style={{ fontWeight: 800, borderTop: "2px solid var(--c-border-strong)" }}><td>TOTAL ACTIVO</td><td className="num">{money(data.balance.activo.total)}</td></tr>
@@ -137,7 +138,7 @@ export default function FinancialOverview({ data, onOpenCostDetail }: { data: Fi
       </div>
       <div className="tablePanel">
         <h2>📑 Estado de Resultados</h2><table className="cajaTable" style={{ marginTop: 8 }}><tbody>
-          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr><tr><td>Ventas</td><td className="num">{money(data.resultados.ingresos.ventas)}</td></tr><tr><td>Servicios (pilado, secado, empaque)</td><td className="num">{money(data.resultados.ingresos.servicio_pilado)}</td></tr><tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(data.resultados.ingresos.total)}</td></tr>
+          <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>INGRESOS</td></tr><tr><td>Ventas</td><td className="num">{money(data.resultados.ingresos.ventas)}</td></tr><tr><td>Servicios (pilado, secado, empaque)</td><td className="num">{money(data.resultados.ingresos.servicio_pilado)}</td></tr><tr><td>Otros ingresos <small className="muted">(tamo, báscula, varios)</small></td><td className="num">{money(data.resultados.ingresos.otros_ingresos ?? 0)}</td></tr>{(data.resultados.ingresos.intereses_fomentos ?? 0) > 0 && <tr><td>Interés de fomentos cerrados</td><td className="num">{money(data.resultados.ingresos.intereses_fomentos ?? 0)}</td></tr>}<tr style={{ fontWeight: 700 }}><td>Total ingresos</td><td className="num">{money(data.resultados.ingresos.total)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>COSTO DE VENTAS</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("mercaderia")}>Mercadería vendida 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.mercaderia_vendida)}</td></tr><tr><td><button type="button" className="linkBtn" onClick={() => onOpenCostDetail("combustible")}>Combustible de secado 🔍</button></td><td className="num">{money(data.resultados.costo_ventas.combustible_secado)}</td></tr><tr><td>Servicios recibidos <small className="muted">(pilado, empaque, selección, fletes)</small></td><td className="num">{money(data.resultados.costo_ventas.servicios_recibidos ?? 0)}</td></tr>
           <tr style={{ fontWeight: 700, borderTop: "1px solid var(--c-border)" }}><td>UTILIDAD BRUTA <small className="muted">({data.resultados.margen_bruto_pct}%)</small></td><td className="num">{money(data.resultados.utilidad_bruta)}</td></tr>
           <tr><td colSpan={2} style={{ fontWeight: 800, background: "var(--c-surface-2)" }}>GASTOS OPERATIVOS</td></tr><tr><td>Gastos generales</td><td className="num">{money(data.resultados.gastos_operativos.gastos_generales)}</td></tr><tr><td>Mano de obra</td><td className="num">{money(data.resultados.gastos_operativos.mano_obra)}</td></tr><tr><td>Depreciación</td><td className="num">{money(data.resultados.gastos_operativos.depreciacion)}</td></tr>

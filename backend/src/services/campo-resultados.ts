@@ -147,7 +147,9 @@ export async function lineasDelPeriodo(db: Db, desde: string, hasta: string): Pr
     `-- Servicios prestados (devengado), por su fecha.
      SELECT 'ingreso' AS clase,
             CASE WHEN s.tipo = 'cosecha' THEN 'Servicios de cosecha' ELSE 'Servicios de flete y transporte' END AS clave,
-            s.activo_id, s.valor::float AS monto, (cl.tipo = 'piladora') AS grupo
+            s.activo_id, s.valor::float AS monto,
+            -- Del grupo = la piladora y los socios; los agricultores también quedan con tipo 'piladora' y son terceros.
+            EXISTS (SELECT 1 FROM accionistas a WHERE upper(btrim(a.name)) = upper(btrim(cl.nombre))) AS grupo
        FROM campo_servicios s
        LEFT JOIN campo_clientes cl ON cl.id = s.cliente_id
       WHERE s.fecha BETWEEN $1 AND $2 AND COALESCE(s.origen_tipo, '') <> 'saldo_inicial'  -- deuda de antes: no es ingreso
@@ -207,10 +209,12 @@ export async function informativo(db: Db, desde: string, hasta: string) {
        (SELECT COUNT(*)::int FROM campo_movimientos m
          WHERE m.fecha <= $2 AND m.signo = 'salida' AND m.estado = 'PENDIENTE_RENDICION') AS vales_cantidad,
        (SELECT COALESCE(SUM(c.monto), 0)::float FROM campo_cxp c WHERE c.fecha BETWEEN $1 AND $2 AND COALESCE(c.origen, '') <> 'SALDO_INICIAL') AS compras_credito,
-       (SELECT COALESCE(SUM(p.qq), 0)::float FROM campo_partes p WHERE p.fecha BETWEEN $1 AND $2) AS qq_trabajados`,
+       (SELECT COALESCE(SUM(p.qq), 0)::float FROM campo_partes p WHERE p.fecha BETWEEN $1 AND $2) AS qq_trabajados,
+       (SELECT COUNT(*)::int FROM campo_partes p WHERE p.fecha BETWEEN $1 AND $2 AND p.estado = 'por_cobrar') AS partes_sin_facturar,
+       (SELECT COALESCE(SUM(p.qq), 0)::float FROM campo_partes p WHERE p.fecha BETWEEN $1 AND $2 AND p.estado = 'por_cobrar') AS qq_sin_facturar`,
     [desde, hasta]
   )).rows[0];
-  return r as { cobrado: number; vales_por_rendir: number; vales_cantidad: number; compras_credito: number; qq_trabajados: number };
+  return r as Info;
 }
 
 export async function qqPorActivo(db: Db, desde: string, hasta: string): Promise<Map<string, number>> {
@@ -221,14 +225,21 @@ export async function qqPorActivo(db: Db, desde: string, hasta: string): Promise
   return new Map(r.rows.map((x: { activo_id: string; qq: number }) => [x.activo_id, Number(x.qq) || 0]));
 }
 
-type Info = { cobrado: number; vales_por_rendir: number; vales_cantidad: number; compras_credito: number; qq_trabajados: number };
+type Info = {
+  cobrado: number; vales_por_rendir: number; vales_cantidad: number; compras_credito: number; qq_trabajados: number;
+  partes_sin_facturar?: number; qq_sin_facturar?: number;
+};
 const usd = (n: number) => `${n < 0 ? "−" : ""}$${Math.abs(Number(n) || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 /** Lectura de experto del resultado: lo que conviene mirar y corregir (puro). */
 export function notasDelPeriodo(a: ResultadoPeriodo, anterior: { resultado: number; ingresos: number } | null, info: Info): string[] {
   const notas: string[] = [];
   const gastosTot = r2(a.costos_directos.total + a.gastos_generales.total);
-  if (a.ingresos.total <= 0.005 && gastosTot <= 0.005) return ["Sin movimientos en el período."];
+  // Un parte por cobrar es trabajo hecho que aún no es ingreso: sin este aviso el mes parece peor de lo que fue.
+  const sinFacturar = Number(info.partes_sin_facturar ?? 0) > 0
+    ? `Hay ${info.partes_sin_facturar} parte(s) por cobrar (${Number(info.qq_sin_facturar ?? 0).toLocaleString("en-US", { maximumFractionDigits: 2 })} QQ) que todavía NO cuentan como ingreso: el resultado sube cuando se facturen.`
+    : null;
+  if (a.ingresos.total <= 0.005 && gastosTot <= 0.005) return sinFacturar ? [sinFacturar] : ["Sin movimientos en el período."];
   notas.push(a.resultado >= 0
     ? `El período cerró con GANANCIA de ${usd(a.resultado)}${a.margen_pct != null ? ` (margen ${a.margen_pct}%)` : ""}.`
     : `El período cerró con PÉRDIDA de ${usd(-a.resultado)}: los costos y gastos (${usd(gastosTot)}) superaron a los ingresos (${usd(a.ingresos.total)}).`);
@@ -244,6 +255,7 @@ export function notasDelPeriodo(a: ResultadoPeriodo, anterior: { resultado: numb
   if (a.ingresos.total > 0.005 && a.combustible > 0.005) {
     notas.push(`El combustible se llevó el ${Math.round((a.combustible / a.ingresos.total) * 100)}% de los ingresos (${usd(a.combustible)}).`);
   }
+  if (sinFacturar) notas.push(sinFacturar);
   if (info.vales_por_rendir > 0.005) {
     notas.push(`Hay ${usd(info.vales_por_rendir)} en ${info.vales_cantidad} vale(s) por rendir que todavía NO cuentan como gasto: cuando se rindan (o se descuenten en la nómina) bajarán el resultado.`);
   }

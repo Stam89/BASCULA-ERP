@@ -14,7 +14,7 @@ try {
   const prov = cp.externos[0];
   const prod = (await q("SELECT id FROM products WHERE code = 'ARROZ-PILADO-011'"))[0].id;
   const casc = (await q("SELECT id FROM products WHERE code = 'CASCARA-011'"))[0].id;
-  const r = exigir(await api("POST", "/saldos-iniciales/inventario", { corte: "2026-10-14", product_id: prod, cantidad: 25, external_provider_id: prov.id, detalle: "100 bultos de 25 lb (@ arroba)" }, acc), "2. cargar 25 QQ (100 @) que están allá");
+  const r = exigir(await api("POST", "/saldos-iniciales/inventario", { corte: S.arranque, product_id: prod, cantidad: 25, external_provider_id: prov.id, detalle: "100 bultos de 25 lb (@ arroba)" }, acc), "2. cargar 25 QQ (100 @) que están allá");
   check(String(r.bodega).startsWith("Allá:"), "3. queda en la bodega «Allá» del proveedor", r.bodega);
   const alla = (await q(`SELECT COALESCE(SUM(m.quantity),0)::float s FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id
                           WHERE w.external_provider_id = $1 AND m.product_id = $2 AND m.accionista_id = $3 AND m.reference_type = 'saldo_inicial'`, [prov.id, prod, acc]))[0].s;
@@ -22,7 +22,7 @@ try {
   const u = exigir(await api("GET", "/selection/ubicacion", undefined, acc), "5. Selección › ubicación");
   const fila = (u.productos ?? u).find?.((x) => x.product_id === prod);
   check(!fila || (fila.alla_total ?? 0) >= 25 - 0.01, "6. Selección lo muestra «allá»", fila);
-  const mal = await api("POST", "/saldos-iniciales/inventario", { corte: "2026-10-14", product_id: casc, cantidad: 5, external_provider_id: prov.id }, acc);
+  const mal = await api("POST", "/saldos-iniciales/inventario", { corte: S.arranque, product_id: casc, cantidad: 5, external_provider_id: prov.id }, acc);
   check(mal.status === 400, "7. la cáscara no puede quedar «allá»", mostrar(mal));
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
   check(h.length === 0, "Z. integridad sin hallazgos", h.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));

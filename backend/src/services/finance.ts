@@ -113,9 +113,12 @@ export async function getInventarioValorizado(client: PoolClient | typeof pool, 
   let materiaPrima = 0;
   let terminado = 0;
   let subproductos = 0;
+  // QQ en bodega que valen $0 porque aún no hay costo (sin liquidaciones ni precio de referencia): el Balance lo avisa.
+  let qqSinCosto = 0;
   for (const row of r.rows) {
     const qq = Number(row.qq);
     if (qq <= 0) continue;
+    if ((row.product_type === "RAW_MATERIAL" ? costoMp : costoPt) <= 0) qqSinCosto += qq;
     if (row.product_type === "RAW_MATERIAL") materiaPrima = round2(qq * costoMp);
     else if (row.product_type === "BYPRODUCT") subproductos = round2(qq * costoPt * 0.4);
     else terminado = round2(qq * costoPt);
@@ -127,7 +130,8 @@ export async function getInventarioValorizado(client: PoolClient | typeof pool, 
     subproductos,
     total: round2(materiaPrima + terminado + subproductos),
     costo_qq_materia_prima: costoMp,
-    costo_qq_terminado: costoPt
+    costo_qq_terminado: costoPt,
+    qq_sin_costo: round2(qqSinCosto)
   };
 }
 
@@ -233,6 +237,14 @@ export async function getActivosFijos(
   };
 }
 
+// Categorías de ingreso que no son ganancia del negocio: mueven dinero que ya era suyo (banco, aportes, préstamos),
+// cobran lo ya facturado o se cuentan aparte como venta.
+const INGRESOS_NO_OPERATIVOS = [
+  "VENTA", "RETIRO_BANCO", "APORTE_SOCIO", "PRESTAMO_RECIBIDO", "COBRO_MAQUILA", "DEVOLUCION_FOMENTO",
+  "PAGO_FOMENTO", "COBRO_POR_SOCIO", "VENTA_DETALLE_POR_ASIGNAR", "TRASPASO_INTERNO"
+];
+const NO_ES_MATRIZ = "NOT EXISTS (SELECT 1 FROM accionistas ax WHERE ax.id = $1 AND ax.tipo = 'MATRIZ')";
+
 // ── ESTADO DE RESULTADOS ────────────────────────────────────────────────────
 export async function getEstadoResultados(
   client: PoolClient | typeof pool,
@@ -268,6 +280,37 @@ export async function getEstadoResultados(
     rango
   );
 
+  // Otros ingresos del negocio: lo que entra a Caja con una categoría de ingreso propia (tamo, báscula, ingresos
+  // varios…) y el sobrante de arqueo, más la retención de báscula que la Matriz cobra en las liquidaciones.
+  // No son ingreso: traer dinero del banco, aportes, cobrar lo ya facturado ni las ventas por asignar (aún sin dueño).
+  const otrosCaja = await client.query(
+    `SELECT COALESCE(SUM(m.amount), 0) AS v
+       FROM cash_movements m
+       JOIN cash_registers c ON c.id = m.cash_register_id
+       JOIN cash_categories cc ON cc.codigo = m.category AND cc.tipo = 'INGRESO'
+      WHERE c.accionista_id = $1 AND m.movement = 'INCOME'
+        AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+        AND m.created_at::date BETWEEN $2 AND $3
+        AND (m.category = 'SOBRANTE_CAJA' OR (m.reference_type IS NULL AND m.category <> ALL($4::text[])))`,
+    [...rango, INGRESOS_NO_OPERATIVOS]
+  );
+  const retencionBascula = await client.query(
+    `SELECT COALESCE(SUM(amount), 0) AS v FROM accounts_receivable
+      WHERE accionista_id = $1 AND reference_type = 'retencion_matriz' AND status <> 'CANCELLED'
+        AND created_at::date BETWEEN $2 AND $3`,
+    rango
+  );
+  // Interés de los fomentos a los que se les hizo la cuenta en el período (misma fórmula que el módulo Fomentos):
+  // mientras el fomento sigue activo ese interés todavía no se ha ganado.
+  const interesFomentos = await client.query(
+    `SELECT COALESCE(SUM(CASE WHEN fe.es_saldo_anterior THEN fe.valor * f.renta * COALESCE(fe.meses_interes_fijo, 0)
+                              ELSE fe.valor * f.renta / 30.0 * GREATEST(LEAST(f.liquidado_at::date, COALESCE(fe.interes_hasta, f.liquidado_at::date)) - fe.fecha, 0) END), 0) AS v
+       FROM fomentos f
+       JOIN fomento_entregas fe ON fe.fomento_id = f.id
+      WHERE f.accionista_id = $1 AND f.liquidado_at IS NOT NULL AND f.liquidado_at::date BETWEEN $2 AND $3`,
+    rango
+  );
+
   // Costo de la mercadería vendida: los quintales que salieron POR VENTA (pedidos, ventas y venta al
   // detalle), valorizados al costo del producto terminado. Antes contaba TODA salida (incluida la
   // cáscara que entra al molino), así que el costo de ventas salía inflado.
@@ -283,11 +326,12 @@ export async function getEstadoResultados(
   );
   const costoVentas = round2(Number(salidas.rows[0].qq) * costoPt);
 
+  // La Matriz compra el gas y el diésel: ya están en sus gastos de Caja, no se cuentan otra vez como costo de secado.
   const combustible = await client.query(
     `SELECT COALESCE(SUM(d.gas_costo_total + d.diesel_costo), 0) AS v
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
-     WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3`,
+     WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3 AND ${NO_ES_MATRIZ}`,
     rango
   );
   // Servicios que este accionista RECIBIÓ en el período (devengado, al nacer su deuda): pilado/maquila de la
@@ -341,7 +385,9 @@ export async function getEstadoResultados(
 
   const ingresoServicios = round2(Number(servicios.rows[0].v));
   const totalVentas = round2(Number(ventas.rows[0].v) + Number(ventasDetalle.rows[0].v));
-  const ingresos = round2(totalVentas + ingresoServicios);
+  const otrosIngresos = round2(Number(otrosCaja.rows[0].v) + Number(retencionBascula.rows[0].v));
+  const interesesFomentos = round2(Number(interesFomentos.rows[0].v));
+  const ingresos = round2(totalVentas + ingresoServicios + otrosIngresos + interesesFomentos);
   const costoTotal = round2(costoVentas + Number(combustible.rows[0].v) + Number(serviciosRecibidos.rows[0].v));
   const utilidadBruta = round2(ingresos - costoTotal);
   const gastosOperativos = round2(Number(gastos.rows[0].v) + Number(manoObra.rows[0].v) + depreciacionPeriodo);
@@ -353,6 +399,8 @@ export async function getEstadoResultados(
       ventas: totalVentas,
       ventas_detalle: round2(Number(ventasDetalle.rows[0].v)),
       servicio_pilado: ingresoServicios,
+      otros_ingresos: otrosIngresos,
+      intereses_fomentos: interesesFomentos,
       total: ingresos
     },
     costo_ventas: {
@@ -421,7 +469,7 @@ export async function getCostoVentasDetalle(
             l.lot_code, d.gas_costo_total, d.diesel_costo
      FROM drying_tunnel_reports d
      JOIN lots l ON l.id = d.lot_id
-     WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3
+     WHERE l.accionista_id = $1 AND d.created_at::date BETWEEN $2 AND $3 AND ${NO_ES_MATRIZ}
      ORDER BY d.created_at DESC`,
     rango
   );
@@ -478,6 +526,18 @@ export async function getBalanceGeneral(
      WHERE accionista_id = $1 AND status IN ('CONFIRMED','PARTIAL') AND balance > 0`,
     [accionistaId]
   );
+  // Fomentos: el capital prestado que falta recuperar de la cartera activa, a la fecha del corte. El interés no entra
+  // hasta que se le hace la cuenta al agricultor (ahí se gana); lo que queda en contra pasa a Cuentas por cobrar.
+  const fomentos = await client.query(
+    `SELECT COALESCE(SUM(GREATEST(COALESCE(e.capital, 0) - COALESCE(p.pagado, 0), 0)), 0) AS v
+       FROM fomentos f
+       LEFT JOIN LATERAL (SELECT SUM(fe.valor) AS capital FROM fomento_entregas fe
+                           WHERE fe.fomento_id = f.id AND fe.fecha <= $2::date) e ON true
+       LEFT JOIN LATERAL (SELECT SUM(fp.valor) AS pagado FROM fomento_pagos fp
+                           WHERE fp.fomento_id = f.id AND fp.fecha <= $2::date) p ON true
+      WHERE f.accionista_id = $1 AND f.status = 'ACTIVOS' AND f.liquidado_at IS NULL`,
+    [accionistaId, hasta]
+  );
 
   // Préstamos del banco: el capital que falta pagar (cuotas pendientes). Corriente = lo que vence en los próximos
   // 12 meses desde la fecha del balance; el resto, no corriente. Como las cuentas, con el estado de HOY.
@@ -491,11 +551,12 @@ export async function getBalanceGeneral(
 
   const cxc = round2(Number(porCobrar.rows[0].v));
   const antic = round2(Number(anticipos.rows[0].v));
+  const fomentosPorCobrar = round2(Number(fomentos.rows[0].v));
   const cxp = round2(Number(porPagar.rows[0].v));
   const prestamosCorto = round2(Number(prestamos.corriente));
   const prestamosLargo = round2(Number(prestamos.largo));
 
-  const activoCorriente = round2(caja.total + cxc + antic + inventario.total);
+  const activoCorriente = round2(caja.total + cxc + antic + fomentosPorCobrar + inventario.total);
   const activoNoCorriente = activosFijos.valor_libros;
   const totalActivo = round2(activoCorriente + activoNoCorriente);
   const pasivoCorriente = round2(cxp + prestamosCorto);
@@ -525,6 +586,7 @@ export async function getBalanceGeneral(
         bancos: caja.bancos,
         cuentas_por_cobrar: cxc,
         anticipos_agricultores: antic,
+        fomentos_por_cobrar: fomentosPorCobrar,
         inventario: inventario.total,
         inventario_detalle: inventario,
         total: activoCorriente

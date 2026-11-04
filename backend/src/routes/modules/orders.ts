@@ -21,6 +21,7 @@ import { calculateOrderStockCoverage, CODIGOS_CASCARA, rawBackingCode, RENDIMIEN
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
 import { notificar } from "../../services/notificaciones.js";
 import { getMatrizId } from "../../services/matriz.js";
+import { fechaEc } from "../../utils/fechas.js";
 
 export const ordersRouter = Router();
 
@@ -1028,7 +1029,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       guia_number: order.rows[0].guia_number,
       customer_name: customer.rows[0]?.full_name ?? null,
       quantity_qq: Math.max(0, round2(totalQqDespachado - qqRetiradoAlla)),
-      work_date: order.rows[0].delivered_at ? new Date(order.rows[0].delivered_at).toISOString().slice(0, 10) : null,
+      work_date: order.rows[0].delivered_at ? fechaEc(new Date(order.rows[0].delivered_at)) : null,
       created_by: body.created_by ?? null,
       accionista_id: accionistaId as string
     });

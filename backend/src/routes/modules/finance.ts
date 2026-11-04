@@ -644,6 +644,7 @@ function construirExcelEstados(opts: { data: DatosEstados; activos: ActivosFijos
   linea(ws1, "Bancos", b.activo.corriente.bancos, { sangria: 3 });
   linea(ws1, "Cuentas por cobrar", b.activo.corriente.cuentas_por_cobrar, { sangria: 3 });
   linea(ws1, "Anticipos a agricultores", b.activo.corriente.anticipos_agricultores, { sangria: 3 });
+  linea(ws1, "Fomentos por cobrar (capital)", b.activo.corriente.fomentos_por_cobrar, { sangria: 3 });
   linea(ws1, "Inventarios", b.activo.corriente.inventario, { sangria: 3 });
   linea(ws1, "Total activo corriente", b.activo.corriente.total, { negrita: true });
   ws1.addRow([]);
@@ -678,6 +679,8 @@ function construirExcelEstados(opts: { data: DatosEstados; activos: ActivosFijos
   seccion(ws2, "INGRESOS");
   linea(ws2, "Ventas de arroz y subproductos", e.ingresos.ventas, { sangria: 3 });
   linea(ws2, "Servicios (pilado, secado, empaque)", e.ingresos.servicio_pilado, { sangria: 3 });
+  linea(ws2, "Otros ingresos (tamo, báscula, varios)", e.ingresos.otros_ingresos, { sangria: 3 });
+  linea(ws2, "Interés de fomentos cerrados", e.ingresos.intereses_fomentos, { sangria: 3 });
   linea(ws2, "Total ingresos", e.ingresos.total, { negrita: true });
   ws2.addRow([]);
   seccion(ws2, "COSTO DE VENTAS");

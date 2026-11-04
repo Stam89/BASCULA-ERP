@@ -10,6 +10,7 @@ import { createLotProcessReport } from "../../utils/process-reports.js";
 import { calculateNetWeight, calculateQuintals } from "../../utils/rice-formulas.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const weighingRouter = Router();
 
@@ -147,7 +148,7 @@ weighingRouter.post("/", asyncRoute(async (req, res) => {
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'OPEN', $8, $9)
        RETURNING *`,
       [
-        await nextSequentialLotCode(client, new Date().toISOString().slice(0, 10), operationType),
+        await nextSequentialLotCode(client, hoyEc(), operationType),
         nextCode("IMP"),
         data.farmer_id,
         data.rice_type,

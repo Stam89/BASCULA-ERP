@@ -57,7 +57,9 @@ try {
   const c1b = (await api("GET", `/finance/bank/statements/${e1.statement_id}/reconciliation`)).data;
   check(c1b.segun_libros.saldo === 1550 && c1b.conciliado, "E2. septiembre sigue conciliado (la anulación es de octubre, no cambia el pasado)", { libros: c1b.segun_libros.saldo, dif: c1b.diferencia });
   const c2b = (await api("GET", `/finance/bank/statements/${e2.statement_id}/reconciliation`)).data;
-  check(c2b.segun_libros.saldo === saldoCaja, "E3. al corte de octubre, libros = saldo de la Caja (el contra-asiento no se cuenta de más)", { libros: c2b.segun_libros.saldo, caja: saldoCaja });
+  // La anulación se fecha hoy: si ya pasó octubre, su contra-asiento de $50 queda después del corte y no entra.
+  const despuesDelCorte = new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }) > "2026-10-31";
+  check(c2b.segun_libros.saldo === saldoCaja - (despuesDelCorte ? 50 : 0), "E3. al corte de octubre, libros = saldo de la Caja (el contra-asiento no se cuenta de más)", { libros: c2b.segun_libros.saldo, caja: saldoCaja });
   check(Math.abs(c2b.diferencia - 0) < 0.01 || c2b.segun_banco.depositos_transito.some((x) => x.monto === 50), "E4. la anulación aparece como partida visible (+$50 en tránsito) y la diferencia sigue explicada", { dif: c2b.diferencia, transito: c2b.segun_banco.total_depositos_transito });
   check(c2b.conciliado, "E5. octubre sigue conciliando después de la anulación", { dif: c2b.diferencia });
   const cuentas = (await api("GET", "/finance/bank/accounts")).data;

@@ -10,12 +10,12 @@ import { CORTE_ARRANQUE } from "../utils/corte-mes.js";
 // en ese día. Lo ya pagado de la nómina no se toca.
 
 /** Valida la fecha: desde el arranque real (día siguiente al corte) hasta hoy. Devuelve null si es hoy o no vino. */
-export function fechaPiladoValida(fecha: string | undefined | null): string | null {
+export function fechaPiladoValida(fecha: string | undefined | null, arranque: string = CORTE_ARRANQUE): string | null {
   if (!fecha) return null;
   const hoy = hoyEc();
   if (fecha === hoy) return null;
   if (fecha > hoy) throw new ApiError(400, "La fecha de pilado no puede ser futura.");
-  if (fecha <= CORTE_ARRANQUE) throw new ApiError(400, `La fecha de pilado debe ser desde el arranque (después del ${CORTE_ARRANQUE}).`);
+  if (fecha <= arranque) throw new ApiError(400, `La fecha de pilado debe ser desde el arranque (después del ${arranque}).`);
   return fecha;
 }
 

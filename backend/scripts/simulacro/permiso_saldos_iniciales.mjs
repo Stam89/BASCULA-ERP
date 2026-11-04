@@ -13,7 +13,7 @@ try {
   const u = (await q("INSERT INTO users (name, username, password_hash, role_id, is_active) VALUES ('sim_saldos','sim_saldos','x',$1,true) RETURNING id", [rol]))[0];
   await q("INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules) VALUES ($1,$2,$3)", [u.id, socio, ["Inventario"]]);
   const op = apiComo(u.id, "sim_saldos", "sim_saldos", socio);
-  const carga = { corte: "2026-10-14", product_id: prod, cantidad: 3, detalle: "sim permiso saldos" };
+  const carga = { corte: S.arranque, product_id: prod, cantidad: 3, detalle: "sim permiso saldos" };
 
   const sin = await op("GET", "/saldos-iniciales");
   check(sin.status === 403, "1. sin el permiso no ve los saldos iniciales (403)", mostrar(sin));

@@ -12,7 +12,7 @@ try {
   const rov = (await q("SELECT id FROM accionistas WHERE name='ROVINSON'"))[0].id;
   const caja = exigir(await api("POST", "/cash/registers/open", { name: "Caja sim", tipo: "EFECTIVO", opening_balance_cash: 100 }, rov), "0. caja de solo efectivo (100)");
   const cxc = async (monto) => {
-    const si = exigir(await api("POST", "/saldos-iniciales/cxc", { corte: "2026-10-14", contraparte_tipo: "CLIENTE", nombre: "SIM CLIENTE MEDIO", monto, detalle: "sim" }, rov), `0b. deuda de cliente ${monto}`);
+    const si = exigir(await api("POST", "/saldos-iniciales/cxc", { corte: S.arranque, contraparte_tipo: "CLIENTE", nombre: "SIM CLIENTE MEDIO", monto, detalle: "sim" }, rov), `0b. deuda de cliente ${monto}`);
     return (await q("SELECT ref_id FROM saldos_iniciales WHERE id=$1", [si.id]))[0].ref_id;
   };
   // A. Abono en efectivo: la caja sigue siendo de efectivo

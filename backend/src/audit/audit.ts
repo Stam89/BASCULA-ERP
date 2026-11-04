@@ -35,7 +35,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // guardarse: claves y secretos (seguridad) y fotos en base64 (peso). Antes
 // new_data quedaba vacío y al investigar un problema no había forma de saber
 // QUÉ montos se enviaron (nos pasó con un cierre de producción perdido).
-const SENSITIVE_KEY = /password|clave|secret|token|base64/i;
+const SENSITIVE_KEY = /password|clave|llave|secret|token|base64/i;
 const MAX_STRING = 500;
 
 function sanitizeForAudit(value: unknown, depth = 0): unknown {

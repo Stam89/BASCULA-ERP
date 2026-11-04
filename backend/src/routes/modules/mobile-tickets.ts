@@ -19,7 +19,7 @@ import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../util
 import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro } from "../../services/agricultor-nombres.js";
 import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
 import { buildManualBasculaPayload, esSerieEmergencia, formatBasculaTicketNumber, SERIE_EMERGENCIA, siguienteEmergencia } from "../../utils/manual-bascula-ticket.js";
-import { hoyEc } from "../../utils/fechas.js";
+import { fechaDeTicket, hoyEc } from "../../utils/fechas.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -887,7 +887,8 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exig
     quintals: Number(t.quintals),
     ticketNumber: t.raw_payload?.numeroTicket ?? null,
     sourceId: String(result.ingreso.id),
-    createdBy: body.created_by ?? null
+    createdBy: body.created_by ?? null,
+    fecha: fechaDeTicket(t.raw_payload?.fecha, t.mobile_created_at)
   });
 
   res.status(201).json(result);

@@ -55,7 +55,7 @@ try {
   check(informe.length > 0 && informe.every((x) => x.d === FECHA), "10. el informe de pilado del lote queda con esa fecha", informe);
   const hist = exigir(await api("GET", "/processing-batches/history", undefined, acc), "11. historial de producción");
   const enHist = (hist.batches ?? hist).find?.((x) => x.id === batch.id);
-  check(!enHist || String(enHist.finished_at).slice(0, 10) <= FECHA, "12. el historial muestra el día del pilado", enHist?.finished_at);
+  check(!enHist || new Date(enHist.finished_at).toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }) <= FECHA, "12. el historial muestra el día del pilado", enHist?.finished_at);
 
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
   check(h.length === 0, "Z. integridad sin hallazgos", h.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));
