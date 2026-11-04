@@ -58,6 +58,8 @@ export type GastoTransporteInput = {
   /** 👷 Anticipo a un operador de Transporte (pedido del dueño 2026-10-29): no es gasto, queda como VALE del
    *  operador (se descuenta en su nómina) y Transporte le debe a la Matriz lo que ella entregó. */
   anticipoOperador?: string | null;
+  /** Día del gasto si no es hoy (la hoja de Caja). */
+  fecha?: string | null;
 };
 
 export async function registrarGastoTransporte(client: PoolClient, i: GastoTransporteInput) {
@@ -79,7 +81,7 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
     : null;
   if (i.activoId && !activo) throw new ApiError(404, "Esa máquina de Transporte no existe o está inactiva.");
 
-  const fecha = hoyEc();
+  const fecha = i.fecha ?? hoyEc();
   const clienteId = await clienteCampoDe(client, matriz.name);
   const nombreCategoria = operador ? "ANTICIPO OPERADOR" : (i.categoria ?? "").trim().toUpperCase() || "REPARACION_MANT";
   const categoria = operador ? null : (await client.query("SELECT id FROM campo_categorias_gasto WHERE nombre = $1 LIMIT 1", [nombreCategoria])).rows[0]?.id ?? null;

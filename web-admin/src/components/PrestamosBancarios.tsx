@@ -21,7 +21,7 @@ export type Prestamo = {
 };
 type Cuota = {
   id: string; numero: number; fecha_vencimiento: string; capital: number; interes: number; otros: number; total: number;
-  estado: "PENDIENTE" | "PAGADA"; pagada_at: string | null; pagado_interes: number | null; pagado_otros: number | null; pagado_total: number | null; medio: Medio | null;
+  estado: "PENDIENTE" | "PAGADA"; pagada_fuera?: boolean; pagada_at: string | null; pagado_interes: number | null; pagado_otros: number | null; pagado_total: number | null; medio: Medio | null;
 };
 type Fila = { numero: number; fecha: string; capital: string; interes: string; otros: string };
 
@@ -141,6 +141,24 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
       const id = pago.p.id;
       setPago(null);
       await refrescarTodo(detalle?.id === id ? id : undefined);
+    } catch (e) { avisar((e as Error).message, "error"); } finally { setBusy(false); }
+  }
+  // Cuotas que el banco ya cobró sin pasar por la caja de la app: bajan la deuda y no mueven ninguna caja.
+  async function pagadaFuera(p: Prestamo, c: Cuota | null) {
+    setBusy(true);
+    try {
+      if (c) await apiPost(`/prestamos/${p.id}/cuotas/${c.id}/pagada-fuera`, {});
+      else await apiPost(`/prestamos/${p.id}/pagadas-fuera`, { hasta: hoyIso() });
+      avisar(c ? `Cuota ${c.numero} marcada como pagada por fuera (no movió la caja)` : "Cuotas vencidas marcadas como pagadas por fuera (no movieron la caja)", "success");
+      await refrescarTodo(detalle?.id === p.id ? p.id : undefined);
+    } catch (e) { avisar((e as Error).message, "error"); } finally { setBusy(false); }
+  }
+  async function deshacerFuera(p: Prestamo, c: Cuota) {
+    setBusy(true);
+    try {
+      await apiPost(`/prestamos/${p.id}/cuotas/${c.id}/deshacer-fuera`, {});
+      avisar(`La cuota ${c.numero} volvió a pendiente`, "success");
+      await refrescarTodo(p.id);
     } catch (e) { avisar((e as Error).message, "error"); } finally { setBusy(false); }
   }
   async function guardarCuota() {
@@ -317,11 +335,14 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
                         </td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           {c.estado === "PAGADA"
-                            ? <><span className="chip ok">✓ Pagada</span>{c.pagada_at && <small className="prest__desg">{new Date(c.pagada_at).toLocaleDateString("es-EC")}</small>}</>
+                            ? <><span className="chip ok">✓ Pagada{c.pagada_fuera ? " por fuera" : ""}</span>
+                              {c.pagada_fuera && puedeEditar && <button type="button" className="btnGhost" title="Volver a pendiente" disabled={busy} onClick={() => deshacerFuera(detalle, c)}>↺</button>}
+                              {c.pagada_at && <small className="prest__desg">{new Date(c.pagada_at).toLocaleDateString("es-EC")}</small>}</>
                             : <>
                               {vencida && <span className="chip bad" style={{ marginRight: 4 }}>Vencida</span>}
                               {puedeEditar && detalle.estado === "VIGENTE" && <>
                                 <button type="button" className="btnGhost" title="Pagar esta cuota" disabled={!cajaAbiertaId} onClick={() => abrirPago(detalle, c.id)}>💵</button>
+                                <button type="button" className="btnGhost" title="Ya se pagó por fuera de la caja: baja la deuda sin mover la caja" disabled={busy} onClick={() => pagadaFuera(detalle, c)}>✓</button>
                                 <button type="button" className="btnGhost" title="Corregir con la tabla del banco" onClick={() => setEditar({ p: detalle, c, fecha: c.fecha_vencimiento.slice(0, 10), capital: c.capital.toFixed(2), interes: c.interes.toFixed(2), otros: c.otros.toFixed(2) })}>✏️</button>
                               </>}
                             </>}
@@ -332,7 +353,10 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
                 </tbody>
               </table>
             </div>
-            <p className="muted prest__ayuda">El capital baja la deuda (Balance); el interés y el seguro son gasto financiero. Para deshacer un pago, anúlalo en Caja: la cuota vuelve a quedar pendiente.</p>
+            {puedeEditar && detalle.estado === "VIGENTE" && detalle.cuotas.some((c) => c.estado === "PENDIENTE" && c.fecha_vencimiento.slice(0, 10) <= hoyIso()) && (
+              <button type="button" className="btnSecondary" disabled={busy} onClick={() => pagadaFuera(detalle, null)}>✓ Las cuotas vencidas ya se pagaron por fuera</button>
+            )}
+            <p className="muted prest__ayuda">El capital baja la deuda (Balance); el interés y el seguro son gasto financiero. Para deshacer un pago, anúlalo en Caja: la cuota vuelve a quedar pendiente. ✓ = ya se pagó por fuera de la caja: baja la deuda sin mover ninguna caja.</p>
             <div className="buttonRow" style={{ justifyContent: "space-between", marginTop: 10 }}>
               {puedeAnular && detalle.estado !== "ANULADO" && !detalle.cuotas.some((c) => c.estado === "PAGADA")
                 ? <button type="button" className="btnDanger" onClick={() => anular(detalle)}>Anular préstamo</button> : <span />}

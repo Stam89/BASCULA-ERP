@@ -17,7 +17,7 @@ import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, de
 import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
-import { avisarSobregiro, medioParaCaja, saldosDeCaja } from "../../services/caja.js";
+import { avisarSobregiro, medioParaCaja, saldosDeCaja, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { anularPagoConBanco, registrarPagoConBanco, REF_PAGADO_CON_BANCO } from "../../services/pagado-con-banco.js";
 import { revertirMovimientoDePrestamo } from "./prestamos.js";
 import type { PoolClient } from "pg";
@@ -1054,6 +1054,8 @@ async function hojaDeVidaDelEgreso(
 
 cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
   const body = z.object({
+    // Día del movimiento, si no es hoy (la hoja de Caja).
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     movement: z.enum(["INCOME", "EXPENSE"]),
     category: z.string().min(1).max(80),
     amount: z.number().positive().transform(round2), // 2 decimales exactos (evita 219.999…)
@@ -1190,6 +1192,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     );
     if (!reg.rows[0]) throw new ApiError(404, "Caja no disponible para el accionista activo");
     if (reg.rows[0].status !== "OPEN") throw new ApiError(409, "La caja no esta abierta");
+    const fechaMov = await fechaValidaDeCaja(client, String(req.params.id), body.fecha);
     const socio = body.por_cuenta_de ? await validarSocioDelGasto(client, accionistaId!, body.por_cuenta_de) : null;
     // Gasto de un socio: vale una categoría de esta caja o una del socio (p. ej. Fomentos de ROVINSON que entregó la
     // caja de CEYRO: el fomento del agricultor se anota en Fomentos de ROVINSON, sin caja).
@@ -1264,6 +1267,7 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     }
     if (socio) {
       const cruce = await cruzarGastoPorSocio(client, { movimientoId: mov.rows[0].id, pagadorId: accionistaId!, socio, monto: body.amount, concepto: conceptoSocio });
+      if (fechaMov) await fecharMovimientosDeCaja(client, String(req.params.id), fechaMov);
       return { ...mov.rows[0], gasto_por_socio: { socio: socio.name, ...cruce } };
     }
     // Equipo / máquina: el egreso entra a su hoja de vida (Materiales consumibles…).
@@ -1304,8 +1308,10 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     // de la matriz (kardex), enlazada a este movimiento para poder revertirla.
     if (conSacos) {
       const sacos = await registrarEntradaSacosDesdeCaja(client, mov.rows[0].id, body.sacos!, accionistaId);
+      if (fechaMov) await fecharMovimientosDeCaja(client, String(req.params.id), fechaMov);
       return { ...mov.rows[0], sacos_ingresados: sacos, activo_fijo: activoFijo };
     }
+    if (fechaMov) await fecharMovimientosDeCaja(client, String(req.params.id), fechaMov);
     return { ...mov.rows[0], activo_fijo: activoFijo };
   });
   res.status(201).json(row);

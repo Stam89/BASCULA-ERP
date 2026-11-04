@@ -3772,7 +3772,7 @@ export function App() {
   // Edición de datos de un usuario registrado (nombre, usuario, clave, rol).
   const [userEditor, setUserEditor] = useState<{ user: AdminUser; name: string; username: string; cedula: string; email: string; password: string; role: "ADMINISTRADOR" | "OPERADOR" } | null>(null);
   const [renameAccionista, setRenameAccionista] = useState<{ id: string; name: string; code: string } | null>(null);
-  const [resetForm, setResetForm] = useState({ password: "", llave: "", confirm: "" });
+  const [resetForm, setResetForm] = useState({ password: "", llave: "", confirm: "", conservar: true });
   const [backupInfo, setBackupInfo] = useState<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> } | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [systemStatusBusy, setSystemStatusBusy] = useState(false);
@@ -5129,7 +5129,8 @@ export function App() {
         ...(trabajo ?? {}),
         monto: trabajo ? undefined : f.amount,
         description: f.description,
-        pagado_con_banco: f.banco || undefined
+        pagado_con_banco: f.banco || undefined,
+        fecha: f.fecha
       });
       addToast(`${operador ? `👷 Anticipo a ${operador}` : "🚜 Gasto de Transporte"}: ${money(r.total)}${f.banco ? " (pagado con banco, no sale de la gaveta)" : ""}` +
         (r.descontado > 0 ? ` · se descontaron ${money(r.descontado)} de lo que se le debía a Transporte` : "") +
@@ -5138,7 +5139,7 @@ export function App() {
       return;
     }
     await apiPost(`/cash/${registerId}/movements`, {
-      movement: f.movement, category: f.category, amount: f.amount, description: f.description, codigo: f.codigo,
+      movement: f.movement, category: f.category, amount: f.amount, description: f.description, codigo: f.codigo, fecha: f.fecha,
       medio: dashboard.current_cash_register?.tipo === "MIXTO" ? f.medio : undefined,
       // 🤝 Gasto de un socio que paga esta caja (se cruza con lo que la Matriz le debe).
       por_cuenta_de: f.movement === "EXPENSE" && d?.tipo === "socio" ? d.id : undefined,
@@ -7806,9 +7807,10 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     const result = await apiPost<{ ok: boolean; wiped_tables: number }>("/settings/reset-transactions", {
       password: resetForm.password,
       llave_maestra: resetForm.llave,
-      confirm: "BORRAR"
+      confirm: "BORRAR",
+      conservar_cartera: resetForm.conservar
     });
-    setResetForm({ password: "", llave: "", confirm: "" });
+    setResetForm({ password: "", llave: "", confirm: "", conservar: true });
     addToast(`Datos eliminados (${result.wiped_tables} tablas) y respaldo guardado antes de borrar. El sistema quedó listo para operar.`, "success");
     setCashSummary(null);
     setCashMovements([]);
@@ -20466,6 +20468,7 @@ Motivo (obligatorio):`, ""));
                           verOtros
                           origenExterno={origenExternoCaja}
                           saldoInicial={Number(dashboard.current_cash_register?.opening_balance ?? 0)}
+                          abiertaEl={dashboard.current_cash_register?.opened_at ?? null}
                           categorias={categoriasHoja}
                           sugerencias={[...sug].filter((x) => x.length >= 2).slice(0, 1500)}
                           mixto={dashboard.current_cash_register?.tipo === "MIXTO"}
@@ -28308,6 +28311,11 @@ Motivo (obligatorio):`, ""));
                       ERP (<code>LLAVE_MAESTRA=…</code>, mínimo 8 caracteres) y luego se reinicia el ERP.
                     </div>
                   )}
+                  <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                    <input type="checkbox" style={{ width: "auto", marginTop: 3 }} checked={resetForm.conservar}
+                      onChange={(e) => setResetForm({ ...resetForm, conservar: e.target.checked })} />
+                    <span><strong>Conservar agricultores, fomentos y préstamos.</strong> No se borran; las cuotas ya vencidas quedan como pagadas por fuera de la caja. Lo demás sí se borra.</span>
+                  </label>
                   <label>
                     <span>Tu clave de administrador</span>
                     <input

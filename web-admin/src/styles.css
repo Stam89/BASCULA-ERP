@@ -6725,6 +6725,12 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjx-acciones__btn.is-on { border-color: #0f766e; color: #0f766e; background: #f0fdfa; }
 .cj-menu-label small { display: block; font-weight: 400; font-size: 11.5px; color: #64748b; }
 .cj-menu-label kbd { font-size: 10.5px; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #475569; font-weight: 400; }
+.cjh-nueva input[type="date"] { padding: 5px 2px; font-size: 12px; }
+.cjh-nueva input.is-otra { border-color: #f59e0b; background: #fffbeb; font-weight: 700; }
+.partesCobro { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 10px; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 10px; background: #eff6ff; }
+.partesCobro label { margin: 0; font-size: 12px; }
+.partesCobro input { width: 96px; }
+.partesCobro__total { font-weight: 800; color: #0f172a; }
 .cjh-tabla th:nth-child(1) { width: 124px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 104px; } .cjh-tabla th:nth-child(5) { width: 112px; } .cjh-tabla th:nth-child(6) { width: 150px; }
 .cjh-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .cjh-tag { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; white-space: nowrap; }
@@ -6756,7 +6762,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   .cjh-tabla td.cjh-saldo:not(:empty)::before { content: "Saldo "; font-weight: 400; color: #64748b; }
   .cjh-inicial td:first-child, .cjh-tabla tfoot td:first-child { grid-column: 1 / -1; }
   .cjh-nueva { background: #fffbeb; }
-  .cjh-nueva td.cjh-fecha { display: none; }
+  .cjh-nueva td.cjh-fecha input { width: 150px; font-size: 14px; }
   .cjh-nueva td:nth-child(3)::before { content: "Entró"; }
   .cjh-nueva td:nth-child(4)::before { content: "Salió"; }
   .cjh-nueva td:nth-child(3)::before, .cjh-nueva td:nth-child(4)::before { display: block; font-size: 11px; font-weight: 700; color: #64748b; }

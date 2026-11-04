@@ -1346,6 +1346,49 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
 // libre del parte) se resuelve/crea en campo_clientes (alta rápida). El cobro
 // real (abonos/saldo) sigue con la maquinaria de servicios. Todo en 1 transacción
 // con lock sobre el parte (evita doble cobro).
+async function cobrarParte(client: Q, id: string, precio: { precio_unitario?: number; valor_viaje?: number }, creadoPor: string | null) {
+  const parte = (await client.query(
+    `SELECT p.*, a.tipo AS activo_tipo
+     FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id
+     WHERE p.id = $1 FOR UPDATE OF p`, [id]
+  )).rows[0];
+  if (!parte) throw new ApiError(404, "Parte no encontrado");
+  const liquidacion = await liquidacionActivaDeParte(client, parte.id);
+  if (liquidacion) {
+    throw new ApiError(409, `Este parte ya fue cobrado en la liquidacion ${liquidacion.liquidation_number}.`);
+  }
+  if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
+
+  const nombre = String(parte.cliente).trim();
+  const cliente = parte.cliente_id
+    ? (await client.query("SELECT id, nombre, tipo FROM campo_clientes WHERE id = $1", [parte.cliente_id])).rows[0]
+    : await resolverClienteParte(client, { cliente: nombre });
+  if (!cliente) throw new ApiError(409, "El cliente enlazado al parte ya no existe.");
+
+  const qq = Number(parte.qq);
+  const tipoServicio = tipoServicioPorActivo(parte.activo_tipo);
+  const tipoDetalle = tipoServicio === "cosecha" ? "cosecha" : "flete";
+  const porViaje = precio.valor_viaje != null;
+  if (porViaje && tipoServicio !== "flete") throw new ApiError(400, "Solo un flete se cobra por viaje.");
+  const valor = porViaje ? Math.round((precio.valor_viaje as number) * 100) / 100 : Math.round(qq * (precio.precio_unitario as number) * 100) / 100;
+  // Por viaje se guarda el precio equivalente por QQ (para reportes); el valor manda.
+  const precioUnit = porViaje ? (qq > 0 ? Math.round((valor / qq) * 10000) / 10000 : null) : precio.precio_unitario;
+  const servicio = (await client.query(
+    `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING *`,
+    [parte.fecha, cliente.id, parte.activo_id, tipoServicio, qq, precioUnit, valor,
+     `Cobro de parte de ${tipoDetalle}${porViaje ? " por viaje" : ""} (${nombre})`, creadoPor]
+  )).rows[0];
+
+  const parteUpd = (await client.query(
+    "UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2, cliente_id = $3 WHERE id = $1 RETURNING *",
+    [parte.id, servicio.id, cliente.id]
+  )).rows[0];
+
+  return { parte: parteUpd, servicio, cliente_id: cliente.id, valor };
+}
+
 campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
   // Por QQ (precio_unitario × QQ) o, en un FLETE, por VIAJE: monto fijo del viaje completo
   // (se cobra cuando el carro no llevó los QQ que debía).
@@ -1353,49 +1396,34 @@ campoRouter.post("/partes/:id/cobrar", asyncRoute(async (req, res) => {
     precio_unitario: z.number().positive().optional(),
     valor_viaje: z.number().positive().max(1_000_000).optional()
   }).refine((b) => (b.precio_unitario != null) !== (b.valor_viaje != null), "Indica el precio por QQ o el valor del viaje.").parse(req.body);
-  const result = await inTransaction(async (client) => {
-    const parte = (await client.query(
-      `SELECT p.*, a.tipo AS activo_tipo
-       FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id
-       WHERE p.id = $1 FOR UPDATE OF p`, [req.params.id]
-    )).rows[0];
-    if (!parte) throw new ApiError(404, "Parte no encontrado");
-    const liquidacion = await liquidacionActivaDeParte(client, parte.id);
-    if (liquidacion) {
-      throw new ApiError(409, `Este parte ya fue cobrado en la liquidacion ${liquidacion.liquidation_number}.`);
-    }
-    if (parte.estado !== "por_cobrar") throw new ApiError(409, "Este parte ya tiene un cobro generado.");
-
-    const nombre = String(parte.cliente).trim();
-    const cliente = parte.cliente_id
-      ? (await client.query("SELECT id, nombre, tipo FROM campo_clientes WHERE id = $1", [parte.cliente_id])).rows[0]
-      : await resolverClienteParte(client, { cliente: nombre });
-    if (!cliente) throw new ApiError(409, "El cliente enlazado al parte ya no existe.");
-
-    const qq = Number(parte.qq);
-    const tipoServicio = tipoServicioPorActivo(parte.activo_tipo);
-    const tipoDetalle = tipoServicio === "cosecha" ? "cosecha" : "flete";
-    const porViaje = body.valor_viaje != null;
-    if (porViaje && tipoServicio !== "flete") throw new ApiError(400, "Solo un flete se cobra por viaje.");
-    const valor = porViaje ? Math.round((body.valor_viaje as number) * 100) / 100 : Math.round(qq * (body.precio_unitario as number) * 100) / 100;
-    // Por viaje se guarda el precio equivalente por QQ (para reportes); el valor manda.
-    const precioUnit = porViaje ? (qq > 0 ? Math.round((valor / qq) * 10000) / 10000 : null) : body.precio_unitario;
-    const servicio = (await client.query(
-      `INSERT INTO campo_servicios (fecha, cliente_id, activo_id, tipo, qq, precio_unitario, valor, notas, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [parte.fecha, cliente.id, parte.activo_id, tipoServicio, qq, precioUnit, valor,
-       `Cobro de parte de ${tipoDetalle}${porViaje ? " por viaje" : ""} (${nombre})`, userId(req)]
-    )).rows[0];
-
-    const parteUpd = (await client.query(
-      "UPDATE campo_partes SET estado = 'cobrado', servicio_id = $2, cliente_id = $3 WHERE id = $1 RETURNING *",
-      [parte.id, servicio.id, cliente.id]
-    )).rows[0];
-
-    return { parte: parteUpd, servicio, cliente_id: cliente.id, valor };
-  });
+  const result = await inTransaction((client) => cobrarParte(client, String(req.params.id), body, userId(req)));
   res.status(201).json(result);
+}));
+
+// Facturar varios partes de una vez (pedido del dueño 2026-11-03): un precio por QQ para la cosecha y otro para el
+// flete. Es todo o nada: si uno no se puede, no se factura ninguno.
+campoRouter.post("/partes/cobrar-varios", asyncRoute(async (req, res) => {
+  const body = z.object({
+    parte_ids: z.array(z.string().uuid()).min(1).max(200),
+    precio_cosecha: z.number().positive().optional(),
+    precio_flete: z.number().positive().optional()
+  }).parse(req.body);
+  const ids = [...new Set(body.parte_ids)].sort();
+  const out = await inTransaction(async (client) => {
+    const tipos = (await client.query(
+      "SELECT p.id, a.tipo FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id WHERE p.id = ANY($1::uuid[])", [ids]
+    )).rows as Array<{ id: string; tipo: string }>;
+    if (tipos.length !== ids.length) throw new ApiError(404, "Algún parte ya no existe: actualiza la lista.");
+    let total = 0;
+    for (const t of tipos.sort((a, b) => (a.id < b.id ? -1 : 1))) {
+      const cosecha = tipoServicioPorActivo(t.tipo) === "cosecha";
+      const precio = cosecha ? body.precio_cosecha : body.precio_flete;
+      if (precio == null) throw new ApiError(400, `Falta el precio por QQ de ${cosecha ? "cosecha" : "flete"}.`);
+      total += (await cobrarParte(client, t.id, { precio_unitario: precio }, userId(req))).valor;
+    }
+    return { partes: tipos.length, total: Math.round(total * 100) / 100 };
+  });
+  res.status(201).json(out);
 }));
 
 // Editar un parte. Solo si aún NO tiene cobro generado (estado 'por_cobrar'):

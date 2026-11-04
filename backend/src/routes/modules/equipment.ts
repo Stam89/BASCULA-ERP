@@ -7,7 +7,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { avisarSobregiro } from "../../services/caja.js";
+import { avisarSobregiro, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
@@ -447,11 +447,15 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
     // 👷 Anticipo a un operador de Transporte (queda como su vale; se descuenta en su nómina).
     anticipo_operador: z.string().trim().min(2).max(120).optional(),
     // 💳 Pagado con el banco / tarjeta de débito de la Matriz (no sale de la gaveta).
-    pagado_con_banco: z.boolean().optional()
+    pagado_con_banco: z.boolean().optional(),
+    // Día del gasto, si no es hoy (la hoja de Caja).
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
   const out = await inTransaction(async (client) => {
+   const fechaMov = await fechaValidaDeCaja(client, body.cash_register_id, body.fecha);
    const r = await registrarGastoTransporte(client, {
+    fecha: fechaMov,
     anticipoOperador: body.anticipo_operador ?? null,
     matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id ?? null, tipo: body.maintenance_type,
     categoria: body.categoria ?? null, monto: body.monto ?? null, pagadoA: body.pagado_a ?? null,
@@ -462,6 +466,7 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
      const gasto = (await client.query("SELECT id, description FROM cash_movements WHERE reference_type = 'campo_cxp' AND reference_id = $1", [r.cxp_id])).rows[0];
      if (gasto) await registrarPagoConBanco(client, { cajaId: body.cash_register_id, gastoId: gasto.id, monto: r.total, concepto: String(gasto.description ?? "Gasto de Transporte"), userId: auth.user?.id ?? null });
    }
+   if (fechaMov) await fecharMovimientosDeCaja(client, body.cash_register_id, fechaMov);
    return r;
   });
   res.status(201).json(out);

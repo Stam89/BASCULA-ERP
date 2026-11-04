@@ -96,7 +96,7 @@ prestamosRouter.get("/:id", asyncRoute(async (req, res) => {
   if (!p) throw new ApiError(404, "Préstamo no encontrado para el accionista activo.");
   const cuotas = (await pool.query(
     `SELECT q.id, q.numero, q.fecha_vencimiento, q.capital::float AS capital, q.interes::float AS interes, q.otros::float AS otros,
-            (q.capital + q.interes + q.otros)::float AS total, q.estado, q.pagada_at,
+            (q.capital + q.interes + q.otros)::float AS total, q.estado, q.pagada_at, q.pagada_fuera,
             q.pagado_interes::float AS pagado_interes, q.pagado_otros::float AS pagado_otros, m.amount::float AS pagado_total, m.medio
        FROM prestamo_cuotas q LEFT JOIN cash_movements m ON m.id = q.cash_movement_id
       WHERE q.prestamo_id = $1 ORDER BY q.numero`,
@@ -245,6 +245,57 @@ prestamosRouter.post("/:id/cuotas/:cuotaId/pagar", asyncRoute(async (req, res) =
     return { pagado: total, capital, interes, otros, cuotas_pendientes: quedan, prestamo_pagado: quedan === 0, movimiento_id: mov.id };
   });
   res.json(r);
+}));
+
+// 🏦 Cuotas pagadas por fuera de la caja: el banco las cobró antes de usar la app de verdad (o directo de la cuenta).
+// Bajan la deuda sin mover ninguna caja y su interés no entra al resultado. Una o todas las vencidas hasta una fecha.
+async function marcarPagadasFuera(client: PoolClient, prestamoId: string, filtro: string, params: unknown[]): Promise<number> {
+  const r = await client.query(
+    `UPDATE prestamo_cuotas SET estado = 'PAGADA', pagada_fuera = true, pagado_interes = interes, pagado_otros = otros, pagada_at = fecha_vencimiento
+      WHERE prestamo_id = $1 AND estado = 'PENDIENTE' AND ${filtro}`,
+    [prestamoId, ...params]
+  );
+  const quedan = Number((await client.query("SELECT count(*)::int AS n FROM prestamo_cuotas WHERE prestamo_id = $1 AND estado = 'PENDIENTE'", [prestamoId])).rows[0].n);
+  if (quedan === 0) await client.query("UPDATE prestamos_bancarios SET estado = 'PAGADO' WHERE id = $1", [prestamoId]);
+  return r.rowCount ?? 0;
+}
+
+prestamosRouter.post("/:id/cuotas/:cuotaId/pagada-fuera", asyncRoute(async (req, res) => {
+  const acc = accId(req);
+  const n = await inTransaction(async (client) => {
+    const p = await prestamoDelAccionista(client, String(req.params.id), acc, true);
+    if (p.estado !== "VIGENTE") throw new ApiError(409, "Ese préstamo ya no está vigente.");
+    const hechas = await marcarPagadasFuera(client, p.id, "id = $2", [req.params.cuotaId]);
+    if (!hechas) throw new ApiError(409, "Esa cuota ya está pagada.");
+    return hechas;
+  });
+  res.json({ ok: true, cuotas: n });
+}));
+
+prestamosRouter.post("/:id/pagadas-fuera", asyncRoute(async (req, res) => {
+  const body = z.object({ hasta: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).parse(req.body);
+  const acc = accId(req);
+  const n = await inTransaction(async (client) => {
+    const p = await prestamoDelAccionista(client, String(req.params.id), acc, true);
+    if (p.estado !== "VIGENTE") throw new ApiError(409, "Ese préstamo ya no está vigente.");
+    return marcarPagadasFuera(client, p.id, "fecha_vencimiento <= $2::date", [body.hasta]);
+  });
+  res.json({ ok: true, cuotas: n });
+}));
+
+// Deshacer: la cuota vuelve a pendiente (solo las pagadas por fuera; las de Caja se anulan en Caja).
+prestamosRouter.post("/:id/cuotas/:cuotaId/deshacer-fuera", asyncRoute(async (req, res) => {
+  const acc = accId(req);
+  await inTransaction(async (client) => {
+    const p = await prestamoDelAccionista(client, String(req.params.id), acc, true);
+    const r = await client.query(
+      `UPDATE prestamo_cuotas SET estado = 'PENDIENTE', pagada_fuera = false, pagado_interes = NULL, pagado_otros = NULL, pagada_at = NULL
+        WHERE id = $1 AND prestamo_id = $2 AND pagada_fuera`, [req.params.cuotaId, p.id]
+    );
+    if (!r.rowCount) throw new ApiError(409, "Esa cuota no se marcó como pagada por fuera.");
+    await client.query("UPDATE prestamos_bancarios SET estado = 'VIGENTE' WHERE id = $1 AND estado = 'PAGADO'", [p.id]);
+  });
+  res.json({ ok: true });
 }));
 
 // Anular un préstamo registrado por error (solo si no tiene cuotas pagadas). Si registró la entrada del dinero,

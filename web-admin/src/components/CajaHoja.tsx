@@ -28,6 +28,8 @@ export type HojaNueva = {
   destino?: HojaDestino;
   /** 💳 No salió de la gaveta: lo pagó el banco / la tarjeta de débito de esta empresa. */
   banco?: boolean;
+  /** Día del movimiento si no es hoy (AAAA-MM-DD). */
+  fecha?: string;
 };
 
 /** Rubro flexible (migración 20261129): donaciones, refrigerios, aportes menores… con descripción libre. */
@@ -35,6 +37,7 @@ export const RUBRO_VARIOS = { EGRESO: "GASTOS_VARIOS", INGRESO: "INGRESOS_VARIOS
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const sinTilde = (x: string) => x.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+const diaEc = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
 const fechaCorta = (iso: string) => new Date(iso).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 // Caja simplificada (pedido del dueño 2026-11-03): columnas Fecha · Concepto · Entradas · Salidas · Saldo. La categoría
 // y «¿De quién?» van como etiquetas bajo el concepto (se llenan solas por lo escrito y se cambian con un clic); el
@@ -48,8 +51,10 @@ type Celda = typeof CELDAS[number];
 export function CajaHoja({
   movimientos, creditos, verOtros, origenExterno, saldoInicial, categorias, sugerencias, mixto, puedeAnular,
   esCompleja, onGuardar, onFormularioCompleto, onAnular, onAnularCredito, onRepetir, onLiquidarFondo,
-  destinos = [], puedeBanco = false
+  destinos = [], puedeBanco = false, abiertaEl = null
 }: {
+  /** Cuándo se abrió la caja: no se registra nada antes de ese día. */
+  abiertaEl?: string | null;
   /** Opciones de «¿De quién?» (la primera es esta caja). Vacío = no se muestra la columna. */
   destinos?: HojaDestino[];
   /** Permite marcar «💳 No es efectivo» (banco / tarjeta de esta empresa). */
@@ -80,6 +85,9 @@ export function CajaHoja({
   const [medio, setMedio] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
   const [quienTxt, setQuienTxt] = useState("");
   const [quienManual, setQuienManual] = useState(false);
+  // Se queda entre un movimiento y otro: para pasar varios del mismo día anterior. Esc vuelve a hoy.
+  const hoy = diaEc(new Date());
+  const [fecha, setFecha] = useState(hoy);
   const [banco, setBanco] = useState(false);
   const conQuien = destinos.length > 0;
   const [error, setError] = useState("");
@@ -176,6 +184,8 @@ export function CajaHoja({
     setQuienTxt(""); setQuienManual(false); setBanco(false); enfocar("concepto");
   };
 
+  const limpiarTodo = () => { setFecha(hoy); limpiar(); };
+
   const guardar = async (forzada?: HojaCategoria | null) => {
     setError("");
     const destino = conQuien ? resolverQuien(quienTxt) : null;
@@ -195,7 +205,7 @@ export function CajaHoja({
     setGuardando(true);
     try {
       await onGuardar({ movement: tipo!, category: cat?.codigo ?? "", amount: monto, description: concepto.trim(), codigo: CODIGO, medio,
-        destino: destino ?? undefined, banco: banco || undefined });
+        destino: destino ?? undefined, banco: banco || undefined, fecha: fecha !== hoy ? fecha : undefined });
       limpiar();
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo guardar");
@@ -232,7 +242,7 @@ export function CajaHoja({
     }
   };
   const tecla = (c: Celda) => (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") { e.preventDefault(); limpiar(); return; }
+    if (e.key === "Escape") { e.preventDefault(); limpiarTodo(); return; }
     if (e.key !== "Enter") return;
     e.preventDefault();
     guardar();
@@ -346,18 +356,22 @@ export function CajaHoja({
             })}
             {/* Fila de captura: como escribir la siguiente línea del Excel. */}
             <tr className="cjh-nueva">
-              <td className="cjh-fecha">Ahora</td>
+              <td className="cjh-fecha">
+                <input type="date" value={fecha} max={hoy} min={abiertaEl ? diaEc(new Date(abiertaEl)) : undefined} disabled={guardando}
+                  className={fecha !== hoy ? "is-otra" : ""} aria-label="Fecha del movimiento" title="Cambia la fecha si el movimiento es de un día anterior"
+                  onChange={(e) => setFecha(e.target.value || hoy)} />
+              </td>
               <td>
                 <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
                   placeholder="Concepto (ej: refrigerio, diésel COS.10, JUAN PÉREZ…)" disabled={guardando} ariaLabel="Concepto o descripción"
-                  onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiar} />
+                  onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiarTodo} />
                 <div className="cjh-nueva__tags">
                   <label>
                     <span>Categoría</span>
                     <CeldaSugerida inputRef={(el) => { refs.current.categoria = el; }} value={catTxt} opciones={opcionesCat} minimo={0} elegirPrimera
                       placeholder="Elige…" disabled={guardando} ariaLabel="Categoría"
                       className={catTxt && !cat ? "is-mal" : tipo === "INCOME" ? "is-in" : tipo === "EXPENSE" ? "is-out" : ""}
-                      onChange={(v) => { setCatTxt(v); setError(""); }} onEnter={(v) => siguiente("categoria", v)} onEscape={limpiar}
+                      onChange={(v) => { setCatTxt(v); setError(""); }} onEnter={(v) => siguiente("categoria", v)} onEscape={limpiarTodo}
                       onBlur={() => { if (cat) setCatTxt(cat.nombre); }} />
                   </label>
                   {conQuien && (
@@ -366,7 +380,7 @@ export function CajaHoja({
                       <CeldaSugerida inputRef={(el) => { refs.current.quien = el; }} value={quienTxt} opciones={opcionesQuien} minimo={0} elegirPrimera
                         placeholder={destinos[0]?.valor ?? "Esta caja"} disabled={guardando} ariaLabel="¿De quién es?"
                         className={quienTxt && !quien ? "is-mal" : quien && quien.tipo !== "propio" ? "is-out" : ""}
-                        onChange={(v) => { setQuienTxt(v); setQuienManual(true); setError(""); }} onEnter={(v) => siguiente("quien", v)} onEscape={limpiar}
+                        onChange={(v) => { setQuienTxt(v); setQuienManual(true); setError(""); }} onEnter={(v) => siguiente("quien", v)} onEscape={limpiarTodo}
                         onBlur={() => { if (quien && quienTxt) setQuienTxt(quien.valor); }} />
                     </label>
                   )}
@@ -422,6 +436,7 @@ export function CajaHoja({
             {movimientos.some((m) => origenExterno(m)) && <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (pedidos, anticipos, compras…).</span>}</span>
         )}
         {banco && !error && <span className="cjh-aviso">💳 Esta salida no sale de la gaveta: entra lo mismo como «Retiro del banco».</span>}
+        {fecha !== hoy && !error && <span className="cjh-aviso">📅 Se registrará con fecha {fecha.split("-").reverse().join("/")}. <kbd>Esc</kbd> vuelve a hoy.</span>}
       </div>
     </div>
   );

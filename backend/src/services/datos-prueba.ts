@@ -139,6 +139,13 @@ export const CATALOGOS_PRESERVADOS: Record<string, "nulificar" | "borrar_filas">
   tarifario_servicio: "borrar_filas"
 };
 
+/**
+ * Cartera real que se puede conservar al empezar de cero (pedido del dueño 2026-11-03): agricultores, fomentos y
+ * préstamos no son datos de prueba. Lo que apuntaba a filas borradas (la caja de la entrega, la liquidación del pago)
+ * queda en NULL; las deudas y los pagos siguen.
+ */
+export const CARTERA = ["farmers", "fomentos", "fomento_entregas", "fomento_pagos", "prestamos_bancarios", "prestamo_cuotas"];
+
 export type Fk = { conname: string; hijo: string; padre: string; def: string; cols: string[] };
 
 /**
@@ -160,14 +167,15 @@ export function planVaciado(fks: Fk[], tablas: string[], preservados: string[]):
 
 const ident = (s: string) => `"${s.replace(/"/g, '""')}"`;
 
-export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; notFound: string[]; preservados: string[] }> {
-  const preservables = Object.keys(CATALOGOS_PRESERVADOS);
+export async function vaciarDatosDePrueba(db: Db, opts: { conservarCartera?: boolean } = {}): Promise<{ wiped: string[]; notFound: string[]; preservados: string[] }> {
+  const cartera = opts.conservarCartera ? CARTERA : [];
+  const preservables = [...Object.keys(CATALOGOS_PRESERVADOS), ...cartera];
   const existing = await db.query(
     `SELECT tablename FROM pg_tables WHERE schemaname = 'public' AND tablename = ANY($1)`,
     [[...WIPE_TABLES, ...preservables, "insumos", "sack_inventory", "tunnel_status", "bajada_carro_config", "bascula_config"]]
   );
   const present = new Set<string>(existing.rows.map((r: { tablename: string }) => r.tablename));
-  const tables = WIPE_TABLES.filter((t) => present.has(t));
+  const tables = WIPE_TABLES.filter((t) => present.has(t) && !cartera.includes(t));
   const notFound = WIPE_TABLES.filter((t) => !present.has(t));
   if (notFound.length > 0) {
     console.error(`[reset-transactions] ⚠️ Tablas de la lista NO encontradas en el esquema (posible nombre incorrecto): ${notFound.join(", ")}`);
@@ -204,7 +212,7 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   //    a crear sus FK tal cual estaban.
   for (const f of sueltas) {
     const alguna = f.cols.map((c) => `${ident(c)} IS NOT NULL`).join(" OR ");
-    if (CATALOGOS_PRESERVADOS[f.hijo] === "borrar_filas") {
+    if ((CATALOGOS_PRESERVADOS[f.hijo] ?? "nulificar") === "borrar_filas") {
       await db.query(`DELETE FROM ${f.hijo} WHERE ${alguna}`);
     } else {
       await db.query(`UPDATE ${f.hijo} SET ${f.cols.map((c) => `${ident(c)} = NULL`).join(", ")} WHERE ${alguna}`);
@@ -232,6 +240,22 @@ export async function vaciarDatosDePrueba(db: Db): Promise<{ wiped: string[]; no
   if (present.has("bajada_carro_config")) {
     await db.query(
       `UPDATE bajada_carro_config SET desde = (now() AT TIME ZONE 'America/Guayaquil')::date, desde_numero = NULL, updated_at = now()`
+    );
+  }
+
+  // Préstamos conservados: las cuotas ya vencidas se pagaron por fuera (el banco cobra en su día aunque la app no se
+  // usara) y las pagadas pierden su movimiento de caja. Los anulados no sirven de nada en un arranque nuevo.
+  if (opts.conservarCartera) {
+    await db.query("DELETE FROM prestamo_cuotas WHERE prestamo_id IN (SELECT id FROM prestamos_bancarios WHERE estado = 'ANULADO')");
+    await db.query("DELETE FROM prestamos_bancarios WHERE estado = 'ANULADO'");
+    await db.query("UPDATE prestamo_cuotas SET pagada_fuera = true WHERE estado = 'PAGADA'");
+    await db.query(
+      `UPDATE prestamo_cuotas SET estado = 'PAGADA', pagada_fuera = true, pagado_interes = interes, pagado_otros = otros, pagada_at = fecha_vencimiento
+        WHERE estado = 'PENDIENTE' AND fecha_vencimiento < (now() AT TIME ZONE 'America/Guayaquil')::date`
+    );
+    await db.query(
+      `UPDATE prestamos_bancarios p SET estado = 'PAGADO'
+        WHERE p.estado = 'VIGENTE' AND NOT EXISTS (SELECT 1 FROM prestamo_cuotas q WHERE q.prestamo_id = p.id AND q.estado = 'PENDIENTE')`
     );
   }
 

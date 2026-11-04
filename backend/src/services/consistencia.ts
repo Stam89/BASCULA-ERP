@@ -77,7 +77,7 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Préstamos", nombre: "Cuotas de préstamos: cada pagada tiene su pago vigente en Caja por lo pagado, y las pendientes ninguno", sql: `
     SELECT q.id, q.estado, m.amount::float AS caja, (q.capital + COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))::float AS pagado
       FROM prestamo_cuotas q LEFT JOIN cash_movements m ON m.id = q.cash_movement_id
-     WHERE (q.estado = 'PAGADA' AND (m.id IS NULL OR m.reversed_at IS NOT NULL
+     WHERE (q.estado = 'PAGADA' AND NOT q.pagada_fuera AND (m.id IS NULL OR m.reversed_at IS NOT NULL
               OR abs(m.amount - (q.capital + COALESCE(q.pagado_interes, 0) + COALESCE(q.pagado_otros, 0))) > 0.005))
         OR (q.estado = 'PENDIENTE' AND q.cash_movement_id IS NOT NULL)` },
   { modulo: "Préstamos", nombre: "Préstamos: «pagado» solo sin cuotas pendientes y «vigente» con alguna", sql: `

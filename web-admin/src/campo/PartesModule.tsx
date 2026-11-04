@@ -106,6 +106,31 @@ export default function PartesModule() {
   });
   const cambiarVista = (v: "nuevo" | "historial") => { setVista(v); try { localStorage.setItem("bascula-erp:partes-vista", v); } catch { /* sin almacenamiento */ } };
   const porCobrar = partes.filter((p) => p.estado === "por_cobrar").length;
+  // Cobrar varios de una vez: los marcados de lo que se ve, con un precio por QQ para cosecha y otro para flete.
+  const [marcados, setMarcados] = useState<Set<string>>(new Set());
+  const [precioLote, setPrecioLote] = useState({ cosecha: "", flete: "" });
+  const [cobrandoLote, setCobrandoLote] = useState(false);
+  const cobrables = useMemo(() => partesVista.filter((p) => p.estado === "por_cobrar" && !p.cobro_automatico), [partesVista]);
+  const enLote = useMemo(() => cobrables.filter((p) => marcados.has(p.id)), [cobrables, marcados]);
+  const hayCosecha = enLote.some(esCosechadora);
+  const hayFlete = enLote.some((p) => !esCosechadora(p));
+  const lotePrecio = { cosecha: Number(precioLote.cosecha), flete: Number(precioLote.flete) };
+  const loteListo = enLote.length > 0 && (!hayCosecha || lotePrecio.cosecha > 0) && (!hayFlete || lotePrecio.flete > 0);
+  const loteTotal = enLote.reduce((s, p) => s + Math.round(p.qq * (esCosechadora(p) ? lotePrecio.cosecha : lotePrecio.flete) * 100) / 100, 0);
+  const marcar = (id: string) => setMarcados((m) => { const n = new Set(m); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  async function cobrarLote() {
+    setCobrandoLote(true);
+    try {
+      const r = await apiPost<{ partes: number; total: number }>("/campo/partes/cobrar-varios", {
+        parte_ids: enLote.map((p) => p.id),
+        precio_cosecha: hayCosecha ? lotePrecio.cosecha : undefined,
+        precio_flete: hayFlete ? lotePrecio.flete : undefined
+      });
+      setMarcados(new Set());
+      await refrescar();
+      notify(`${r.partes} parte(s) cobrados por ${money(r.total)}: quedan en Cuentas por Cobrar`);
+    } catch (e) { notify((e as Error).message, "err"); } finally { setCobrandoLote(false); }
+  }
 
   async function anular(p: Parte) {
     if (!(await confirmar(`¿Anular el parte de ${p.cliente} (${qqFmt(p.qq)} QQ)? Esta acción no se puede deshacer.`))) return;
@@ -276,18 +301,31 @@ export default function PartesModule() {
             <button type="button" className="btnSecondary" onClick={() => setFiltro({ from: "", to: "", activo_id: "", estado: "" })}>Limpiar</button>
           )}
         </div>
+        {enLote.length > 0 && (
+          <div className="partesCobro">
+            <strong>{enLote.length} parte(s) · {qqFmt(enLote.reduce((s, p) => s + p.qq, 0))} QQ</strong>
+            {hayCosecha && <label><span>Cosecha $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.01" value={precioLote.cosecha} onChange={(e) => setPrecioLote({ ...precioLote, cosecha: e.target.value })} /></label>}
+            {hayFlete && <label><span>Flete $/QQ</span><input type="number" inputMode="decimal" min="0" step="0.01" value={precioLote.flete} onChange={(e) => setPrecioLote({ ...precioLote, flete: e.target.value })} /></label>}
+            {loteListo && <span className="partesCobro__total">Total {money(loteTotal)}</span>}
+            <button type="button" className="primary" disabled={!loteListo || cobrandoLote} onClick={() => { cobrarLote().catch(() => undefined); }}>{cobrandoLote ? "Cobrando…" : "💵 Cobrar marcados"}</button>
+            <button type="button" className="btnGhost" disabled={cobrandoLote} onClick={() => setMarcados(new Set())}>Quitar marcas</button>
+          </div>
+        )}
         <div style={{ overflowX: "auto" }}>
           <table className="cajaTable" style={{ marginTop: 8 }}>
             <thead><tr>
+              <th><input type="checkbox" aria-label="Marcar todos los por cobrar" disabled={cobrables.length === 0} checked={cobrables.length > 0 && enLote.length === cobrables.length}
+                onChange={(e) => setMarcados(new Set(e.target.checked ? cobrables.map((p) => p.id) : []))} /></th>
               <th>Fecha</th><th>Operador</th><th>Máquina</th><th>Cliente</th>
               <th className="num">QQ trabajados</th><th>Observaciones</th><th>Estado</th><th>Acciones</th>
             </tr></thead>
             <tbody>
               {partesVista.length === 0 ? (
-                <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
+                <tr><td colSpan={9} className="muted" style={{ textAlign: "center", padding: 14 }}>Sin partes registrados.</td></tr>
               ) : partesVista.map((p) => {
                 return (
                 <tr key={p.id}>
+                  <td>{p.estado === "por_cobrar" && !p.cobro_automatico && <input type="checkbox" aria-label={`Marcar parte de ${p.cliente}`} checked={marcados.has(p.id)} onChange={() => marcar(p.id)} />}</td>
                   <td style={{ whiteSpace: "nowrap" }}>{String(p.fecha).slice(0, 10)}</td>
                   <td>
                     {/* Sin chofer no es un error: el pago sale del informe que trae el chofer. */}

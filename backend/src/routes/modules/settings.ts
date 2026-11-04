@@ -671,7 +671,8 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   const body = z.object({
     password: z.string().min(4),
     llave_maestra: z.string().default(""),
-    confirm: z.literal("BORRAR")
+    confirm: z.literal("BORRAR"),
+    conservar_cartera: z.boolean().optional()
   }).parse(req.body);
   if (!llaveCoincide(body.llave_maestra, env.llaveMaestra)) {
     fallosLlaveMaestra.registrar(ip);
@@ -689,7 +690,7 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
 
   // Lo único que devuelve los datos si el borrado fue un error: sin respaldo no se borra nada.
   await hacerRespaldo();
-  const result = await inTransaction((client) => vaciarDatosDePrueba(client));
+  const result = await inTransaction((client) => vaciarDatosDePrueba(client, { conservarCartera: body.conservar_cartera }));
 
   res.json({ ok: true, respaldo: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound, preservados: result.preservados });
 }));

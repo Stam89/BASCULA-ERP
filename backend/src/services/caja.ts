@@ -1,6 +1,7 @@
 import type { Request } from "express";
 import { ApiError, AvisoConfirmable } from "../http/error-handler.js";
 import { confirmado } from "../http/confirmaciones.js";
+import { hoyEc } from "../utils/fechas.js";
 
 type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 
@@ -86,4 +87,36 @@ export function medioParaCaja(tipoCaja: string, pedido?: string | null): "EFECTI
   if (tipoCaja === "BANCO") return "BANCO";
   if (tipoCaja === "EFECTIVO") return "EFECTIVO";
   return pedido === "BANCO" ? "BANCO" : "EFECTIVO";
+}
+
+/**
+ * 📅 Movimiento de un día anterior (pedido del dueño 2026-11-03): sin esto lo de ayer quedaba con la fecha de hoy y, al
+ * cruzar fin de mes, en el mes equivocado. Vale desde el día que se abrió la caja hasta hoy, y nunca en un mes ya
+ * cerrado. Devuelve la fecha a aplicar, o null si es hoy o no vino.
+ */
+export async function fechaValidaDeCaja(client: Db, cajaId: string, fecha: string | null | undefined): Promise<string | null> {
+  const hoy = hoyEc();
+  if (!fecha || fecha === hoy) return null;
+  if (fecha > hoy) throw new ApiError(400, "La fecha del movimiento no puede ser futura.");
+  const c = (await client.query(
+    "SELECT accionista_id, (opened_at AT TIME ZONE 'America/Guayaquil')::date::text AS abierta FROM cash_registers WHERE id = $1", [cajaId]
+  )).rows[0];
+  if (!c) throw new ApiError(404, "Caja no encontrada");
+  if (fecha < c.abierta) throw new ApiError(400, `Esta caja se abrió el ${c.abierta.split("-").reverse().join("/")}: no se puede registrar antes de ese día.`);
+  const [anio, mes] = fecha.split("-").map(Number);
+  const cerrado = await client.query(
+    "SELECT 1 FROM cierres_mes WHERE accionista_id = $1 AND anio = $2 AND mes = $3 AND anulado_at IS NULL LIMIT 1", [c.accionista_id, anio, mes]
+  );
+  if (cerrado.rowCount) throw new ApiError(409, "Ese mes ya tiene su cierre: para registrar algo ahí, primero anula el cierre.");
+  return fecha;
+}
+
+/** Pasa a ese día lo que esta transacción registró en la caja (created_at = now() es la hora de la transacción). */
+export async function fecharMovimientosDeCaja(client: Db, cajaId: string, fecha: string): Promise<void> {
+  await client.query(
+    `UPDATE cash_movements
+        SET created_at = ($2::date + (now() AT TIME ZONE 'America/Guayaquil')::time) AT TIME ZONE 'America/Guayaquil'
+      WHERE cash_register_id = $1 AND created_at = now()`,
+    [cajaId, fecha]
+  );
 }

@@ -2,7 +2,14 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 🔍 Arreglos de la auditoría, listos para empezar de cero (2026-11-03)
+## Último cambio: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
+- **Borrado**: casilla «Conservar agricultores, fomentos y préstamos» (`conservar_cartera`, `CARTERA` en datos-prueba.ts; marcada por defecto). Las cuotas ya vencidas quedan `pagada_fuera`; los préstamos ANULADO se borran.
+- **Préstamos**: cuota pagada por fuera (`pagada_fuera`, migración 20261134): rutas `/cuotas/:id/pagada-fuera`, `/pagadas-fuera` (hasta una fecha) y `/cuotas/:id/deshacer-fuera`. Baja la deuda, no mueve caja, su interés no entra al resultado.
+- **Caja**: fecha en la hoja (`fecha` en POST /cash/:id/movements y /equipment/transporte/gasto). `fechaValidaDeCaja`: desde que se abrió la caja hasta hoy y nunca en un mes cerrado; `fecharMovimientosDeCaja` mueve lo de la transacción (created_at = now()). La fecha se queda para pasar varios del mismo día; Esc vuelve a hoy.
+- **Transporte**: marcar partes y «Cobrar marcados» (`/campo/partes/cobrar-varios`, un precio de cosecha y uno de flete, todo o nada; `cobrarParte` compartido).
+- Simulacro `arranque_cartera` (52 comprobaciones).
+
+## Cambio anterior: 🔍 Arreglos de la auditoría, listos para empezar de cero (2026-11-03)
 - Pedido del dueño: arreglar la app sin tocar los valores (van a arrancar de cero con «Borrar datos de prueba»). Simulacro `arreglos_auditoria`.
 - **Balance**: suma `fomentos_por_cobrar` (capital de la cartera activa, sin interés) y avisa `inventario_detalle.qq_sin_costo` (QQ en $0 por falta de precio de referencia).
 - **Estado de Resultados**: `ingresos.otros_ingresos` (categorías de tipo INGRESO hechas a mano, sobrante de arqueo y retención de báscula; fuera lo de `INGRESOS_NO_OPERATIVOS`) e `intereses_fomentos` (fomentos cerrados en el período). En la Matriz el combustible ya no se cuenta dos veces (está en sus gastos de Caja): `NO_ES_MATRIZ`.
