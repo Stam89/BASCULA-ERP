@@ -3,6 +3,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { DialogoHost } from "./components/Dialogo";
+import { PantallaError } from "./components/PantallaError";
 import "./styles.css";
 import { recargarPorVersionNueva } from "./recargaVersion";
 
@@ -28,7 +29,9 @@ if ("serviceWorker" in navigator && !import.meta.env.DEV) {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <PantallaError>
+      <App />
+    </PantallaError>
     <DialogoHost />
   </React.StrictMode>
 );

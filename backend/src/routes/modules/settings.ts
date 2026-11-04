@@ -50,6 +50,23 @@ function listBackups() {
   return { directory: dir, backups };
 }
 
+async function hacerRespaldo(): Promise<void> {
+  if (!fs.existsSync(backupScript)) {
+    throw new ApiError(500, "No se encontró el script de respaldo en el servidor.");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(process.execPath, [backupScript], { windowsHide: true });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new ApiError(500, `El respaldo falló (código ${code}). ${stderr.slice(-300)}`));
+    });
+  });
+  ultimoRespaldoCache = null; // el respaldo recién hecho se ve al instante en «Estado del sistema»
+}
+
 // Para la revisión de «Estado del sistema» basta con saber el último respaldo: se recuerda 1 minuto.
 let ultimoRespaldoCache: { at: number; valor: string | undefined } | null = null;
 function ultimoRespaldoRapido(): string | undefined {
@@ -218,6 +235,8 @@ export async function calcularPuestaEnMarcha() {
   // Antigüedad del último respaldo (horas); null si no existe ninguno.
   const ultimoRespaldo = ultimoRespaldoRapido();
   const respaldoHoras = ultimoRespaldo ? (Date.now() - new Date(ultimoRespaldo).getTime()) / 3600000 : null;
+  // Espacio del disco de la PC del ERP: sin espacio fallan los respaldos y la base de datos.
+  const disco = await fs.promises.statfs(moduleDir).then((s) => ({ libre: (s.bavail * s.bsize) / 1e9, total: (s.blocks * s.bsize) / 1e9 })).catch(() => null);
   const checks = [
     {
       key: "app_mode",
@@ -242,6 +261,14 @@ export async function calcularPuestaEnMarcha() {
         : respaldoHoras <= 30
           ? `Último respaldo hace ${respaldoHoras < 1 ? "menos de 1 hora" : `${Math.round(respaldoHoras)} h`} (diario a las 8 pm, con la PC encendida)`
           : `El último respaldo tiene ${Math.round(respaldoHoras)} h: la PC estuvo apagada a las 8 pm o la tarea falló. Haz uno ahora en Configuración → Respaldos`
+    },
+    {
+      key: "disco",
+      label: "Espacio en el disco",
+      ok: disco != null && disco.libre >= 20,
+      detail: disco == null
+        ? "No se pudo leer el disco"
+        : `Quedan ${disco.libre.toFixed(0)} GB libres de ${disco.total.toFixed(0)} GB${disco.libre < 20 ? ": libera espacio; sin disco fallan los respaldos y la base de datos" : ""}`
     },
     {
       key: "business_name",
@@ -660,9 +687,11 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   const valid = await bcrypt.compare(body.password, userRow.rows[0].password_hash);
   if (!valid) throw new ApiError(401, "Clave incorrecta");
 
+  // Lo único que devuelve los datos si el borrado fue un error: sin respaldo no se borra nada.
+  await hacerRespaldo();
   const result = await inTransaction((client) => vaciarDatosDePrueba(client));
 
-  res.json({ ok: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound, preservados: result.preservados });
+  res.json({ ok: true, respaldo: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound, preservados: result.preservados });
 }));
 
 // ── Respaldos de base de datos ─────────────────────────────────────────────
@@ -671,19 +700,6 @@ settingsRouter.get("/backups", requireAdmin, asyncRoute(async (_req, res) => {
 }));
 
 settingsRouter.post("/backup", requireAdmin, asyncRoute(async (_req, res) => {
-  if (!fs.existsSync(backupScript)) {
-    throw new ApiError(500, "No se encontró el script de respaldo en el servidor.");
-  }
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(process.execPath, [backupScript], { windowsHide: true });
-    let stderr = "";
-    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new ApiError(500, `El respaldo falló (código ${code}). ${stderr.slice(-300)}`));
-    });
-  });
-  ultimoRespaldoCache = null; // el respaldo recién hecho se ve al instante en «Estado del sistema»
+  await hacerRespaldo();
   res.json(listBackups());
 }));

@@ -2,6 +2,10 @@
 // ninguna tabla de movimientos debe quedar con filas. SOLO copia.
 import { montar, check, resumen } from "./sim_base.mjs";
 import path from "node:path"; import { pathToFileURL, fileURLToPath } from "node:url";
+import os from "node:os"; import fs from "node:fs"; import { createRequire } from "node:module";
+// El respaldo previo al borrado se guarda en una carpeta temporal: nunca en la de respaldos de verdad.
+const RESPALDOS = fs.mkdtempSync(path.join(os.tmpdir(), "sim-respaldo-"));
+process.env.BACKUP_DIR = RESPALDOS;
 const S = await montar({ copiar: process.argv[2] !== "nocopia" });
 const { api, q, c } = S;
 try {
@@ -27,4 +31,22 @@ try {
   check(arr === ayer, "6. el arranque nuevo es el día anterior al borrado", arr);
   const saldo = await api("POST", "/saldos-iniciales/cxc", { corte: ayer, contraparte_tipo: "CLIENTE", nombre: "SIM ARRANQUE NUEVO", monto: 25 });
   check(saldo.status === 201, "7. acepta saldos iniciales a ese corte, aunque sea a mitad de mes", saldo.status);
+
+  // Por la pantalla: guarda un respaldo ANTES de borrar y, si el respaldo no se puede hacer, no borra.
+  const LLAVE = process.env.LLAVE_MAESTRA;
+  if (LLAVE) {
+    const bcrypt = createRequire(import.meta.url)("bcryptjs");
+    await q("UPDATE users SET password_hash = $2 WHERE id = $1", [S.admin.id, await bcrypt.hash("clave-simulacro", 4)]);
+    const borrar = () => api("POST", "/settings/reset-transactions", { password: "clave-simulacro", llave_maestra: LLAVE, confirm: "BORRAR" });
+    fs.writeFileSync(path.join(RESPALDOS, "es-un-archivo"), "x");
+    process.env.BACKUP_DIR = path.join(RESPALDOS, "es-un-archivo", "carpeta");
+    const sinRespaldo = await borrar();
+    check(!sinRespaldo.ok, "8. sin respaldo no se borra", sinRespaldo.status);
+    check((await q("SELECT count(*)::int n FROM saldos_iniciales"))[0].n > 0, "9. y los datos siguen ahí");
+    process.env.BACKUP_DIR = RESPALDOS;
+    const ok = await borrar();
+    check(ok.ok && ok.data.respaldo === true, "10. borrado por la pantalla", ok.status);
+    check(fs.readdirSync(RESPALDOS).some((f) => f.endsWith(".dump")), "11. quedó el respaldo", fs.readdirSync(RESPALDOS));
+    check((await q("SELECT count(*)::int n FROM saldos_iniciales"))[0].n === 0, "12. y se borró");
+  } else check(true, "8. (sin LLAVE_MAESTRA en este equipo no se prueba por la pantalla)");
 } catch (e) { console.log("⛔", e.message, e.stack?.split("\n")[1]); await c.query("ROLLBACK").catch(() => {}); check(false, "excepción"); } finally { const f = resumen(); await S.cerrar(); process.exit(f ? 1 : 0); }

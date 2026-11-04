@@ -7809,7 +7809,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       confirm: "BORRAR"
     });
     setResetForm({ password: "", llave: "", confirm: "" });
-    addToast(`Datos de prueba eliminados (${result.wiped_tables} tablas). El sistema quedó listo para operar.`, "success");
+    addToast(`Datos eliminados (${result.wiped_tables} tablas) y respaldo guardado antes de borrar. El sistema quedó listo para operar.`, "success");
     setCashSummary(null);
     setCashMovements([]);
     setExpenses([]);
@@ -28291,16 +28291,17 @@ Motivo (obligatorio):`, ""));
                   <p className="muted">
                     Reinicia la operación borrando <strong>todos los movimientos operativos de prueba</strong> del ERP: tickets, lotes, traspasos, secado, producción,
                     combustible, pilado, selección, pedidos, ventas, compras, inventario (productos, insumos, sacos y repuestos a 0), caja, gastos, nómina,
-                    anticipos, liquidaciones, fomentos, agricultores, clientes (con sus tarifas), cuentas por cobrar/pagar, saldos iniciales,
+                    anticipos, liquidaciones, fomentos, préstamos, agricultores, clientes (con sus tarifas), personal administrativo, cuentas por cobrar/pagar, saldos iniciales,
                     conciliación bancaria, notificaciones, cifras manuales del Resultado mensual <strong>y los históricos de Transporte y Cosechadora</strong> (servicios de fletes/cosecha,
                     partes diarios, nómina de operadores, caja de transporte y CxP), historial de auditoría y sincronización.
                     Se conservan usuarios, accionistas, configuración, tarifas de planta y de socios, productos y presentaciones, bodegas,
                     equipos y activos fijos, máquinas y categorías, catálogos de insumos, sacos y repuestos, proveedores, los rubros del
                     Resultado mensual (sus cifras manuales sí se borran) <strong>y la flota/choferes de Transporte</strong>. Los túneles quedan disponibles.
-                    La «Bajada de carro» de Nómina vuelve a contar <strong>desde el día del borrado</strong> (los tickets de la báscula se vuelven a
-                    descargar solos; si necesitas bajadas anteriores, pon el número de ticket en «Contar desde el ticket #» de Nómina → Bajada de carro).
+                    La báscula y la «Bajada de carro» vuelven a contar <strong>desde el día del borrado</strong> (los tickets se vuelven a descargar solos;
+                    si necesitas anteriores, pon el número en «Contar desde el ticket #»). Es un arranque nuevo: los saldos iniciales van al <strong>día anterior al borrado</strong>,
+                    así que bórralo el mismo día que empiecen.
                   </p>
-                  <p className="dangerNote">Esta acción no se puede deshacer. No recupera datos ni restaura una copia de seguridad.</p>
+                  <p className="dangerNote">Esta acción no se puede deshacer desde la app. Antes de borrar se guarda un respaldo automático: si el respaldo falla, no se borra nada.</p>
                   {companyReadiness?.reset_transactions_allowed === false && (
                     <div className="alertBox" style={{ background: "#fffbeb", borderColor: "rgba(180,83,9,.35)", color: "#92400e" }}>
                       Borrado bloqueado: falta la <strong>llave maestra</strong>. Se configura solo en el archivo <code>backend/.env</code> de la PC del

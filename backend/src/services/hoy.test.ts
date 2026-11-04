@@ -14,6 +14,12 @@ const base = (): DatosHoy => ({
 const keys = (d: DatosHoy) => construirTareas(d).map((t) => t.key);
 
 describe("construirTareas («Hoy»)", () => {
+  it("avisa el cierre del mes pasado solo si falta", () => {
+    const t = construirTareas({ ...base(), cierreMes: { nombre: "octubre" } }).find((x) => x.key === "cierre-mes");
+    expect(t?.titulo).toBe("Falta el cierre de octubre");
+    expect(t?.tab).toBe("Estados Financieros");
+    expect(keys({ ...base(), cierreMes: null })).not.toContain("cierre-mes");
+  });
   it("sin pendientes no hay tareas", () => {
     expect(construirTareas(base())).toEqual([]);
   });

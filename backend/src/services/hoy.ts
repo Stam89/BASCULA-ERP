@@ -47,6 +47,8 @@ export type DatosHoy = {
   documentosFlota?: { vencidos: Array<{ maquina: string; documento: string; fecha: string; dias: number }>; proximos: Array<{ maquina: string; documento: string; fecha: string; dias: number }> };
   /** Ventas al detalle cobradas sin decidir de quién es el arroz (opcional). `viejas` = de antes de hoy. */
   ventasPorAsignar?: { n: number; monto: number; viejas: number };
+  /** Solo la Matriz: mes pasado con movimientos y sin cierre (opcional). */
+  cierreMes?: { nombre: string } | null;
   /** Solo administrador: controles de integridad entre módulos que fallan (opcional: sin dato no se muestra nada). */
   integridad?: { problemas: number; nombres: string[] };
 };
@@ -234,6 +236,16 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
     });
   }
 
+  // ── Cierre de mes: los cortes son a fin de mes y nada lo recordaba ─────────
+  if (d.cierreMes) {
+    t.push({
+      key: "cierre-mes", nivel: "atencion", icono: "📅",
+      titulo: `Falta el cierre de ${d.cierreMes.nombre}`,
+      detalle: "Revisa que estén registrados los movimientos del mes y guarda el cierre: deja fijos los resultados y el balance de ese mes.",
+      tab: "Estados Financieros", accion: "Ver cierres"
+    });
+  }
+
   // ── Puesta en marcha (solo administrador) ────────────────────────────────
   if (d.puesta.aplica && d.puesta.faltantes.length > 0) {
     const f = d.puesta.faltantes;
@@ -252,6 +264,24 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
 // ── Lectura de datos (solo SELECT) ──────────────────────────────────────────
 async function seguro<T>(nombre: string, fallback: T, fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } catch (e) { console.error(`[hoy] «${nombre}» falló: ${(e as Error).message}`); return fallback; }
+}
+
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+
+/** El mes pasado, si tuvo movimientos de caja de la Matriz y aún no tiene su cierre. */
+async function cierrePendiente(db: Db, matrizId: string): Promise<{ nombre: string } | null> {
+  const r = (await db.query(
+    `WITH m AS (SELECT date_trunc('month', (now() AT TIME ZONE 'America/Guayaquil')::date - interval '1 month')::date AS ini)
+     SELECT extract(year FROM m.ini)::int AS anio, extract(month FROM m.ini)::int AS mes,
+            EXISTS (SELECT 1 FROM cash_movements x JOIN cash_registers c ON c.id = x.cash_register_id
+                     WHERE c.accionista_id = $1 AND (x.created_at AT TIME ZONE 'America/Guayaquil')::date >= m.ini
+                       AND (x.created_at AT TIME ZONE 'America/Guayaquil')::date < (m.ini + interval '1 month')::date) AS hubo,
+            EXISTS (SELECT 1 FROM cierres_mes k WHERE k.accionista_id = $1 AND k.anio = extract(year FROM m.ini)::int
+                       AND k.mes = extract(month FROM m.ini)::int AND k.anulado_at IS NULL) AS cerrado
+       FROM m`,
+    [matrizId]
+  )).rows[0];
+  return r?.hubo && !r.cerrado ? { nombre: MESES[Number(r.mes) - 1] } : null;
 }
 
 export async function reunirDatos(
@@ -374,12 +404,14 @@ export async function reunirDatos(
     })
     : Promise.resolve(undefined);
 
+  const cierreMes$ = seguro("cierre de mes", null, async () => (ctx.esMatriz ? cierrePendiente(db, acc) : null));
+
   // Todas las consultas son independientes: corren al mismo tiempo (antes una tras otra, ~1.3 s; auditoría fase 5).
-  const [dow, caja, tuneles, nomina, [cxc, cxp], pedidos, prestamos, documentosFlota, puesta, integridad, ventasPorAsignar] = await Promise.all([
-    dow$, caja$, tuneles$, nomina$, cxcxp$, pedidos$, prestamos$, documentosFlota$, puesta$, integridad$, porAsignar$
+  const [dow, caja, tuneles, nomina, [cxc, cxp], pedidos, prestamos, documentosFlota, puesta, integridad, ventasPorAsignar, cierreMes] = await Promise.all([
+    dow$, caja$, tuneles$, nomina$, cxcxp$, pedidos$, prestamos$, documentosFlota$, puesta$, integridad$, porAsignar$, cierreMes$
   ]);
 
-  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, ...(integridad ? { integridad } : {}), ...(ventasPorAsignar ? { ventasPorAsignar } : {}) };
+  return { dow, caja, tuneles, nomina, cxc, cxp, pedidos, prestamos, documentosFlota, puesta, cierreMes, ...(integridad ? { integridad } : {}), ...(ventasPorAsignar ? { ventasPorAsignar } : {}) };
 }
 
 export async function tareasDeHoy(ctx: Parameters<typeof reunirDatos>[1]): Promise<TareaHoy[]> {
