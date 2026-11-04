@@ -93,6 +93,7 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
     if (!user) return; // sin usuario identificado (p.ej. sync de la app Android)
     if (res.statusCode >= 400) return; // solo acciones exitosas
     if (!segment || segment === "audit") return;
+    if (res.locals.envioRepetido) return; // reintento de algo ya guardado: no pasó nada nuevo
 
     const label = RESOURCE_LABELS[segment] || segment;
     const verb = method === "POST" ? "Creó" : method === "PUT" ? "Actualizó" : method === "DELETE" ? "Eliminó" : method;

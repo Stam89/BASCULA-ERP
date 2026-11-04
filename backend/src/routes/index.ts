@@ -31,6 +31,7 @@ import { enforceModulePermissions, requireAuth, resolveAccionista } from "../aut
 import { settingsRouter } from "./modules/settings.js";
 import { auditRouter } from "./modules/audit.js";
 import { auditMiddleware } from "../audit/audit.js";
+import { envioUnicoMiddleware } from "../http/envio-unico.js";
 import { reportsRouter } from "./modules/reports.js";
 import { laborRouter } from "./modules/labor.js";
 import { nominaSemanalRouter } from "./modules/nomina-semanal.js";
@@ -76,6 +77,8 @@ routes.use("/sri", sriRouter);
 // accionista, así que la validación necesita saber cuál está activo.
 routes.use(resolveAccionista);
 routes.use(enforceModulePermissions);
+// Si la respuesta se perdió y la persona repite el mismo envío, no se ejecuta dos veces (ver http/envio-unico.ts).
+routes.use(envioUnicoMiddleware);
 
 routes.use("/dashboard", dashboardRouter);
 routes.use("/process-flow", processFlowRouter);

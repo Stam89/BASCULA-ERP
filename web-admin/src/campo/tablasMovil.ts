@@ -4,6 +4,9 @@ import { useEffect } from "react";
 // como una TARJETA con «Etiqueta: valor» en vez de una tabla ancha que hay que deslizar de lado. La etiqueta de
 // cada celda sale del encabezado de su columna; el CSS (body.campoActivo .tablaTarjeta) hace el resto.
 const SELECTOR = "table.cajaTable, table.nomMatriz__tabla, table.er-tabla";
+// Fuera de Transporte solo van en tarjeta las tablas que lo piden con `enTarjetas`: las que llevan botones o campos
+// que en el celular quedaban escondidos a la derecha.
+const SELECTOR_ERP = "table.enTarjetas";
 
 function etiquetar(tabla: HTMLTableElement) {
   const ths = tabla.tHead?.rows[tabla.tHead.rows.length - 1]?.cells;
@@ -34,22 +37,34 @@ function etiquetar(tabla: HTMLTableElement) {
   }
 }
 
+function vigilar(selector: string): () => void {
+  let pendiente = 0;
+  const pasar = () => {
+    pendiente = 0;
+    document.querySelectorAll<HTMLTableElement>(selector).forEach(etiquetar);
+  };
+  const obs = new MutationObserver(() => { if (!pendiente) pendiente = window.setTimeout(pasar, 60); });
+  obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  pasar();
+  return () => {
+    obs.disconnect();
+    if (pendiente) window.clearTimeout(pendiente);
+  };
+}
+
 /** Mientras Transporte esté abierto, etiqueta todas sus tablas (también las de los modales) y las vigila. */
 export function useTablasEnTarjetas() {
   useEffect(() => {
     document.body.classList.add("campoActivo");
-    let pendiente = 0;
-    const pasar = () => {
-      pendiente = 0;
-      document.querySelectorAll<HTMLTableElement>(SELECTOR).forEach(etiquetar);
-    };
-    const obs = new MutationObserver(() => { if (!pendiente) pendiente = window.setTimeout(pasar, 60); });
-    obs.observe(document.body, { childList: true, subtree: true, characterData: true });
-    pasar();
+    const dejar = vigilar(SELECTOR);
     return () => {
-      obs.disconnect();
-      if (pendiente) window.clearTimeout(pendiente);
+      dejar();
       document.body.classList.remove("campoActivo");
     };
   }, []);
+}
+
+/** En el resto del ERP: solo las tablas marcadas con `enTarjetas`. */
+export function useTablasEnTarjetasErp() {
+  useEffect(() => vigilar(SELECTOR_ERP), []);
 }

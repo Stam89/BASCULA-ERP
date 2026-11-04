@@ -62,7 +62,7 @@ function authHeaders(opts?: OpcionesApi): Record<string, string> {
 }
 
 /** Sin internet o el servidor se estaba reiniciando (502/503/504 del túnel): no se guardó nada. */
-export const SIN_CONEXION = "No hubo conexión con el servidor (sin internet o se estaba reiniciando). No se guardó: vuelve a intentar en un momento.";
+export const SIN_CONEXION = "No hubo conexión con el servidor (sin internet o se estaba reiniciando). Vuelve a intentar en un momento: si ya se había guardado, no se repite.";
 const conConexion = (p: Promise<Response>) => p.catch(() => { throw new Error(SIN_CONEXION); });
 
 function handleUnauthorized(response: Response) {
@@ -81,13 +81,15 @@ async function parseResponse<T>(response: Response): Promise<T> {
     // 502/503/504 y 520–530 (Cloudflare: la PC del servidor apagada o hibernando) o una página HTML = sin conexión.
     if ([502, 503, 504].includes(response.status) || (response.status >= 520 && response.status <= 530) || /^\s*</.test(text)) throw new Error(SIN_CONEXION);
     let message = text || `API error ${response.status}`;
+    let code: string | undefined;
     try {
-      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      const parsed = JSON.parse(text) as { error?: string; message?: string; code?: string };
       message = parsed.error || parsed.message || message;
+      code = parsed.code;
     } catch {
       // Keep raw text when the backend does not return JSON.
     }
-    throw new Error(message);
+    throw Object.assign(new Error(message), { code });
   }
   return response.json() as Promise<T>;
 }
@@ -166,6 +168,22 @@ export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
 const enCamino = new Set<string>();
 export const YA_SE_ESTA_GUARDANDO = "Ya se está guardando… espera la respuesta (no toques otra vez).";
 
+// 🔁 REINTENTO SEGURO: con datos móviles el servidor puede guardar y la respuesta perderse. Cada envío lleva un id
+// (`X-Envio-Id`); si no hubo respuesta, repetir lo mismo usa el MISMO id y el servidor contesta lo de la primera vez en
+// vez de guardar otra (ver backend http/envio-unico.ts). Con respuesta, el id se olvida: dos registros iguales hechos
+// a propósito siguen siendo dos.
+const enviosSinRespuesta = new Map<string, { id: string; t: number }>();
+const VIGENCIA_REINTENTO = 30 * 60 * 1000;
+// Una conexión colgada no da error por sí sola: sin esto el botón quedaba en «Guardando…» varios minutos.
+const ESPERA_MAXIMA_ENVIO = 90 * 1000;
+
+function idDeEnvio(clave: string): string {
+  const previo = enviosSinRespuesta.get(clave);
+  if (previo && Date.now() - previo.t < VIGENCIA_REINTENTO) return previo.id;
+  // getRandomValues y no randomUUID: este último no existe entrando por http://IP-del-servidor:4000.
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 /** Avisa a la pantalla de un envío que falló (para mostrarlo en rojo aunque esa pantalla no lo muestre). */
 function avisarFallo(mensaje: string) {
   try { window.dispatchEvent(new CustomEvent("erp:envio-fallido", { detail: mensaje })); } catch { /* sin ventana */ }
@@ -175,12 +193,16 @@ async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, bod
   const clave = `${method} ${path} ${opts?.accionistaId ?? ""} ${JSON.stringify(body ?? null)}`;
   if (enCamino.has(clave)) throw new Error(YA_SE_ESTA_GUARDANDO);
   enCamino.add(clave);
+  const envioId = idDeEnvio(clave);
   try {
-    const r = await enviarJsonUnaVez<T>(method, path, body, opts);
+    const r = await enviarJsonUnaVez<T>(method, path, body, opts, envioId);
+    enviosSinRespuesta.delete(clave);
     marcarConConexion();
     return r;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (msg === SIN_CONEXION || (e as { code?: string }).code === "ENVIO_EN_CURSO") enviosSinRespuesta.set(clave, { id: envioId, t: Date.now() });
+    else enviosSinRespuesta.delete(clave);
     if (msg === SIN_CONEXION) marcarSinConexion();
     if (msg !== "No se registró: cancelaste el aviso." && !(msg === SIN_CONEXION && opts?.silencioSinConexion)) avisarFallo(msg);
     throw e;
@@ -189,16 +211,17 @@ async function enviarJson<T>(method: "POST" | "PUT" | "PATCH", path: string, bod
   }
 }
 
-async function enviarJsonUnaVez<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts?: OpcionesApi): Promise<T> {
+async function enviarJsonUnaVez<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown, opts: OpcionesApi | undefined, envioId: string): Promise<T> {
   const confirmados: string[] = [];
   const enviar = () => {
-    const extra: Record<string, string> = {};
+    const extra: Record<string, string> = { "X-Envio-Id": envioId };
     if (confirmados.length) extra["X-Confirmar"] = confirmados.join(",");
     if (confirmados.includes("SOBREGIRO")) extra["X-Confirmar-Sobregiro"] = "1";
     return conConexion(fetch(`${API_URL}/api/v1${path}`, {
       method,
       headers: { "Content-Type": "application/json", ...authHeaders(opts), ...extra },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      ...(typeof AbortSignal.timeout === "function" ? { signal: AbortSignal.timeout(ESPERA_MAXIMA_ENVIO) } : {})
     }));
   };
   let response = await enviar();

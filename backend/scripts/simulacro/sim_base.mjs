@@ -72,13 +72,15 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   // Corte del arranque vigente: lo mueve el «Borrar datos de prueba», no es una fecha fija.
   const arranque = (await q("SELECT COALESCE(corte_arranque::text, '2026-10-14') c FROM app_settings WHERE socio_id IS NULL LIMIT 1"))[0]?.c ?? "2026-10-14";
   const token = signToken({ id: admin.id, username: admin.username, name: admin.name, role_id: admin.role_id, role_name: admin.role_name, allowed_modules: null });
+  let envios = 0;
   const api = async (method, path, body, acc = matriz, extra = {}) => {
     const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, {
-      method, headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "x-accionista-id": acc, ...extra },
+      // SIM_ENVIO_ID=1: cada escritura lleva su id, como la web, para correr todos los simulacros por http/envio-unico.ts.
+      method, headers: { "content-type": "application/json", authorization: `Bearer ${token}`, "x-accionista-id": acc, ...(process.env.SIM_ENVIO_ID && method !== "GET" ? { "x-envio-id": `sim-${Date.now()}-${++envios}` } : {}), ...extra },
       body: body === undefined ? undefined : JSON.stringify(body)
     });
     let data = null; const txt = await r.text(); try { data = JSON.parse(txt); } catch { data = txt; }
-    return { status: r.status, ok: r.ok, data };
+    return { status: r.status, ok: r.ok, data, headers: r.headers };
   };
   // Descarga binaria (Excel/PDF): devuelve estado, tipo y tamaño.
   const descargar = async (path, acc = matriz) => {

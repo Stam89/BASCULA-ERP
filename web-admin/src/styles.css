@@ -1883,6 +1883,9 @@ input[type="datetime-local"] { height: 36px; }
 
   .dryingReportActions {
     justify-content: flex-end;
+    flex: 0 1 auto;
+    flex-wrap: wrap;
+    max-width: 100%;
   }
 }
 
@@ -2323,14 +2326,11 @@ input[type="datetime-local"] { height: 36px; }
   flex: 0 0 auto;      /* anula el `nav { flex: 1 }` global que estiraba el nav a todo el alto */
   align-self: flex-start;
   gap: 8px;
-  flex-wrap: nowrap;
-  overflow-x: auto;
+  flex-wrap: wrap; /* bajan a otra línea: deslizándose de lado, las últimas pestañas no se veían */
+  max-width: 100%;
   padding-bottom: 6px;
   margin-bottom: 10px;
-  scrollbar-width: thin;
 }
-.cajaSubNav::-webkit-scrollbar { height: 6px; }
-.cajaSubNav::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 999px; }
 .cajaSubNav button {
   flex: 0 0 auto;
   width: auto; /* anula el `nav button { width: 100% }` global que las estiraba a todo el ancho */
@@ -4423,9 +4423,8 @@ textarea::placeholder {
   .pedidoBuscaCliente { flex-wrap: wrap; }
   .pedidoBuscaCliente > input { flex: 1 1 100% !important; min-width: 0; min-height: 42px; }
   .pedidoBuscaCliente > button { flex: 1 1 0; min-height: 40px; }
-  .ventasTabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
-  .ventasTabs::-webkit-scrollbar { display: none; }
-  .ventasTabs > button { flex: 0 0 auto; white-space: nowrap; padding: 10px 12px !important; font-size: 13px !important; }
+  .ventasTabs { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+  .ventasTabs > button { flex: 1 1 auto; white-space: nowrap; padding: 10px 12px !important; font-size: 13px !important; }
 }
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -4495,10 +4494,9 @@ textarea::placeholder {
   :is(.content, .modalOverlay) :is(input:not([type="checkbox"], [type="radio"]), select, textarea):not(:is(td, th) *) { font-size: 16px; min-height: 40px; }
   /* Botones cómodos para el dedo (fuera de las tablas). */
   :is(.content, .modalOverlay) button:not(:is(td, th) button, .vdTarifaLink, .liqRemoveBtn) { min-height: 38px; }
-  /* Pestañas internas (subtabs): se deslizan de lado. */
-  .cajaSubNav { overflow-x: auto; flex-wrap: nowrap; scrollbar-width: none; min-width: 0; max-width: 100%; }
-  .cajaSubNav::-webkit-scrollbar { display: none; }
-  .cajaSubNav > button { flex: 0 0 auto; white-space: nowrap; }
+  /* Pestañas internas (subtabs): llenan la fila y bajan a otra línea. */
+  .cajaSubNav { min-width: 0; }
+  .cajaSubNav > button { flex: 1 1 auto; white-space: nowrap; }
   /* Modales a pantalla casi completa. */
   .modalCard { max-width: 100% !important; max-height: calc(100dvh - 20px); padding: 16px; }
   /* Títulos de panel un poco más compactos. */
@@ -4604,6 +4602,15 @@ textarea::placeholder {
 .orderItemsGrid__infoGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px 16px; }
 .orderItemsGrid__vacio { padding: 20px 12px !important; text-align: center; color: #9ca3af; font-weight: 600; }
 .orderItemsGrid__tabla tfoot td { background: #f0fdf4; font-weight: 800; padding: 8px 10px; }
+@media (max-width: 1400px) {
+  /* Tablet y portátil: la fila de captura cabe sin deslizar; en el celular va en tarjetas. */
+  .orderItemsGrid__tabla { min-width: 0; }
+  .orderItemsGrid__tabla th, .orderItemsGrid__tabla td { padding-left: 6px; padding-right: 6px; }
+  .orderItemsGrid__tabla th { white-space: normal; }
+  .orderItemsGrid__captura td:nth-child(1) { min-width: 120px; }
+  .orderItemsGrid__captura td:nth-child(2) { min-width: 110px; }
+  .orderItemsGrid__captura td:nth-child(3), .orderItemsGrid__captura td:nth-child(5) { min-width: 76px; }
+}
 /* Transporte y Cosechadora · Nómina de Operadores: matriz de entrada masiva. */
 .nomMatriz__barra { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
 .nomMatriz__filtros { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
@@ -5494,57 +5501,76 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 /* 📱 Transporte y Cosechadora en celular / tablet angosta: cada fila de tabla es una tarjeta «Etiqueta: valor».
    Las etiquetas las pone campo/tablasMovil.ts desde el encabezado de cada columna. */
 @media (max-width: 700px) {
-  body.campoActivo table.tablaTarjeta { min-width: 0 !important; width: 100% !important; border: 0; background: transparent; }
-  body.campoActivo table.tablaTarjeta > thead { display: none; }
-  body.campoActivo table.tablaTarjeta > tbody, body.campoActivo table.tablaTarjeta > tfoot { display: block; width: 100%; }
-  body.campoActivo table.tablaTarjeta > tbody > tr, body.campoActivo table.tablaTarjeta > tfoot > tr {
+  body table.tablaTarjeta.tablaTarjeta { min-width: 0 !important; width: 100% !important; border: 0; background: transparent; }
+  body table.tablaTarjeta.tablaTarjeta > thead { display: none; }
+  body table.tablaTarjeta.tablaTarjeta > tbody, body table.tablaTarjeta.tablaTarjeta > tfoot { display: block; width: 100%; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr, body table.tablaTarjeta.tablaTarjeta > tfoot > tr {
     display: block; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--c-border, #e5e7eb); border-radius: 12px;
     background: var(--c-surface, #fff); box-shadow: 0 1px 2px rgba(15, 23, 42, .04);
   }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td, body.campoActivo table.tablaTarjeta > tfoot > tr > td {
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td, body table.tablaTarjeta.tablaTarjeta > tfoot > tr > td {
     display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: baseline; gap: 2px 8px; padding: 4px 0; border: 0;
     min-width: 0 !important; max-width: none !important; width: auto !important; white-space: normal !important;
     text-align: right; font-size: 14px; overflow-wrap: anywhere;
   }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td + td { border-top: 1px dashed #eef2f7; }
-  body.campoActivo table.tablaTarjeta > tfoot > tr { background: #f8fafc; }
-  body.campoActivo table.tablaTarjeta > tfoot > tr > td::before { content: attr(data-label); margin-right: auto; color: #64748b; font-size: 12px; font-weight: 600; }
-  body.campoActivo table.tablaTarjeta > tfoot > tr > td[data-label=""]::before { content: none; }
-  body.campoActivo table.tablaTarjeta > tfoot > tr > td.tt-ancha { display: block; text-align: left; }
-  body.campoActivo .segmented { display: flex; flex-wrap: wrap; max-width: 100%; }
-  body.campoActivo .segmented > button { flex: 1 1 auto; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td::before {
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td + td { border-top: 1px dashed #eef2f7; }
+  body table.tablaTarjeta.tablaTarjeta > tfoot > tr { background: #f8fafc; }
+  body table.tablaTarjeta.tablaTarjeta > tfoot > tr > td::before { content: attr(data-label); margin-right: auto; color: #64748b; font-size: 12px; font-weight: 600; }
+  body table.tablaTarjeta.tablaTarjeta > tfoot > tr > td[data-label=""]::before { content: none; }
+  body table.tablaTarjeta.tablaTarjeta > tfoot > tr > td.tt-ancha { display: block; text-align: left; }
+  .segmented { display: flex; flex-wrap: wrap; max-width: 100%; }
+  .segmented > button { flex: 1 1 auto; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td::before {
     content: attr(data-label); flex: 0 0 auto; max-width: 45%; margin-right: auto; text-align: left; color: #64748b; font-size: 12px; font-weight: 600;
   }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""]::before { content: none; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td[data-label=""]::before { content: none; }
   /* Primera celda = título de la tarjeta; celdas que abarcan columnas y botones = a lo ancho */
-  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child::before { content: none; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td:first-child small { font-weight: 500; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-ancha,
-  body.campoActivo table.tablaTarjeta > tbody > tr > td[data-label=""] { display: block; text-align: left; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-vacia:not(:first-child) { display: none; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child) { display: block; text-align: left; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child)::before { display: block; max-width: none; margin-bottom: 1px; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td:has(button) { flex-wrap: wrap; }
-  body.campoActivo table.tablaTarjeta td button { min-height: 38px; }
-  body.campoActivo table.tablaTarjeta td input, body.campoActivo table.tablaTarjeta td select { max-width: 60%; }
-  body.campoActivo table.tablaTarjeta td .chip { white-space: normal; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td:first-child { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td:first-child::before { content: none; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td:first-child small { font-weight: 500; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.tt-ancha,
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td[data-label=""] { display: block; text-align: left; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.tt-vacia:not(:first-child) { display: none; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child) { display: block; text-align: left; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.tt-larga:not(:first-child)::before { display: block; max-width: none; margin-bottom: 1px; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td:has(button) { flex-wrap: wrap; }
+  body table.tablaTarjeta.tablaTarjeta td button { min-height: 38px; }
+  body table.tablaTarjeta.tablaTarjeta td input, body table.tablaTarjeta.tablaTarjeta td select { max-width: 60%; }
+  body table.tablaTarjeta.tablaTarjeta td .chip { white-space: normal; }
   /* Tabla dentro de una tarjeta (detalle expandido, recibo): también en tarjetitas, sin sombra */
-  body.campoActivo table.tablaTarjeta table.tablaTarjeta > tbody > tr { box-shadow: none; background: #f8fafc; margin-bottom: 6px; }
-  body.campoActivo table.tablaTarjeta td > table { width: 100%; }
+  body table.tablaTarjeta.tablaTarjeta table.tablaTarjeta > tbody > tr { box-shadow: none; background: #f8fafc; margin-bottom: 6px; }
+  body table.tablaTarjeta.tablaTarjeta td > table { width: 100%; }
   /* Partes: la casilla va en la esquina y la Fecha sigue siendo el título de la tarjeta. En una lista larga la barra de
      cobrar se quedaba arriba, fuera de la vista: va fija al fondo de la pantalla. */
-  body.campoActivo table.tablaTarjeta > tbody > tr:has(> td.partesMarca) { position: relative; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca { position: absolute; top: 9px; right: 12px; padding: 0; font-size: 13px; font-weight: 600; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca:empty { display: none; }
-  body.campoActivo table.tablaTarjeta td.partesMarca input { max-width: none; width: 22px; height: 22px; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr:has(> td.partesMarca) { position: relative; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.partesMarca { position: absolute; top: 9px; right: 12px; padding: 0; font-size: 13px; font-weight: 600; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.partesMarca:empty { display: none; }
+  body table.tablaTarjeta.tablaTarjeta td.partesMarca input { max-width: none; width: 22px; height: 22px; }
   body.campoActivo .partesMarca span { display: inline; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca + td { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; border-top: 0; }
-  body.campoActivo table.tablaTarjeta > tbody > tr > td.partesMarca + td::before { content: none; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.partesMarca + td { display: block; text-align: left; font-weight: 700; font-size: 15px; padding-bottom: 6px; border-top: 0; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td.partesMarca + td::before { content: none; }
   body.campoActivo .partesTodos { display: block; width: 100%; min-height: 40px; margin-top: 8px; }
   body.campoActivo .partesCobro { position: fixed; left: 8px; right: 8px; bottom: 8px; z-index: 30; margin: 0; box-shadow: 0 6px 24px rgba(15, 23, 42, .25); }
   body.campoActivo .partesCobro + div { padding-bottom: 190px; }
+  /* Pedido: la fila de captura en tarjeta. */
+  body table.tablaTarjeta.tablaTarjeta td:first-child > select { max-width: 100%; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr.orderItemsGrid__captura { background: #fffbeb; }
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr.orderItemsGrid__captura > td { background: transparent; }
+  .orderItemsGrid__bultos { padding-top: 4px !important; }
+  .orderItemsGrid__agregar { width: 100%; min-height: 40px; }
+}
+/* 👆 Acciones a la vista: en una tabla más ancha que el espacio disponible, los botones de la última columna quedaban
+   escondidos a la derecha y nada avisaba que había que deslizar. Se quedan fijos y pueden bajar de línea. Incluye las
+   pantallas de portátil: con el menú lateral, a 1280 px quedan menos de 1000 para la tabla. */
+@media (max-width: 1500px) {
+  :is(.cajaTable:not(.cuentasTabla, .nomHist), .tablaConAcciones) > tbody > tr > td:last-child:has(button) {
+    position: sticky; right: 0; z-index: 1; background: var(--c-surface, #fff); white-space: normal !important;
+    box-shadow: -6px 0 6px -6px rgba(15, 23, 42, .25);
+  }
+}
+@media (max-width: 700px) {
+  /* En tarjetas no hace falta: los botones ya están a la vista. */
+  body table.tablaTarjeta.tablaTarjeta > tbody > tr > td:last-child:has(button) { position: static; background: transparent; box-shadow: none; }
 }
 /* 📄 Recibo de la nómina de operadores: días, agricultor y QQ de cada parte */
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
@@ -6434,7 +6460,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
     grid-template-areas: "num num fecha" "cli cli cli" "placa neto cal" "qq qq est" "acc acc acc";
     border: 1px solid #e2e8f0; border-radius: 14px; padding: 12px; margin-bottom: 10px; background: #fff;
   }
-  .basculaTicketsTable td { display: block; border: none !important; padding: 0 !important; text-align: left !important; white-space: normal !important; min-width: 0; }
+  .basculaTicketsTable td { position: static !important; box-shadow: none !important; display: block; border: none !important; padding: 0 !important; text-align: left !important; white-space: normal !important; min-width: 0; }
   .basculaTicketsTable .bt-num { grid-area: num; font-size: 15px; }
   .basculaTicketsTable .bt-fecha { grid-area: fecha; text-align: right !important; font-size: 12px; color: #64748b; }
   .basculaTicketsTable .bt-cli { grid-area: cli; font-size: 14px; }
@@ -6622,7 +6648,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .impConf__doc { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; }
 .impConf__doc > div:first-child { display: grid; }
 .impConf__doc small { color: #64748b; font-size: 12px; }
-.impConf__ops { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.impConf__ops { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .impConf__ops > button:not(.btnGhost) { padding: 5px 10px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .impConf__ops > button.is-on { border-color: #0f766e; background: #f0fdfa; color: #0f766e; }
 .impConf__copias { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
@@ -6639,7 +6665,7 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .impConf__grupo .impConf__doc { border: 0; border-top: 1px solid #eef2f7; border-radius: 0; }
 .impConf__todos { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-top: 1px solid #eef2f7; font-size: 12px; color: #64748b; }
 .impConf__todos .btnGhost { font-size: 12px; padding: 3px 9px; }
-.impConf__ops select { width: auto; padding: 4px 6px; font-size: 12.5px; }
+.impConf__ops select { width: auto; min-width: 0; max-width: 100%; padding: 4px 6px; font-size: 12.5px; }
 
 /* 🚚 Despacho parcial: lo que cargó el camión (2026-10-23). */
 .despachoModal__carga { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; }
@@ -6756,6 +6782,11 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .partesMarca input { width: 18px; height: 18px; min-width: 0; flex: none; margin: 0; padding: 0; }
 .partesMarca span, .partesTodos { display: none; }
 .cjh-tabla th:nth-child(1) { width: 124px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 104px; } .cjh-tabla th:nth-child(5) { width: 112px; } .cjh-tabla th:nth-child(6) { width: 150px; }
+@media (min-width: 701px) and (max-width: 1000px) {
+  /* Tablet: con el ancho de la PC, «Anular» quedaba escondido a la derecha. */
+  .cjh-tabla { min-width: 0; }
+  .cjh-tabla th:nth-child(1) { width: 110px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 86px; } .cjh-tabla th:nth-child(5) { width: 92px; } .cjh-tabla th:nth-child(6) { width: 118px; }
+}
 .cjh-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .cjh-tag { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; white-space: nowrap; }
 .cjh-tag.is-quien { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }

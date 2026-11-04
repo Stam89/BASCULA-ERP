@@ -561,7 +561,7 @@ export function SacosCatalogoConfig({
         </label>
       </div>
       <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 10 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+        <table className="tablaConAcciones" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
           <thead>
             <tr style={{ background: "#f8fafc", color: "#475569" }}>
               <th style={{ textAlign: "left", padding: "8px 10px" }}>Saco</th>

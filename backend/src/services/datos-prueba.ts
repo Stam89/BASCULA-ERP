@@ -11,6 +11,7 @@ type Db = { query: (sql: string, params?: unknown[]) => Promise<{ rows: any[] }>
 // Se conservan: users/roles, app_settings, products, warehouses, equipment,
 // y los catálogos de insumos y sacos (con stock en 0).
 export const WIPE_TABLES = [
+  "envios_recibidos",
   // Saldos iniciales (registro de lo cargado al arranque; sus filas reales caen abajo).
   "saldos_iniciales",
   "farmers",

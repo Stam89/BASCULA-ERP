@@ -1,6 +1,8 @@
 import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
+import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
+import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
 import type { BasculaSyncStatus } from "./api";
 import BasculaDevicesPanel from "./components/BasculaDevicesPanel";
 import { money, categoryLabel, stockGroupLabel, formatPersonName, cantidad, kilos, numeroReal, nombreNormal, agricultoresParecidos, fechaLocal, hoyLocal } from "./format";
@@ -2379,6 +2381,8 @@ function AntiguedadDeuda({ fechas }: { fechas: Array<string | null | undefined> 
 }
 
 export function App() {
+  useTablasEnTarjetasErp();
+  useRecargaAlCambiarDia();
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => {
     const user = loadStoredAuth();
     if (user) ensureActiveAccionista(loadStoredAccionistas());
@@ -2499,7 +2503,7 @@ export function App() {
   const setMessage = useCallback((texto: string) => setMensajeEstado((m) => ({ texto, n: m.n + 1 })), []);
   const [dashboard, setDashboard] = useState<Dashboard>(emptyDashboard);
   const [panelData, setPanelData] = useState<PanelData | null>(null);
-  const [panelMonth, setPanelMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [panelMonth, setPanelMonth] = useState(hoyLocal().slice(0, 7));
   const [dashView, setDashView] = useState<"panel" | "resumen">("panel");
   // 🔎 Buscador global (Ctrl+K).
   const [buscadorAbierto, setBuscadorAbierto] = useState(false);
@@ -3797,12 +3801,12 @@ export function App() {
   useEffect(() => { setMenuMovilAbierto(false); }, [activeTab]);
   const [reportBusy, setReportBusy] = useState(false);
   const [servicioTab, setServicioTab] = useState<ServicioTipo>("SECADO_PILADO");
-  const [servicioMes, setServicioMes] = useState(() => new Date().toISOString().slice(0, 7));
+  const [servicioMes, setServicioMes] = useState(() => hoyLocal().slice(0, 7));
 
   // ── Fomentos ──────────────────────────────────────────────────────────────
   const [fomentos, setFomentos] = useState<Fomento[]>([]);
   const [fomentoDetalle, setFomentoDetalle] = useState<FomentoDetalle | null>(null);
-  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", farmer_id: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS" as Fomento["status"], notes: "", variedad: "", limite_credito: "", folio: "" });
+  const [fomentoForm, setFomentoForm] = useState({ farmer_name: "", farmer_id: "", cuadras: "", inicio: hoyLocal(), status: "ACTIVOS" as Fomento["status"], notes: "", variedad: "", limite_credito: "", folio: "" });
   // Modal del formulario "Nuevo Fomento" (antes era un <details> al pie de la lista).
   const [fomentoModalOpen, setFomentoModalOpen] = useState(false);
   // Si tiene id → el modal edita ese fomento; si es null → crea uno nuevo.
@@ -3811,7 +3815,7 @@ export function App() {
   // Confirmación de borrado de un fomento completo (con su historial).
   const [confirmarEliminarFomento, setConfirmarEliminarFomento] = useState<{ id: string; nombre: string } | null>(null);
   const [borrandoFomento, setBorrandoFomento] = useState(false);
-  const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
+  const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
   // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
@@ -3835,7 +3839,7 @@ export function App() {
   };
   const [fomentoEditingRenta, setFomentoEditingRenta] = useState<string | null>(null);
   const [fomentoRentaInput, setFomentoRentaInput] = useState("");
-  const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+  const [fomentoPagoForm, setFomentoPagoForm] = useState({ fecha: hoyLocal(), valor: "", concepto: "" });
   const [fomentoImporting, setFomentoImporting] = useState(false);
   const [fomentoMosaicoImporting, setFomentoMosaicoImporting] = useState(false);
   // Fomentos: lista de fomentos o «Intereses ganados».
@@ -9469,7 +9473,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   }, [authUser, activeTab]);
 
   function resetFomentoForm() {
-    setFomentoForm({ farmer_name: "", farmer_id: "", cuadras: "", inicio: new Date().toISOString().slice(0,10), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "", folio: "" });
+    setFomentoForm({ farmer_name: "", farmer_id: "", cuadras: "", inicio: hoyLocal(), status: "ACTIVOS", notes: "", variedad: "", limite_credito: "", folio: "" });
   }
 
   // Abre el modal en modo EDICIÓN, precargado con los datos del fomento.
@@ -9478,7 +9482,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       farmer_name: f.farmer_name ?? "",
       farmer_id: f.farmer_id ?? "",
       cuadras: String(f.cuadras ?? ""),
-      inicio: f.inicio?.slice(0,10) ?? new Date().toISOString().slice(0,10),
+      inicio: f.inicio?.slice(0,10) ?? hoyLocal(),
       status: f.status,
       notes: f.notes ?? "",
       variedad: f.variedad ?? "",
@@ -9548,7 +9552,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ...cuerpoMedio(medioOperacion)
     });
     setMedioOperacion("EFECTIVO");
-    setFomentoEntregaForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
+    setFomentoEntregaForm({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
     addToast("Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
@@ -9622,7 +9626,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ...cuerpoMedio(medioOperacion)
     });
     setMedioOperacion("EFECTIVO");
-    setFomentoPagoForm({ fecha: new Date().toISOString().slice(0,10), valor: "", concepto: "" });
+    setFomentoPagoForm({ fecha: hoyLocal(), valor: "", concepto: "" });
     addToast("Pago registrado", "success");
     await loadFomentoDetalle(fomentoDetalle.id);
     await refreshFomentos();
@@ -16683,7 +16687,7 @@ Motivo (obligatorio):`, ""));
                         </p>
                       );
                     })()}
-                    <table className="cajaTable" style={{ marginTop: 8 }}>
+                    <table className="cajaTable enTarjetas" style={{ marginTop: 8 }}>
                       <thead>
                         <tr>
                           <th>Equipo</th><th>Tipo</th>
@@ -17033,7 +17037,7 @@ Motivo (obligatorio):`, ""));
                       <p className="muted" style={{ textAlign: "center", padding: 16 }}>Sin resultados para “{farmerSearch}”.</p>
                     ) : (
                       <div style={{ maxHeight: 600, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8 }}>
-                        <table className="cajaTable" style={{ margin: 0 }}>
+                        <table className="cajaTable enTarjetas" style={{ margin: 0 }}>
                           <thead>
                             <tr>
                               <th style={thSticky}>Nombre</th>
@@ -17519,7 +17523,7 @@ Motivo (obligatorio):`, ""));
               <div id="procesos-guardados" className="tablePanel" style={{ gridColumn: "1 / -1" }}>
                 <h2>📋 Procesos guardados (en curso)</h2>
                 <p className="muted">Pilados guardados sin finalizar. Se guardan en el servidor, así que puedes seguirlos desde cualquier equipo.</p>
-                <table className="cajaTable" style={{ marginTop: 8 }}>
+                <table className="cajaTable enTarjetas" style={{ marginTop: 8 }}>
                   <thead><tr><th>Lote</th><th>Túnel</th><th>Tipo</th><th className="num">QQ</th><th>Guardado</th><th>Estado</th><th /></tr></thead>
                   <tbody>
                     {millingDrafts.map((d) => (
@@ -18558,7 +18562,7 @@ Motivo (obligatorio):`, ""));
                 {ventaSocioId && <span className="orderItemsGrid__socio">· inventario de {accionistas.find((a) => a.id === ventaSocioId)?.name ?? "—"}</span>}</h2>
               {!selectedCustomerId && <p className="muted" style={{ marginTop: -4 }}>Elige primero el cliente.</p>}
               <div style={{ overflowX: "auto" }}>
-                <table className="orderItemsGrid__tabla">
+                <table className="orderItemsGrid__tabla enTarjetas">
                   <thead>
                     <tr>
                       <th>Marca / Producto</th>
@@ -24863,7 +24867,7 @@ Motivo (obligatorio):`, ""));
                 )}
                 <datalist id="bajada-trabajadores">{nombres.map((n) => <option key={n} value={n} />)}</datalist>
                 <div style={{ overflowX: "auto" }}>
-                  <table className="cajaTable">
+                  <table className="cajaTable enTarjetas">
                     <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th className="num">QQ</th><th>Bajó el carro</th><th className="num">Monto</th><th>Estado</th></tr></thead>
                     <tbody>
                       {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>{bajadaTodo ? "No hay tickets de báscula desde esa fecha." : "No hay tickets de báscula en esta semana."}</td></tr>}
@@ -25091,7 +25095,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* Una sola tabla: nómina de producción y cuadrilla, juntas. */}
                 <div style={{ overflowX: "auto" }}>
-                  <table className="cajaTable">
+                  <table className="cajaTable enTarjetas">
                     <thead>
                       <tr>
                         <th>Área</th><th>Rol</th><th>Trabajador</th>
@@ -27530,7 +27534,7 @@ Motivo (obligatorio):`, ""));
                   {servicioTarifas.length === 0 && <p className="muted">Sin tarifas configuradas.</p>}
                   {servicioTarifas.length > 0 && (
                     <div style={{ overflowX: "auto" }}>
-                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <table className="tablaConAcciones" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                         <thead>
                           <tr style={{ background: "#f9fafb", textAlign: "left" }}>
                             <th style={{ padding: "6px 8px" }}>Cliente / Socio</th>

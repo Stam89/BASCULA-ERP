@@ -2,7 +2,15 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
+## Último cambio: 🔁 Reintentos sin duplicar y todo a la vista en celular y tablet (2026-11-04)
+- **Envío único** (`http/envio-unico.ts`, tabla `envios_recibidos`, migración 20261135): la web manda `X-Envio-Id` en cada escritura (`api.ts`). Si la respuesta se pierde y se repite lo mismo, el servidor contesta lo de la primera vez. Lo que falla o pide confirmar libera el id. Sin id o si la tabla falla, todo sigue como antes. El id solo se reusa si no hubo respuesta (30 min). Espera máxima por envío: 90 s. Simulacro `envio_unico`; `SIM_ENVIO_ID=1` hace que todos los simulacros manden id.
+- **Celular**: tarjetas fuera de Transporte con la clase `enTarjetas` en la tabla (`useTablasEnTarjetasErp`): Agricultores, Procesos guardados, Nómina (Pagos y Bajada), Activos fijos y las líneas del pedido. CSS ya no depende de `body.campoActivo`. Las pestañas (`cajaSubNav`, `ventasTabs`, `segmented`) bajan de línea.
+- **Tablet**: hasta 1100 px la última columna con botones de un `.cajaTable` queda fija a la derecha; Hoja de Caja y líneas del pedido ajustan anchos.
+- **Fechas**: Fomentos proponía la fecha UTC (de noche, mañana): ahora `hoyLocal()`. `useRecargaAlCambiarDia`: si cambió el día y nadie tocó la app hoy, recarga (con servidor arriba).
+- **Índices**: migración 20261136 para cuando crezcan los datos.
+- **Barrido de pantallas**: recorrer menú y pestañas midiendo controles fuera de la vista encontró todo lo de celular y tablet. Para probar con permisos limitados: usuarios inventados en una COPIA con clave propia; nunca firmar sesión de una persona real ni tocar el servidor real con eso.
+
+## Cambio anterior: 🌾 Arranque conservando la cartera, fecha en la Caja y cobrar varios partes (2026-11-03)
 - **Borrado**: casilla «Conservar agricultores, fomentos y préstamos» (`conservar_cartera`, `CARTERA` en datos-prueba.ts; marcada por defecto). Las cuotas ya vencidas quedan `pagada_fuera`; los préstamos ANULADO se borran.
 - **Préstamos**: cuota pagada por fuera (`pagada_fuera`, migración 20261134): rutas `/cuotas/:id/pagada-fuera`, `/pagadas-fuera` (hasta una fecha) y `/cuotas/:id/deshacer-fuera`. Baja la deuda, no mueve caja, su interés no entra al resultado.
 - **Caja**: fecha en la hoja (`fecha` en POST /cash/:id/movements y /equipment/transporte/gasto). `fechaValidaDeCaja`: desde que se abrió la caja hasta hoy y nunca en un mes cerrado; `fecharMovimientosDeCaja` mueve lo de la transacción (created_at = now()). La fecha se queda para pasar varios del mismo día; Esc vuelve a hoy.
