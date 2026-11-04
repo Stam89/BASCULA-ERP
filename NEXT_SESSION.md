@@ -2,7 +2,15 @@
 
 Actualizado: 2026-10-30
 
-## Último cambio: 💼 Caja simplificada en 3 zonas (2026-11-03)
+## Último cambio: 💼 Nómina desde el proceso guardado (2026-11-03)
+- «Guardar Proceso» ya crea el pago de pilador, estibador y polvillo: `sincronizarNominaBorrador` (labor.ts), filas `worker_payments` con reference_type `milling_draft` (reference_id = túnel). Los nombres van en `report.pilador_name / estibador_name / polvillo_worker_name`. Sin nombre no hay fila (la pantalla avisa).
+- Cada guardado ACTUALIZA la fila PENDING (no suma otra). Lo PAID se resta por ROL: queda pendiente solo la diferencia. Bajar lo guardado por debajo de lo pagado no crea saldo negativo.
+- Al finalizar, `createProductionWorkerPayments` borra lo pendiente del borrador (conserva nombre y descuento), pasa lo PAID a `processing_batch` (así anular lo frena) y crea solo lo que falta. Descartar con algo PAID = 409.
+- Los 2 borradores que había no tienen nombres: su pago aparece al guardarlos otra vez o al finalizar. Un TULA sin N.º de tulas no da pago de estibador hasta que se ponga.
+- Simulacro `nomina_proceso_guardado` TODO OK. `produccion_anular` D2 falla por -0.08 QQ de corriente de ROVINSON en datos reales (no es de este cambio).
+- Caja: tabla `table-layout: fixed` (Concepto ancho). En celular (375 px) la hoja sigue con desplazamiento lateral (760 px).
+
+## Cambio anterior: 💼 Caja simplificada en 3 zonas (2026-11-03)
 - Aprobado por el dueño («Sí, aplica todo»): saldos (gaveta / entró hoy / salió hoy; sin la tarjeta de saldo inicial, que ya es la 1.ª fila), una fila de acciones (🧮 Cuadrar · ＋ Otros registros ▾ · «Más» arriba) y la hoja.
 - «Otros registros» (`cajaMenu === "acciones"`): Arroz en cáscara, Venta detalle, Fomentos, Sacos, Mantenimiento de equipos, Cuentas entre socios, Pagar nómina, e Ingreso/Egreso con todos los datos (F2/F3). «Más»: Resumen global (F4), ¿Cuándo se hizo?, Excel, imprimir, cerrar.
 - `CajaHoja`: columnas Fecha · Concepto · Entradas · Salidas · Saldo. Categoría y «¿De quién?» son etiquetas bajo el concepto (en la captura, dos combos chicos); código fijo 001 (`CODIGO`), se muestra solo si un movimiento viejo tiene otro. Sin «Conceptos rápidos». Concepto ya usado → Enter salta al monto. Lo de otros módulos se ve SIEMPRE (`is-externo`, gris); se quitó `cajaVerOtros`.

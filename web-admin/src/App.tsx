@@ -20221,18 +20221,18 @@ Motivo (obligatorio):`, ""));
                           {cajaMenu === "acciones" && (
                             <div className="cj-menu" role="menu">
                               {acciones.filter((x) => visibles.includes(x.key)).map((x) => (
-                                <button key={x.key} type="button" role="menuitem" className="cj-menu-item" onClick={() => abrir(x.key)}>
-                                  <span className="cj-menu-ico">{x.icon}</span><span className="cj-menu-label">{x.label}<small>{x.hint}</small></span>
+                                <button key={x.key} type="button" role="menuitem" className="cj-menu-item" title={x.hint} onClick={() => abrir(x.key)}>
+                                  <span className="cj-menu-ico">{x.icon}</span><span className="cj-menu-label">{x.label}</span>
                                 </button>
                               ))}
                               {accionistas.length > 1 && (
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setEntreSocios({}); }}>
-                                  <span className="cj-menu-ico">🤝</span><span className="cj-menu-label">Cuentas entre socios<small>Quién le debe a quién</small></span>
+                                  <span className="cj-menu-ico">🤝</span><span className="cj-menu-label">Cuentas entre socios</span>
                                 </button>
                               )}
                               {esMatrizActiva && visibleTabs.includes("Nomina") && (
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); irADestino("Nomina", "pagos"); }}>
-                                  <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes<small>Planta, cuadrilla, bajada y sueldos</small></span>
+                                  <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes</span>
                                 </button>
                               )}
                               <div className="cj-menu-sep" />
@@ -20240,7 +20240,7 @@ Motivo (obligatorio):`, ""));
                                 <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Ingreso con todos los datos <kbd>F2</kbd></span>
                               </button>
                               <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); abrirMovimientoCaja("EXPENSE"); }}>
-                                <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Egreso con todos los datos <kbd>F3</kbd><small>A crédito, fondo a rendir, activo fijo, nota del taller…</small></span>
+                                <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Egreso con todos los datos <kbd>F3</kbd></span>
                               </button>
                             </div>
                           )}
