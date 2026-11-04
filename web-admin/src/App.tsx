@@ -41,6 +41,7 @@ import { armarTiles } from "./inicio/tiles";
 import type { Destino as DestinoAsistente } from "./asistente/pasos";
 import { AccesoRemoto } from "./components/AccesoRemoto";
 import { CambiarClaveModal } from "./components/CambiarClave";
+import { EliminarFomentosModal } from "./components/EliminarFomentos";
 import { HoyPanel, type TareaHoy } from "./components/HoyPanel";
 import { BuscadorGlobal, type Filtro } from "./components/BuscadorGlobal";
 import { ContarBilletes, conteoParaEnviar, totalDeConteo, type Conteo } from "./components/ContarBilletes";
@@ -2587,6 +2588,7 @@ export function App() {
   // Los inputs de combustible viven en un modal que abre "Finalizar secado".
   const [fuelModalOpen, setFuelModalOpen] = useState(false);
   const [fomArchivosAbierto, setFomArchivosAbierto] = useState(false);
+  const [eliminarFomentosAbierto, setEliminarFomentosAbierto] = useState(false);
   // ⏳ Secados finalizados sin combustible (el informe llega después) y el que se está completando.
   const [combustiblePendiente, setCombustiblePendiente] = useState<Array<{ id: string; motor_number: 1 | 2; created_at: string; total_quintals: number; tuneles: number[]; inicio: string | null; fin: string | null; lotes: string | null }>>([]);
   const [completarCombustibleId, setCompletarCombustibleId] = useState<string | null>(null);
@@ -22654,6 +22656,11 @@ Motivo (obligatorio):`, ""));
                                 if (file) importFomentosMosaico(file).finally(() => { e.target.value = ""; });
                               }} />
                           </label>
+                          {isAdmin && (
+                            <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setFomArchivosAbierto(false); setEliminarFomentosAbierto(true); }}>
+                              <span className="cj-menu-ico">🗑️</span><span><span className="cj-menu-label">Eliminar todos</span><span className="cj-menu-hint">Para volver a subirlos</span></span>
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -22745,6 +22752,8 @@ Motivo (obligatorio):`, ""));
 
               </div>
 
+              {eliminarFomentosAbierto && (<EliminarFomentosModal avisar={addToast} onCerrar={() => setEliminarFomentosAbierto(false)}
+                onEliminados={async () => { setFomentoDetalle(null); await refreshFomentos(); }} />)}
               {/* COLUMNA DERECHA: Detalle del fomento seleccionado */}
               <div>
                 {fomentoDetalle ? (

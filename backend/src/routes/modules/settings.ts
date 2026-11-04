@@ -3,7 +3,7 @@ import { spawn } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { Router } from "express";
+import { Router, type Request } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -656,25 +656,12 @@ function llaveCoincide(escrita: string, real: string): boolean {
   return crypto.timingSafeEqual(a, b);
 }
 
-settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
-  // Sin LLAVE_MAESTRA en backend/.env no se borra nada (ni en prueba ni en producción).
-  if (!env.llaveMaestra) {
-    throw new ApiError(
-      403,
-      "Borrado bloqueado: falta la LLAVE MAESTRA. Agrégala en backend/.env (LLAVE_MAESTRA=…, mínimo 8 caracteres) y reinicia el ERP."
-    );
-  }
-  const ip = req.ip ?? "desconocida";
-  const freno = fallosLlaveMaestra.bloqueado(ip);
-  if (freno.bloqueado) throw new ApiError(429, `Demasiados intentos con la llave maestra. Espera ${freno.minutos} minuto(s).`);
+const cuerpoDeBorrado = { password: z.string().min(4), llave_maestra: z.string().default(""), confirm: z.literal("BORRAR") };
 
-  const body = z.object({
-    password: z.string().min(4),
-    llave_maestra: z.string().default(""),
-    confirm: z.literal("BORRAR"),
-    conservar_cartera: z.boolean().optional()
-  }).parse(req.body);
-  if (!llaveCoincide(body.llave_maestra, env.llaveMaestra)) {
+/** Todo borrado masivo pide la llave maestra y la clave del administrador. */
+async function exigirClavesDeBorrado(req: Request, password: string, llaveMaestra: string): Promise<void> {
+  const ip = req.ip ?? "desconocida";
+  if (!llaveCoincide(llaveMaestra, env.llaveMaestra)) {
     fallosLlaveMaestra.registrar(ip);
     throw new ApiError(401, "Llave maestra incorrecta");
   }
@@ -685,14 +672,52 @@ settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, 
   const userRow = await pool.query("SELECT password_hash FROM users WHERE id = $1 AND is_active = true", [requester.id]);
   if (!userRow.rowCount) throw new ApiError(401, "Usuario no válido");
 
-  const valid = await bcrypt.compare(body.password, userRow.rows[0].password_hash);
+  const valid = await bcrypt.compare(password, userRow.rows[0].password_hash);
   if (!valid) throw new ApiError(401, "Clave incorrecta");
+}
+
+function exigirLlaveConfigurada(req: Request): void {
+  // Sin LLAVE_MAESTRA en backend/.env no se borra nada (ni en prueba ni en producción).
+  if (!env.llaveMaestra) {
+    throw new ApiError(
+      403,
+      "Borrado bloqueado: falta la LLAVE MAESTRA. Agrégala en backend/.env (LLAVE_MAESTRA=…, mínimo 8 caracteres) y reinicia el ERP."
+    );
+  }
+  const freno = fallosLlaveMaestra.bloqueado(req.ip ?? "desconocida");
+  if (freno.bloqueado) throw new ApiError(429, `Demasiados intentos con la llave maestra. Espera ${freno.minutos} minuto(s).`);
+}
+
+settingsRouter.post("/reset-transactions", requireAdmin, asyncRoute(async (req, res) => {
+  exigirLlaveConfigurada(req);
+  const body = z.object({ ...cuerpoDeBorrado, conservar_cartera: z.boolean().optional() }).parse(req.body);
+  await exigirClavesDeBorrado(req, body.password, body.llave_maestra);
 
   // Lo único que devuelve los datos si el borrado fue un error: sin respaldo no se borra nada.
   await hacerRespaldo();
   const result = await inTransaction((client) => vaciarDatosDePrueba(client, { conservarCartera: body.conservar_cartera }));
 
   res.json({ ok: true, respaldo: true, wiped_tables: result.wiped.length, wiped: result.wiped, not_found: result.notFound, preservados: result.preservados });
+}));
+
+// 🗑️ Todos los fomentos, para volver a subirlos. Los agricultores, la caja y el inventario se quedan.
+settingsRouter.post("/eliminar-fomentos", requireAdmin, asyncRoute(async (req, res) => {
+  exigirLlaveConfigurada(req);
+  const body = z.object(cuerpoDeBorrado).parse(req.body);
+  await exigirClavesDeBorrado(req, body.password, body.llave_maestra);
+
+  const enUso = (await pool.query(
+    `SELECT (SELECT count(*)::int FROM cash_movements m
+              WHERE m.reference_type IN ('fomento_entregas', 'fomento_pagos') AND m.reversal_of IS NULL AND m.reversed_at IS NULL) AS caja,
+            (SELECT count(*)::int FROM fomento_pagos WHERE liquidation_id IS NOT NULL) AS liquidaciones`
+  )).rows[0] as { caja: number; liquidaciones: number };
+  if (enUso.caja > 0 || enUso.liquidaciones > 0) {
+    throw new ApiError(409, `No se borró nada: hay ${enUso.caja} movimientos de caja y ${enUso.liquidaciones} pagos de liquidación ligados a fomentos. Anúlalos primero para no descuadrar.`);
+  }
+
+  await hacerRespaldo();
+  const eliminados = await inTransaction(async (client) => (await client.query("DELETE FROM fomentos")).rowCount ?? 0);
+  res.json({ ok: true, respaldo: true, eliminados });
 }));
 
 // ── Respaldos de base de datos ─────────────────────────────────────────────
