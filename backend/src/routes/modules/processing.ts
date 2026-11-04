@@ -13,7 +13,7 @@ import { createLotProcessReport } from "../../utils/process-reports.js";
 import { descontarSacosServicio } from "../../services/sacos.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { createProductionWorkerPayments } from "./labor.js";
+import { createProductionWorkerPayments, ensureLaborTables, sincronizarNominaBorrador } from "./labor.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
 import { loteEsMaquila, tipoOperacionFijado } from "../../utils/maquila.js";
 import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-units.js";
@@ -272,6 +272,7 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   );
   if (cerrado.rowCount) throw new ApiError(409, "Este túnel ya se piló y se cerró: no se puede guardar otra vez su proceso.");
 
+  await ensureLaborTables();
   const result = await inTransaction(async (client) => {
     const antes = await tunelesDelBorrador(client, dryingId);
     const r = await client.query(
@@ -287,6 +288,8 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
     );
     // Lo ya pilado y guardado cuenta en inventario desde ahora.
     await sincronizarInventarioBorrador(client, dryingId, { entradas: body.pilado_entries, reporte: body.report, warehouseId: body.warehouse_id }, body.saved_by);
+    // 💼 Y ya aparece en Nómina › Pagos (pilador, estibador y polvillo): cada guardado actualiza, no suma otro pago.
+    await sincronizarNominaBorrador(client, dryingId, { entradas: body.pilado_entries, reporte: body.report }, body.saved_by);
     // 🌾 La cáscara de sus secadoras (la principal y las juntadas) ya entró a la piladora: sale de bodega.
     for (const id of new Set([...antes, ...(await tunelesDelBorrador(client, dryingId))])) await sincronizarCascaraBorrador(client, id, body.saved_by);
     return r.rows[0];
@@ -295,7 +298,9 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
 }));
 
 processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
+  await ensureLaborTables();
   await inTransaction(async (client) => {
+    await sincronizarNominaBorrador(client, String(req.params.dryingId), null);
     const tuneles = await tunelesDelBorrador(client, String(req.params.dryingId));
     await client.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
     // Descartado: lo que había puesto en inventario se retira y la cáscara vuelve a bodega.

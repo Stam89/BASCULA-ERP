@@ -230,26 +230,227 @@ export async function getRates(db: Queryable = pool, accionistaId?: string | nul
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
+// Cantidades de una pilada que se pagan en nómina.
+type DatosPilada = {
+  qq: number;
+  // Base del ESTIBADOR por la porción en sacos (QQ). En un lote mixto es solo
+  // la parte que salió en sacos; la parte en tulas se paga por `tulas`. Si no
+  // se indica, se asume el modelo antiguo (todo el QQ si no hay tulas).
+  qqSaco?: number;
+  sacas: number;
+  arrocillo: number;
+  polvillo?: number;
+  tulas?: number;
+};
+type NombresPilada = { piladorName?: string | null; estibadorName?: string | null; polvilloName?: string | null };
+type FilaPago = { role: string; name: string; base: number; qq: number; sacas: number; arrocillo: number; tulas: number; detail: string };
+type YaPagado = { qq: number; sacas: number; arrocillo: number; tulas: number };
+const ROLES_PILADA = ["PILADOR", "ESTIBADOR", "POLVILLO"] as const;
+export const REF_NOMINA_BORRADOR = "milling_draft";
+
+// Filas de pago de una pilada según las tarifas vigentes.
+function filasPagoPilada(rates: Awaited<ReturnType<typeof getRates>>, nombres: NombresPilada, opts: DatosPilada): FilaPago[] {
+  const qq = Number(opts.qq) || 0;
+  const sacas = Number(opts.sacas) || 0;
+  const arrocillo = Number(opts.arrocillo) || 0;
+  const tulas = Number(opts.tulas) || 0;
+  const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
+
+  // El pilador es INMUTABLE: siempre qq×tarifa_qq + sacas×tarifa_saca sobre TODO
+  // el arroz pilado (tula + saco). El estibador cobra por el MIX del lote:
+  //  · porción en TULAS → volumen: (cantidad_tulas / 3) × tarifa_3_tulas.
+  //  · porción en SACOS → destajo: qq_saco×tarifa + sacas×tarifa + arrocillo×tarifa.
+  // En un lote 100% tulas cobra solo el volumen; 100% sacos, solo el destajo; y
+  // en un lote MIXTO cobra ambas partes (las tulas suelen agotarse a mitad del
+  // proceso). qqSaco = QQ que salió en sacos; si no viene, se asume el modelo
+  // anterior (todo el QQ si no hay tulas, 0 si hay tulas).
+  const qqSaco = opts.qqSaco != null ? (Number(opts.qqSaco) || 0) : (tulas > 0 ? 0 : qq);
+  const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number; arrocilloPaga: number }> = [];
+  if (nombres.piladorName && nombres.piladorName.trim()) {
+    rows.push({
+      role: "PILADOR",
+      name: nombres.piladorName.trim(),
+      base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
+      qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas, arrocilloPaga: 0
+    });
+  }
+  if (nombres.estibadorName && nombres.estibadorName.trim()) {
+    // AISLAMIENTO DE MAGNITUDES: la estibada por sacos se cobra ESTRICTAMENTE por
+    // los QUINTALES de arroz blanco (qqSaco × tarifa_qq) + los QQ de arrocillo
+    // (arrocillo × tarifa_arrocillo). NO se suma la cantidad física de sacas/bultos
+    // (eso duplicaba magnitudes heterogéneas e inflaba el pago). Las tulas se pagan
+    // aparte por volumen (tulasBonus). Subtotal = Blanco + Arrocillo (+ Tulas).
+    const destajoSaco = round2(
+      qqSaco * rates.estibador_per_qq +
+      arrocillo * rates.estibador_per_arrocillo
+    );
+    rows.push({
+      role: "ESTIBADOR",
+      name: nombres.estibadorName.trim(),
+      base: round2(tulasBonus + destajoSaco),
+      qq: qqSaco, tulas, tulasBonus, sacasCobradas: sacas, arrocilloPaga: arrocillo
+    });
+  }
+
+  if (nombres.polvilloName && nombres.polvilloName.trim() && (opts.polvillo ?? 0) > 0) {
+    const polvilloQq = Number(opts.polvillo) || 0;
+    rows.push({
+      role: "POLVILLO",
+      name: nombres.polvilloName.trim(),
+      base: round2(polvilloQq * rates.polvillo_per_qq),
+      // Los QQ de polvillo van en la columna `qq` para que el Rol de Pago
+      // muestre la CANTIDAD (antes quedaba en 0 y salía "0.00 QQ").
+      qq: polvilloQq, tulas: 0, tulasBonus: 0, sacasCobradas: 0, arrocilloPaga: 0
+    });
+  }
+
+  return rows.map((r) => {
+    const qqRate = r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq;
+    const sacaRate = r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca;
+    return {
+      role: r.role, name: r.name, base: r.base, qq: r.qq, sacas: r.sacasCobradas, arrocillo: r.arrocilloPaga, tulas: r.tulas,
+      detail: JSON.stringify({
+        // Para POLVILLO los QQ se pagan con su propia tarifa (polvillo_*), no
+        // con la de pilada/estibaje: se dejan los campos qq del desglose en 0.
+        qq: r.role === "POLVILLO" ? 0 : r.qq, qq_rate: r.role === "POLVILLO" ? 0 : qqRate, qq_amount: r.role === "POLVILLO" ? 0 : round2(r.qq * qqRate),
+        // La estibada NO cobra por saca física (solo el pilador): saca_amount=0 para ESTIBADOR.
+        sacas: r.sacasCobradas, saca_rate: r.role === "ESTIBADOR" ? 0 : sacaRate, saca_amount: r.role === "ESTIBADOR" ? 0 : round2(r.sacasCobradas * sacaRate),
+        arrocillo: r.arrocilloPaga, arrocillo_rate: r.arrocilloPaga > 0 ? rates.estibador_per_arrocillo : 0, arrocillo_amount: round2(r.arrocilloPaga * rates.estibador_per_arrocillo),
+        tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
+        polvillo: r.role === "POLVILLO" ? (opts.polvillo ?? 0) : 0, polvillo_rate: r.role === "POLVILLO" ? rates.polvillo_per_qq : 0, polvillo_amount: r.role === "POLVILLO" ? r.base : 0
+      })
+    };
+  });
+}
+
+// Lo que falta pagarle a un rol: el total de la pilada menos lo que ya se le pagó (a quien sea que haya hecho ese rol).
+function filaPorPagar(rates: Awaited<ReturnType<typeof getRates>>, nombres: NombresPilada, datos: DatosPilada, role: string, pagado?: YaPagado): FilaPago | null {
+  const resta = (a: number | undefined, b: number | undefined) => Math.max(0, Math.round(((Number(a) || 0) - (Number(b) || 0)) * 1000) / 1000);
+  const tulas = Number(datos.tulas) || 0;
+  const qqSaco = datos.qqSaco != null ? Number(datos.qqSaco) || 0 : (tulas > 0 ? 0 : Number(datos.qq) || 0);
+  const falta: DatosPilada = {
+    qq: resta(datos.qq, pagado?.qq),
+    qqSaco: resta(qqSaco, pagado?.qq),
+    sacas: resta(datos.sacas, pagado?.sacas),
+    arrocillo: resta(datos.arrocillo, pagado?.arrocillo),
+    tulas: resta(tulas, pagado?.tulas),
+    polvillo: resta(datos.polvillo, pagado?.qq)
+  };
+  const fila = filasPagoPilada(rates, nombres, falta).find((f) => f.role === role);
+  return fila && fila.base > 0.005 ? fila : null;
+}
+
+async function pagadoPorRol(client: PoolClient, tipo: string, ids: string[]): Promise<Map<string, YaPagado>> {
+  const r = await client.query(
+    `SELECT worker_role, SUM(qq)::float AS qq, SUM(sacas)::float AS sacas, SUM(arrocillo)::float AS arrocillo, SUM(tulas)::float AS tulas
+       FROM worker_payments
+      WHERE reference_type = $1 AND reference_id = ANY($2::uuid[]) AND status = 'PAID'
+      GROUP BY worker_role`,
+    [tipo, ids]
+  );
+  return new Map(r.rows.map((x) => [String(x.worker_role), { qq: x.qq, sacas: x.sacas, arrocillo: x.arrocillo, tulas: x.tulas }]));
+}
+
+async function insertarFilaPago(client: PoolClient, f: FilaPago, tipo: string, referencia: string, createdBy?: string | null, descuento = 0) {
+  await client.query(
+    `INSERT INTO worker_payments
+       (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, discount, net_amount, created_by, detail)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, GREATEST(0, $9::numeric - $10::numeric), $11, $12)`,
+    [f.role, f.name, tipo, referencia, f.qq, f.sacas, f.arrocillo, f.tulas, f.base, descuento, createdBy ?? null, f.detail]
+  );
+}
+
+// 💼 Proceso guardado en nómina (pedido del dueño 2026-11-03): lo pilado y guardado ya aparece en Pagos. Lo que dejó un
+// borrador se deduce de lo guardado (mismas reglas que al finalizar). Lógica pura.
+export function datosNominaBorrador(
+  entradas: Array<{ presentation?: string; quantityQq: number; destino?: string; tulas?: number }>,
+  reporte: Record<string, unknown>
+): DatosPilada & { qqSaco: number } {
+  const num = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+  const r3 = (n: number) => Math.round(n * 1000) / 1000;
+  const antiguo = entradas.length === 0; // borrador viejo: el arroz venía en report.qqTulas
+  const qq = antiguo ? num(reporte.qqTulas) : r3(entradas.reduce((s, e) => s + num(e.quantityQq), 0));
+  const enTula = entradas.filter((e) => e.destino === "TULA");
+  const tulaQq = antiguo ? qq : r3(enTula.reduce((s, e) => s + num(e.quantityQq), 0));
+  const tulas = antiguo ? num(reporte.tulas) : enTula.reduce((s, e) => s + num(e.tulas), 0);
+  let sacas = 0;
+  for (const e of entradas) {
+    if (e.destino === "TULA") continue;
+    const lb = Number(String(e.presentation ?? "").replace(/[^\d.]/g, ""));
+    if (lb > 0) sacas += Math.round((num(e.quantityQq) * 100) / lb);
+  }
+  return {
+    qq, qqSaco: r3(Math.max(0, qq - tulaQq)), sacas, tulas,
+    arrocillo: r3(num(reporte.broken34) + num(reporte.fineBroken)),
+    polvillo: num(reporte.polvillo)
+  };
+}
+
+/**
+ * Deja los pagos del proceso guardado iguales a lo guardado: cada guardado ACTUALIZA el pago pendiente (nunca suma otro)
+ * y a lo ya pagado se le paga solo la diferencia. `guardado` null = descartado: se quita lo pendiente; si algo ya se
+ * pagó, no se deja descartar.
+ */
+export async function sincronizarNominaBorrador(
+  client: PoolClient,
+  dryingReportId: string,
+  guardado: { entradas: Parameters<typeof datosNominaBorrador>[0]; reporte: Record<string, unknown> } | null,
+  createdBy?: string | null
+): Promise<void> {
+  const pagado = await pagadoPorRol(client, REF_NOMINA_BORRADOR, [dryingReportId]);
+  if (!guardado) {
+    if (pagado.size) {
+      throw new ApiError(409, "No se puede descartar: la nómina de este proceso guardado ya se pagó. Anula primero ese pago en Caja, o sigue el proceso y finalízalo.");
+    }
+    await client.query("DELETE FROM worker_payments WHERE reference_type = $1 AND reference_id = $2 AND status = 'PENDING'", [REF_NOMINA_BORRADOR, dryingReportId]);
+    return;
+  }
+  const dueno = await client.query(
+    "SELECT l.accionista_id FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1", [dryingReportId]
+  );
+  const rates = await getRates(client, dueno.rows[0]?.accionista_id ?? null);
+  const datos = datosNominaBorrador(guardado.entradas, guardado.reporte);
+  const texto = (v: unknown) => (typeof v === "string" ? v : "");
+  const nombres: NombresPilada = {
+    piladorName: texto(guardado.reporte.pilador_name),
+    estibadorName: texto(guardado.reporte.estibador_name),
+    polvilloName: texto(guardado.reporte.polvillo_worker_name)
+  };
+  const pendientes = (await client.query(
+    `SELECT id, worker_role, worker_name, qq::float AS qq, sacas::float AS sacas, arrocillo::float AS arrocillo, tulas::float AS tulas, base_amount::float AS base
+       FROM worker_payments WHERE reference_type = $1 AND reference_id = $2 AND status = 'PENDING' ORDER BY created_at`,
+    [REF_NOMINA_BORRADOR, dryingReportId]
+  )).rows;
+  for (const role of ROLES_PILADA) {
+    const fila = filaPorPagar(rates, nombres, datos, role, pagado.get(role));
+    const [actual, ...sobran] = pendientes.filter((p) => p.worker_role === role);
+    for (const x of sobran) await client.query("DELETE FROM worker_payments WHERE id = $1", [x.id]);
+    if (!fila) {
+      if (actual) await client.query("DELETE FROM worker_payments WHERE id = $1", [actual.id]);
+    } else if (!actual) {
+      await insertarFilaPago(client, fila, REF_NOMINA_BORRADOR, dryingReportId, createdBy);
+    } else if (actual.worker_name !== fila.name || Math.abs(actual.base - fila.base) > 0.005 || actual.qq !== fila.qq
+      || actual.sacas !== fila.sacas || actual.arrocillo !== fila.arrocillo || actual.tulas !== fila.tulas) {
+      await client.query(
+        `UPDATE worker_payments SET worker_name = $2, qq = $3, sacas = $4, arrocillo = $5, tulas = $6, base_amount = $7,
+                net_amount = GREATEST(0, $7::numeric - discount), detail = $8, work_date = CURRENT_DATE
+          WHERE id = $1 AND status = 'PENDING'`,
+        [actual.id, fila.name, fila.qq, fila.sacas, fila.arrocillo, fila.tulas, fila.base, fila.detail]
+      );
+    }
+  }
+}
+
 // Crea los pagos de pilador y estibador de una pilada, usando las tarifas
 // vigentes y las cantidades producidas. Se llama dentro de la transacción de
 // finish-production. Nunca lanza: si falla, no debe tumbar la producción.
+// Si venía de un proceso guardado: lo pendiente del borrador se reemplaza por el pago real, lo ya pagado pasa a este
+// proceso (así no se puede anular sin anular el pago) y solo se crea lo que falte. Nunca se paga dos veces.
 export async function createProductionWorkerPayments(
   client: PoolClient,
-  opts: {
+  opts: NombresPilada & DatosPilada & {
     batchId: string;
-    piladorName?: string | null;
-    estibadorName?: string | null;
-    polvilloName?: string | null;
-    qq: number;
-    // Base del ESTIBADOR por la porción en sacos (QQ). En un lote mixto es solo
-    // la parte que salió en sacos; la parte en tulas se paga por `tulas`. Si no
-    // se indica, se asume el modelo antiguo (todo el QQ si no hay tulas).
-    qqSaco?: number;
     qqDeTulas?: number;
-    sacas: number;
-    arrocillo: number;
-    polvillo?: number;
-    tulas?: number;
     createdBy?: string | null;
   }
 ): Promise<void> {
@@ -264,79 +465,35 @@ export async function createProductionWorkerPayments(
       [opts.batchId]
     );
     const rates = await getRates(client, batchOwner.rows[0]?.accionista_id ?? null);
-    const qq = Number(opts.qq) || 0;
-    const sacas = Number(opts.sacas) || 0;
-    const arrocillo = Number(opts.arrocillo) || 0;
-    const tulas = Number(opts.tulas) || 0;
-    const tulasBonus = estibadorBaseFromTulas(tulas, rates.estibador_por_3tulas);
 
-    // El pilador es INMUTABLE: siempre qq×tarifa_qq + sacas×tarifa_saca sobre TODO
-    // el arroz pilado (tula + saco). El estibador cobra por el MIX del lote:
-    //  · porción en TULAS → volumen: (cantidad_tulas / 3) × tarifa_3_tulas.
-    //  · porción en SACOS → destajo: qq_saco×tarifa + sacas×tarifa + arrocillo×tarifa.
-    // En un lote 100% tulas cobra solo el volumen; 100% sacos, solo el destajo; y
-    // en un lote MIXTO cobra ambas partes (las tulas suelen agotarse a mitad del
-    // proceso). qqSaco = QQ que salió en sacos; si no viene, se asume el modelo
-    // anterior (todo el QQ si no hay tulas, 0 si hay tulas).
-    const qqSaco = opts.qqSaco != null ? (Number(opts.qqSaco) || 0) : (tulas > 0 ? 0 : qq);
-    const rows: Array<{ role: string; name: string; base: number; qq: number; tulas: number; tulasBonus: number; sacasCobradas: number; arrocilloPaga: number }> = [];
-    if (opts.piladorName && opts.piladorName.trim()) {
-      rows.push({
-        role: "PILADOR",
-        name: opts.piladorName.trim(),
-        base: round2(qq * rates.pilador_per_qq + sacas * rates.pilador_per_saca),
-        qq, tulas: 0, tulasBonus: 0, sacasCobradas: sacas, arrocilloPaga: 0
-      });
-    }
-    if (opts.estibadorName && opts.estibadorName.trim()) {
-      // AISLAMIENTO DE MAGNITUDES: la estibada por sacos se cobra ESTRICTAMENTE por
-      // los QUINTALES de arroz blanco (qqSaco × tarifa_qq) + los QQ de arrocillo
-      // (arrocillo × tarifa_arrocillo). NO se suma la cantidad física de sacas/bultos
-      // (eso duplicaba magnitudes heterogéneas e inflaba el pago). Las tulas se pagan
-      // aparte por volumen (tulasBonus). Subtotal = Blanco + Arrocillo (+ Tulas).
-      const destajoSaco = round2(
-        qqSaco * rates.estibador_per_qq +
-        arrocillo * rates.estibador_per_arrocillo
-      );
-      rows.push({
-        role: "ESTIBADOR",
-        name: opts.estibadorName.trim(),
-        base: round2(tulasBonus + destajoSaco),
-        qq: qqSaco, tulas, tulasBonus, sacasCobradas: sacas, arrocilloPaga: arrocillo
-      });
-    }
-
-    if (opts.polvilloName && opts.polvilloName.trim() && (opts.polvillo ?? 0) > 0) {
-      const polvilloQq = Number(opts.polvillo) || 0;
-      rows.push({
-        role: "POLVILLO",
-        name: opts.polvilloName.trim(),
-        base: round2(polvilloQq * rates.polvillo_per_qq),
-        // Los QQ de polvillo van en la columna `qq` para que el Rol de Pago
-        // muestre la CANTIDAD (antes quedaba en 0 y salía "0.00 QQ").
-        qq: polvilloQq, tulas: 0, tulasBonus: 0, sacasCobradas: 0, arrocilloPaga: 0
-      });
-    }
-
-    for (const r of rows) {
-      const qqRate = r.role === "PILADOR" ? rates.pilador_per_qq : rates.estibador_per_qq;
-      const sacaRate = r.role === "PILADOR" ? rates.pilador_per_saca : rates.estibador_per_saca;
-      await client.query(
-        `INSERT INTO worker_payments
-           (worker_role, worker_name, reference_type, reference_id, qq, sacas, arrocillo, tulas, base_amount, net_amount, created_by, detail)
-         VALUES ($1, $2, 'processing_batch', $3, $4, $5, $6, $7, $8, $8, $9, $10)`,
-        [r.role, r.name, opts.batchId, r.qq, r.sacasCobradas, r.arrocilloPaga, r.tulas, r.base, opts.createdBy ?? null,
-         JSON.stringify({
-           // Para POLVILLO los QQ se pagan con su propia tarifa (polvillo_*), no
-           // con la de pilada/estibaje: se dejan los campos qq del desglose en 0.
-           qq: r.role === "POLVILLO" ? 0 : r.qq, qq_rate: r.role === "POLVILLO" ? 0 : qqRate, qq_amount: r.role === "POLVILLO" ? 0 : round2(r.qq * qqRate),
-           // La estibada NO cobra por saca física (solo el pilador): saca_amount=0 para ESTIBADOR.
-           sacas: r.sacasCobradas, saca_rate: r.role === "ESTIBADOR" ? 0 : sacaRate, saca_amount: r.role === "ESTIBADOR" ? 0 : round2(r.sacasCobradas * sacaRate),
-           arrocillo: r.arrocilloPaga, arrocillo_rate: r.arrocilloPaga > 0 ? rates.estibador_per_arrocillo : 0, arrocillo_amount: round2(r.arrocilloPaga * rates.estibador_per_arrocillo),
-           tulas: r.tulas, tulas_rate: r.role === "PILADOR" ? 0 : rates.estibador_por_3tulas, tulas_amount: r.tulasBonus,
-           polvillo: r.role === "POLVILLO" ? (opts.polvillo ?? 0) : 0, polvillo_rate: r.role === "POLVILLO" ? rates.polvillo_per_qq : 0, polvillo_amount: r.role === "POLVILLO" ? r.base : 0
-         })]
-      );
+    const tuneles = (await client.query(
+      `SELECT drying_report_id AS id FROM processing_batches WHERE id = $1 AND drying_report_id IS NOT NULL
+       UNION SELECT drying_report_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NOT NULL`,
+      [opts.batchId]
+    )).rows.map((x) => String(x.id));
+    const delBorrador = (await client.query(
+      `DELETE FROM worker_payments WHERE reference_type = $1 AND reference_id = ANY($2::uuid[]) AND status = 'PENDING'
+       RETURNING worker_role, worker_name, discount::float AS discount`,
+      [REF_NOMINA_BORRADOR, tuneles]
+    )).rows;
+    await client.query(
+      `UPDATE worker_payments SET reference_type = 'processing_batch', reference_id = $1
+        WHERE reference_type = $2 AND reference_id = ANY($3::uuid[]) AND status = 'PAID'`,
+      [opts.batchId, REF_NOMINA_BORRADOR, tuneles]
+    );
+    const pagado = await pagadoPorRol(client, "processing_batch", [opts.batchId]);
+    // Si al finalizar el nombre quedó vacío, vale el del proceso guardado (el pago no se pierde).
+    const nombreBorrador = (role: string) => delBorrador.find((x) => x.worker_role === role)?.worker_name ?? null;
+    const nombres: NombresPilada = {
+      piladorName: opts.piladorName?.trim() || nombreBorrador("PILADOR"),
+      estibadorName: opts.estibadorName?.trim() || nombreBorrador("ESTIBADOR"),
+      polvilloName: opts.polvilloName?.trim() || nombreBorrador("POLVILLO")
+    };
+    for (const role of ROLES_PILADA) {
+      const fila = filaPorPagar(rates, nombres, opts, role, pagado.get(role));
+      if (!fila) continue;
+      const descuento = delBorrador.filter((x) => x.worker_role === role).reduce((s, x) => s + Number(x.discount || 0), 0);
+      await insertarFilaPago(client, fila, "processing_batch", opts.batchId, opts.createdBy, descuento);
     }
   } catch (err) {
     // La nómina nunca debe romper la producción, PERO tampoco puede perderse en
@@ -489,7 +646,8 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
        FROM worker_payments wp
        LEFT JOIN processing_batches b
          ON wp.reference_type IN ('processing_batch', 'processing_batches') AND b.id = wp.reference_id
-       LEFT JOIN lots l ON l.id = b.lot_id
+       LEFT JOIN drying_tunnel_reports dt ON wp.reference_type = 'milling_draft' AND dt.id = wp.reference_id
+       LEFT JOIN lots l ON l.id = COALESCE(b.lot_id, dt.lot_id)
       WHERE wp.worker_role = $1 AND wp.worker_name = $2 AND wp.work_date BETWEEN $3 AND $4
         ${q.status ? "AND wp.status = $5" : ""}
       ORDER BY wp.work_date ASC, wp.created_at ASC`,
@@ -531,6 +689,7 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
       tarifa = tulas ? `$${rates.estibador_por_3tulas}/3 tulas` : `$${rates.estibador_per_qq}/QQ`;
       cantidad_num = qq; // referencia; el estibaje es compuesto, no se fuerza QQ
     }
+    if (r.reference_type === REF_NOMINA_BORRADOR) concepto += " (proceso guardado)";
     return {
       fecha: r.fecha, concepto, lote, cantidad, tarifa, cantidad_num, tarifa_num, unidad,
       subtotal: round2(Number(r.net_amount) || 0), status: r.status

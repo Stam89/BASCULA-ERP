@@ -419,7 +419,7 @@ export function CajaHoja({
         {error ? <span className="cjh-error">⚠️ {error}</span> : (
           <span>Escribe el concepto y <kbd>Enter</kbd>: si ya se usó, la categoría se llena sola y pasa al monto · <kbd>Enter</kbd> en el monto guarda · <kbd>Esc</kbd> limpia
             {puedeBanco && <> · <b>💳</b> = no salió de la gaveta (banco / tarjeta)</>}
-            <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (ventas, anticipos, Transporte…).</span></span>
+            {movimientos.some((m) => origenExterno(m)) && <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (pedidos, anticipos, compras…).</span>}</span>
         )}
         {banco && !error && <span className="cjh-aviso">💳 Esta salida no sale de la gaveta: entra lo mismo como «Retiro del banco».</span>}
       </div>

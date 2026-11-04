@@ -12418,7 +12418,13 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     const effEntries = (await flushPendingPiladoEntry());
     if (!effEntries) return;
     await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
-      report: { ...millingReport, juntos: productionDryingExtras },
+      // Con los nombres de turno, lo guardado ya aparece en Nómina › Pagos (al retomarlo se actualiza, no se duplica).
+      report: {
+        ...millingReport, juntos: productionDryingExtras,
+        ...(piladorName.trim() ? { pilador_name: piladorName.trim() } : {}),
+        ...(estibadorName.trim() ? { estibador_name: estibadorName.trim() } : {}),
+        ...(polvilloWorkerName.trim() ? { polvillo_worker_name: polvilloWorkerName.trim() } : {})
+      },
       pilado_entries: effEntries,
       // Lo guardado ya cuenta en el inventario de producto terminado.
       warehouse_id: finishedWarehouse?.id
@@ -12432,7 +12438,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     setMillingYields(null);
     setMillingDraftSavedAt(null);
     setProductionDryingId(""); setProductionDryingExtras([]);
-    addToast(`Proceso guardado: lo pilado ya cuenta en el inventario${millingEsServicio ? " (salvo servicio de pilada: el arroz es del cliente)" : ""}. Retómalo desde «Procesos guardados» con Continuar / Finalizar lote.`, "success");
+    addToast(`Proceso guardado: lo pilado ya cuenta en el inventario${millingEsServicio ? " (salvo servicio de pilada: el arroz es del cliente)" : ""} y en Nómina › Pagos. Retómalo desde «Procesos guardados» con Continuar / Finalizar lote.`, "success");
+    if (!piladorName.trim() || !estibadorName.trim()) addToast("Falta el nombre del pilador o del estibador en «Personal de turno»: a ese no le aparece el pago hasta que lo pongas y guardes.", "error");
   }
 
   async function loadMillingDrafts() {
@@ -12447,7 +12454,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     if (!(await confirmar(`¿Descartar el proceso guardado del lote ${d.lot_code ?? "—"} (Túnel ${d.tunnel_number})?\n\nSe borra el borrador y lo que había sumado al inventario se retira; el lote vuelve a quedar disponible para pilar. Esta acción no se puede deshacer.`))) return;
     try {
       const r = await apiFetch(`/processing-batches/drafts/${d.drying_report_id}`, { method: "DELETE" });
-      if (!r.ok) throw new Error("No se pudo descartar el proceso guardado");
+      if (!r.ok) throw new Error((await r.json().catch(() => null) as { error?: string } | null)?.error ?? "No se pudo descartar el proceso guardado");
       // Optimista: quítalo de la lista al instante.
       setMillingDrafts((prev) => prev.filter((x) => x.drying_report_id !== d.drying_report_id));
       if (productionDryingId === d.drying_report_id) setProductionDryingId(""); setProductionDryingExtras([]);
