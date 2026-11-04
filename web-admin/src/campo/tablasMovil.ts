@@ -4,18 +4,24 @@ import { useEffect } from "react";
 // como una TARJETA con «Etiqueta: valor» en vez de una tabla ancha que hay que deslizar de lado. La etiqueta de
 // cada celda sale del encabezado de su columna; el CSS (body.campoActivo .tablaTarjeta) hace el resto.
 const SELECTOR = "table.cajaTable, table.nomMatriz__tabla, table.er-tabla";
-// Fuera de Transporte solo van en tarjeta las tablas que lo piden con `enTarjetas`: las que llevan botones o campos
-// que en el celular quedaban escondidos a la derecha.
-const SELECTOR_ERP = "table.enTarjetas";
+// En el resto del ERP va en tarjeta la tabla que NO CABE en el celular (o que lo pide con `enTarjetas`): la que cabe se
+// queda como tabla, que se lee más rápido. Estas ya tienen su propio dibujo en el celular.
+const CON_DIBUJO_PROPIO = ".cjh-tabla, .cuentasTabla, .basculaTicketsTable, .nomHist";
+const ES_CELULAR = "(max-width: 700px)";
 
 function etiquetar(tabla: HTMLTableElement) {
-  const ths = tabla.tHead?.rows[tabla.tHead.rows.length - 1]?.cells;
-  if (!ths || ths.length === 0) return;
+  const filasCabecera = tabla.tHead?.rows;
+  if (!filasCabecera?.length) return;
+  // Con dos filas de encabezado («CASC» sobre «0.11») la etiqueta las junta: «CASC 0.11».
   const nombres: string[] = [];
-  for (const th of Array.from(ths)) {
-    const span = Math.max(1, th.colSpan || 1);
-    const txt = (th.textContent ?? "").replace(/\s+/g, " ").trim();
-    for (let i = 0; i < span; i++) nombres.push(txt);
+  for (const fila of Array.from(filasCabecera)) {
+    let columna = 0;
+    for (const th of Array.from(fila.cells)) {
+      const txt = (th.textContent ?? "").replace(/\s+/g, " ").trim();
+      for (let i = 0; i < Math.max(1, th.colSpan || 1); i++, columna++) {
+        if (txt) nombres[columna] = nombres[columna] ? `${nombres[columna]} ${txt}` : txt;
+      }
+    }
   }
   tabla.classList.add("tablaTarjeta");
   for (const tb of [...Array.from(tabla.tBodies), ...(tabla.tFoot ? [tabla.tFoot] : [])]) {
@@ -37,17 +43,36 @@ function etiquetar(tabla: HTMLTableElement) {
   }
 }
 
-function vigilar(selector: string): () => void {
+/** ¿Se sale del espacio que tiene? También la que se desliza por dentro (`display: block`). */
+function noCabe(tabla: HTMLTableElement): boolean {
+  const padre = tabla.parentElement;
+  if (!padre?.clientWidth || tabla.offsetWidth === 0) return false;
+  const estilo = getComputedStyle(padre);
+  const libre = padre.clientWidth - parseFloat(estilo.paddingLeft) - parseFloat(estilo.paddingRight);
+  return tabla.scrollWidth > tabla.clientWidth + 2 || tabla.offsetWidth > libre + 2;
+}
+
+function tablasDelErp(): HTMLTableElement[] {
+  const celular = window.matchMedia(ES_CELULAR).matches;
+  return Array.from(document.querySelectorAll<HTMLTableElement>(".content table, .modalOverlay table")).filter((t) =>
+    !t.matches(CON_DIBUJO_PROPIO) && (t.matches(".enTarjetas, .tablaTarjeta") || (celular && noCabe(t))));
+}
+
+function vigilar(elegir: () => HTMLTableElement[]): () => void {
   let pendiente = 0;
   const pasar = () => {
     pendiente = 0;
-    document.querySelectorAll<HTMLTableElement>(selector).forEach(etiquetar);
+    elegir().forEach(etiquetar);
   };
-  const obs = new MutationObserver(() => { if (!pendiente) pendiente = window.setTimeout(pasar, 60); });
-  obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+  const programar = () => { if (!pendiente) pendiente = window.setTimeout(pasar, 60); };
+  const obs = new MutationObserver(programar);
+  // `open`: una tabla dentro de un <details> no tiene ancho hasta que se abre.
+  obs.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["open"] });
+  window.addEventListener("resize", programar);
   pasar();
   return () => {
     obs.disconnect();
+    window.removeEventListener("resize", programar);
     if (pendiente) window.clearTimeout(pendiente);
   };
 }
@@ -56,7 +81,7 @@ function vigilar(selector: string): () => void {
 export function useTablasEnTarjetas() {
   useEffect(() => {
     document.body.classList.add("campoActivo");
-    const dejar = vigilar(SELECTOR);
+    const dejar = vigilar(() => Array.from(document.querySelectorAll<HTMLTableElement>(SELECTOR)));
     return () => {
       dejar();
       document.body.classList.remove("campoActivo");
@@ -64,7 +89,7 @@ export function useTablasEnTarjetas() {
   }, []);
 }
 
-/** En el resto del ERP: solo las tablas marcadas con `enTarjetas`. */
+/** En el resto del ERP: las tablas que no caben en el celular o que piden `enTarjetas`. */
 export function useTablasEnTarjetasErp() {
-  useEffect(() => vigilar(SELECTOR_ERP), []);
+  useEffect(() => vigilar(tablasDelErp), []);
 }

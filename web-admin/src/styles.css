@@ -5578,7 +5578,7 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .nomMatriz__recibo { margin-top: 4px; font-size: 12px; }
 .campoNomina__recibo { grid-column: 1 / -1; margin-top: 0; }
 .campoNomina__recibo { min-width: 0; }
-.campoNomina__recibo table { table-layout: fixed; }
+.campoNomina__recibo table { display: table !important; table-layout: fixed; } /* la regla global de ≤ 860 px la vuelve bloque y anula estos anchos */
 .campoNomina__recibo td { white-space: normal; overflow-wrap: anywhere; padding: 3px 4px; }
 .campoNomina__recibo td:nth-child(1) { width: 25%; }
 .campoNomina__recibo td:nth-child(2) { width: 20%; }
@@ -5587,6 +5587,12 @@ input.montoAuto { background: #f1f5f9 !important; font-weight: 800; color: #0f17
 .nomMatriz__recibo table { margin-top: 4px; border-collapse: collapse; width: 100%; }
 .nomMatriz__recibo td { padding: 2px 6px; border-bottom: 1px solid #e5e7eb; white-space: nowrap; }
 .nomMatriz__recibo td.num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) {
+  /* El recibo cabe en la tarjeta: el nombre baja de línea; la fecha y los QQ no se parten. */
+  .nomMatriz__recibo table { display: table !important; }
+  .nomMatriz__recibo td { white-space: normal; overflow-wrap: anywhere; padding: 3px 4px; }
+  .nomMatriz__recibo td:first-child, .nomMatriz__recibo td.num { white-space: nowrap; }
+}
 .invxModal__llenos { display: grid; gap: 4px; margin: 6px 0 2px; }
 .invxModal__lleno { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 5px 8px; border-radius: 8px; background: #f5f3ff; border: 1px solid #ddd6fe; font-size: 13px; }
 .invxModal__lleno span { font-weight: 600; min-width: 92px; }
@@ -6785,9 +6791,10 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .partesMarca span, .partesTodos { display: none; }
 .cjh-tabla th:nth-child(1) { width: 124px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 104px; } .cjh-tabla th:nth-child(5) { width: 112px; } .cjh-tabla th:nth-child(6) { width: 150px; }
 @media (min-width: 701px) and (max-width: 1000px) {
-  /* Tablet: con el ancho de la PC, «Anular» quedaba escondido a la derecha. */
-  .cjh-tabla { min-width: 0; }
-  .cjh-tabla th:nth-child(1) { width: 110px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 86px; } .cjh-tabla th:nth-child(5) { width: 92px; } .cjh-tabla th:nth-child(6) { width: 118px; }
+  /* Tablet: con el ancho de la PC, «Anular» quedaba escondido a la derecha. Sin el !important la regla global de
+     ≤ 860 px la vuelve bloque y estos anchos no se aplican. */
+  .cjh-tabla { min-width: 0; display: table !important; }
+  .cjh-tabla th:nth-child(1) { width: 110px; } .cjh-tabla th:nth-child(3), .cjh-tabla th:nth-child(4) { width: 86px; } .cjh-tabla th:nth-child(5) { width: 92px; } .cjh-tabla th:nth-child(6) { width: 128px; }
 }
 .cjh-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .cjh-tag { font-size: 11px; line-height: 1.5; padding: 0 7px; border-radius: 999px; background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; white-space: nowrap; }
