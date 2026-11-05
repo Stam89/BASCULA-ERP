@@ -6811,6 +6811,8 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .cjh-tag.is-quien { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
 .cjh-tabla tr.is-externo td { color: #64748b; }
 .cjh-tabla tr.is-externo td.cjh-entra, .cjh-tabla tr.is-externo td.cjh-sale { font-weight: 500; opacity: .8; }
+.cjh-dos { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 6px; }
+@media (max-width: 640px) { .cjh-dos { grid-template-columns: minmax(0, 1fr); } }
 .cjh-nueva__tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .cjh-nueva__tags label { display: flex; align-items: center; gap: 4px; flex: 1 1 180px; min-width: 0; }
 .cjh-nueva__tags label > span { font-size: 11px; font-weight: 700; color: #64748b; white-space: nowrap; }

@@ -1,5 +1,6 @@
 import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
 import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
+import type { ReglaCaja } from "./components/cajaHojaLeer";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
@@ -82,6 +83,7 @@ const ResultadoMensual = perezoso(() => import("./components/ResultadoMensual").
 const PrestamosBancarios = perezoso(() => import("./components/PrestamosBancarios").then((m) => m.PrestamosBancarios));
 const SaldosIniciales = perezoso(() => import("./components/SaldosIniciales").then((m) => m.SaldosIniciales));
 const ParametrosContables = perezoso(() => import("./components/ParametrosContables").then((m) => m.ParametrosContables));
+const ReglasCajaConfig = perezoso(() => import("./components/ReglasCajaConfig").then((m) => m.ReglasCajaConfig));
 const ResumenDiarioConfig = perezoso(() => import("./components/ResumenDiarioConfig").then((m) => m.ResumenDiarioConfig));
 const ControlIntegridad = perezoso(() => import("./components/ControlIntegridad").then((m) => m.ControlIntegridad));
 const FomentoIntereses = perezoso(() => import("./components/FomentoIntereses").then((m) => m.FomentoIntereses));
@@ -3174,6 +3176,7 @@ export function App() {
     { sub: "planta", tarjeta: "📦 Catálogo de sacos", claves: "mis sacos envejecido propios sacos marcas flor oso extra lira azul conejo 100 50 25 10 libras arroba stock minimo alerta precio eliminar agregar usados segunda cambio de saco recuperado" },
     { sub: "negocio", tarjeta: "🖨️ Impresoras", claves: "impresora imprimir ticket ticketera termica bluetooth epson papel 58 80 a4 copias rawbt kiosko recibo" },
     { sub: "negocio", tarjeta: "💼 Personal administrativo", claves: "empleado empleados agregar trabajador oficina contadora sueldo administrativo quincenal cargo nomina" },
+    { sub: "contabilidad", tarjeta: "📐 Reglas de la Caja", claves: "regla reglas caja hoja categoria automatica proveedor cliente mecanico maquina rubro detalle" },
     { sub: "contabilidad", tarjeta: "🏷️ Categorías de caja", claves: "categoria ingreso egreso movimiento caja materiales consumibles repuestos rubro costos operativos" },
     { sub: "planta", tarjeta: "🔧 Categorías de Mantenimiento", claves: "areas tipos secciones sistemas equipos mantenimiento maquinas maquina equipo compra de repuestos uso inmediato materiales consumibles hoja de vida" },
     { sub: "estado", tarjeta: "✅ Puesta en marcha", claves: "checklist pasos inicio configuracion inicial arranque datos reales produccion" },
@@ -5391,6 +5394,7 @@ export function App() {
   // 🚜 Lo que se registró a crédito en Transporte desde que se abrió esta caja: no mueve la gaveta pero se ve en la hoja.
   const [creditosTransporte, setCreditosTransporte] = useState<HojaCredito[]>([]);
   const [memoriaHoja, setMemoriaHoja] = useState<Array<{ concepto: string; category: string }>>([]);
+  const [reglasHoja, setReglasHoja] = useState<ReglaCaja[]>([]);
   async function cargarCreditosTransporte() {
     const permitidos = accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? [];
     const abierta = dashboard.current_cash_register?.opened_at;
@@ -5406,6 +5410,7 @@ export function App() {
     if (activeTab !== "Caja" || !authUser) return;
     cargarCreditosTransporte().catch(() => undefined);
     apiGet<Array<{ concepto: string; category: string }>>("/cash/conceptos-usados").then(setMemoriaHoja).catch(() => undefined);
+    apiGet<ReglaCaja[]>("/cash/reglas").then(setReglasHoja).catch(() => undefined);
     refreshReceivables().catch(() => undefined);
     apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle").then(setPersonasVentaDetalle).catch(() => undefined);
     if (esMatrizActiva) apiGet<CuadrillaActivity[]>("/cuadrilla/activities").then(setCuadActivities).catch(() => undefined);
@@ -20735,6 +20740,7 @@ Motivo (obligatorio):`, ""));
                           descuentoQq={descuentoQqDefecto}
                           socios={sociosDelGasto.map((a) => ({ id: a.id, name: a.name }))}
                           memoria={memoriaHoja}
+                          reglas={reglasHoja}
                           onRefrescar={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); await Promise.all([refreshReceivables(), cargarCreditosTransporte()]).catch(() => undefined); }}
                           onError={(m) => addToast(m, "error")}
                           onFormularioCompleto={abrirFormularioDesdeHoja}
@@ -28189,6 +28195,10 @@ Motivo (obligatorio):`, ""));
 
             {configSubTab === "contabilidad" && !esSocioActivoCfg && (
               <section className="panelGrid" style={{ order: 3 }}>
+                <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("📐", "Reglas de la Caja", "Si dice esto, es esta categoría: la hoja la pone sola")}</summary>
+                  <ReglasCajaConfig esAdmin={isAdmin} avisar={addToast} />
+                </details>
                 <details className="cfgCard formPanel" style={{ gridColumn: "1 / -1" }}>
                   <summary>{cfgSum("🏷️", "Categorías de caja", "Rubros de ingresos y egresos que aparecen en Caja")}</summary>
                 <div>

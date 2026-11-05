@@ -133,6 +133,16 @@ const PALABRAS_CATEGORIA: Array<[RegExp, string]> = [
   [/\b(bascula|pesadas?)\b/, "SERVICIO_BASCULA"]
 ];
 
+export type ReglaCaja = { id?: string; quien: string; palabra: string; category: string; categoria_nombre?: string | null; rubro?: string | null };
+export const dicePalabras = (texto: string, buscado: string) => ` ${limpio(texto).replace(/[^a-z0-9ñ]+/g, " ")} `.includes(` ${limpio(buscado).replace(/[^a-z0-9ñ]+/g, " ").trim()} `);
+/** La regla del dueño que aplica a lo escrito: «ambas» pide quién y qué; «quien» y «palabra» son las de un solo dato. */
+export function buscarRegla(texto: string, reglas: ReglaCaja[], clase: "ambas" | "quien" | "palabra"): string | null {
+  const r = reglas.find((x) => (clase === "ambas" ? !!x.quien && !!x.palabra : clase === "quien" ? !!x.quien && !x.palabra : !x.quien && !!x.palabra)
+    && (!x.quien || dicePalabras(texto, x.quien)) && (!x.palabra || dicePalabras(texto, x.palabra)));
+  return r?.category ?? null;
+}
+export const tieneSuFlujo = (txt: string) => TIENE_SU_FLUJO.test(limpio(txt));
+
 /** Código de la categoría que sugiere lo escrito, si esa caja la tiene. */
 export function categoriaPorPalabras(txt: string, codigos: Set<string>): string | null {
   const t = limpio(txt);

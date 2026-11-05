@@ -2,7 +2,17 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🏷️ La hoja pone sola la categoría, como el DETALLE del Excel (2026-11-04)
+## Último cambio: 🧾 Hoja de Caja con dos recuadros y Reglas de la Caja (2026-11-05)
+
+- Como CLIENTE y CONCEPTO del Excel: `sujeto` («¿Quién o qué?») y `concepto` («¿Qué se hizo?»). Se leen juntos con `unir` y se guardan como `sujeto · concepto`.
+- Quien escribe la línea entera en el primer recuadro («comida», «20 lb de 0,11») sigue igual: pasa sola al segundo. Vacío + Enter va al segundo.
+- Orden de `categoriaDe`: regla con quién y qué → mismo texto antes → regla de quién → regla de palabra → palabras de lo que se hizo → lo más usado con ese sujeto → palabras del sujeto.
+- Tabla `caja_reglas` (migración 20261138), `/cash/reglas` (crear y quitar solo administrador). Pantalla: Configuración → Contabilidad → Reglas de la Caja (`ReglasCajaConfig.tsx`), con botón de 7 sugeridas del Excel: NO se cargan solas.
+- `detectarMaquina`: «Secadora 3» del Excel = TÚNEL 3. PLAN SISTER es máquina de la piladora, no proveedor.
+- Trabajo que dice el área sin máquina («Montacarga · cambio de aceite»): va a su OTROS sin preguntar. Sin área: pregunta y con otro Enter PILADORA · OTROS.
+- Medido en 1,720 gastos del Excel aprendiendo: acierta 77.7%, pregunta 13.9%, se equivoca 8.4%; con cliente escrito acierta 82% (antes 74%).
+
+## Cambio anterior: 🏷️ La hoja pone sola la categoría, como el DETALLE del Excel (2026-11-04)
 
 - Cadena: concepto → categoría → rubro del Resultado mensual. El rubro ya salía de la categoría (`clasificarMovimiento`); ahora también la categoría sale sola.
 - `cajaHojaLeer.ts`: `PALABRAS_CATEGORIA` se ajustó con los 2,846 egresos con DETALLE del Excel; `TIENE_SU_FLUJO` no pone categoría a lo que tiene su propio camino (fomentos, abonos, nómina).

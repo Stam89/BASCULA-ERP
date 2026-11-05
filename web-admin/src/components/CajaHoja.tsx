@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom";
 import { money } from "../format";
 import { CLASE_DE_CATEGORIA, NOMBRE_CORTO, categoriaPorNombreCorto, detectarMaquina, nombreCortoPorConcepto } from "./cajaHojaMaquina";
-import { categoriaPorPalabras, diceAgricultor, diceCobro, diceFondo, dicePago, leerCuadrilla, leerPersona, leerResponsable, leerVenta, type ActividadHoja, type ModoHoja, type ProductoHoja } from "./cajaHojaLeer";
+import { categoriaPorPalabras, diceAgricultor, diceCobro, diceFondo, dicePago, leerCuadrilla, leerPersona, leerResponsable, leerVenta, type ActividadHoja, type ModoHoja, type ProductoHoja, buscarRegla, dicePalabras, tieneSuFlujo, type ReglaCaja } from "./cajaHojaLeer";
 import { calcularVentaDetalle, DESCUENTO_QQ_DEFECTO, formatoCantidad } from "../ventaDetalle";
 
 // 📋 CAJA TIPO HOJA DE CÁLCULO (pedido del dueño 2026-10-30): los movimientos de la sesión en filas continuas, como su
@@ -62,12 +62,13 @@ export const RUBRO_VARIOS = { EGRESO: "GASTOS_VARIOS", INGRESO: "INGRESOS_VARIOS
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 const sinTilde = (x: string) => x.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
+const unir = (s: string, c: string) => [s.trim(), c.trim()].filter(Boolean).join(" · ");
 const diaEc = (d: Date) => d.toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" });
 const fechaCorta = (iso: string) => new Date(iso).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 // Caja simplificada (pedido del dueño 2026-11-03): columnas Fecha · Concepto · Entradas · Salidas · Saldo. La categoría
 // y «¿De quién?» van como etiquetas bajo el concepto (se llenan solas por lo escrito y se cambian con un clic); el
 // código queda 001 por dentro. Los movimientos de otros módulos se ven siempre, en gris, para que el saldo cuadre fila a fila.
-const CELDAS = ["concepto", "categoria", "quien", "entrada", "salida", "actividad", "cantidad", "tarifa", "cuadrilla", "responsable", "acreedor", "cliente"] as const;
+const CELDAS = ["sujeto", "concepto", "categoria", "quien", "entrada", "salida", "actividad", "cantidad", "tarifa", "cuadrilla", "responsable", "acreedor", "cliente"] as const;
 const CODIGO = "001";
 // Para reconocer la máquina en el concepto: «Diésel cose 10,1» → COS101 (como «COS.10.1»).
 export const claveMaq = (x: string) => sinTilde(x).toUpperCase().replace(/\bCOSE\b/g, "COS").replace(/[^A-Z0-9]/g, "");
@@ -83,7 +84,7 @@ const numero = (x: string) => Number(x.replace(",", "."));
 const etiquetaActividad = (a: ActividadHoja) => `${a.name} · $${a.unit_rate}`;
 const PAGO_GAVETA = "";
 type Campos = {
-  concepto: string; catTxt: string; quienTxt: string; quienManual: boolean; catManual: boolean; entrada: string; salida: string; montoManual: boolean; pago: string;
+  sujeto: string; concepto: string; catTxt: string; quienTxt: string; quienManual: boolean; catManual: boolean; entrada: string; salida: string; montoManual: boolean; pago: string;
   responsable: string; acreedor: string; actTxt: string; cantTxt: string; tarifaTxt: string; cuadTxt: string; clienteTxt: string; fiado: boolean;
 };
 type FilaEnCola = { id: number; fila: HojaNueva; campos: Campos; estado: "espera" | "enviando" | "listo" | "error"; error?: string };
@@ -92,8 +93,10 @@ export function CajaHoja({
   movimientos, creditos, verOtros, origenExterno, saldoInicial, categorias, sugerencias, mixto, puedeAnular,
   esCompleja, onGuardar, onFormularioCompleto, onAnular, onAnularCredito, onRepetir, onLiquidarFondo,
   destinos = [], puedeBanco = false, abiertaEl = null,
-  productos = [], actividades = [], clientes = [], descuentoQq = DESCUENTO_QQ_DEFECTO, socios = [], memoria = [], onRefrescar, onError
+  productos = [], actividades = [], clientes = [], descuentoQq = DESCUENTO_QQ_DEFECTO, socios = [], memoria = [], reglas = [], onRefrescar, onError
 }: {
+  /** Reglas de Configuración: «si dice esto, es esta categoría». */
+  reglas?: ReglaCaja[];
   /** La última categoría que se le puso a cada concepto en esta caja (meses anteriores incluidos). */
   memoria?: Array<{ concepto: string; category: string }>;
   /** Productos que se venden al detalle (con su tarifa por libra). */
@@ -134,7 +137,10 @@ export function CajaHoja({
   onRepetir: (m: HojaMov) => void;
   onLiquidarFondo: (m: HojaMov) => void;
 }) {
+  // Como las columnas CLIENTE y CONCEPTO del Excel: quién o qué máquina, y qué se hizo. Se leen juntos.
+  const [sujeto, setSujeto] = useState("");
   const [concepto, setConcepto] = useState("");
+  const texto = unir(sujeto, concepto);
   const [catTxt, setCatTxt] = useState("");
   const [entrada, setEntrada] = useState("");
   const [salida, setSalida] = useState("");
@@ -255,12 +261,12 @@ export function CajaHoja({
     : cat ? (cat.tipo === "INGRESO" ? "INCOME" : "EXPENSE") : null;
   // Mientras escribe el concepto, «¿Para qué?» aparece solo (si la cajera no lo eligió a mano).
   useEffect(() => {
-    if (!quienManual && conQuien) setQuienTxt(detectarQuien(concepto)?.valor ?? "");
+    if (!quienManual && conQuien) setQuienTxt(detectarQuien(texto)?.valor ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [concepto, quienManual, destinos]);
+  }, [texto, quienManual, destinos]);
 
   // 🛒 Lo que dice la venta y cuánto da con la tarifa del producto.
-  const ventaLeida = esVenta ? leerVenta(concepto, productos) : null;
+  const ventaLeida = esVenta ? leerVenta(texto, productos) : null;
   const calculo = ventaLeida && ventaLeida.cantidad != null
     ? calcularVentaDetalle({ cantidad: ventaLeida.cantidad, precioLibra: ventaLeida.producto.precioLibra, modo: ventaLeida.modo, descuentoQq })
     : null;
@@ -280,12 +286,12 @@ export function CajaHoja({
   }, [actTxt, actividades]);
   useEffect(() => {
     if (!esCuadrilla) return;
-    const l = leerCuadrilla(concepto, actividades);
+    const l = leerCuadrilla(texto, actividades);
     if (!cuadManual.act) setActTxt(l?.actividad ? etiquetaActividad(l.actividad) : "");
     if (!cuadManual.cant) setCantTxt(l?.cantidad != null ? String(l.cantidad) : "");
     if (!cuadManual.tarifa) setTarifaTxt(l?.tarifa != null ? String(l.tarifa) : l?.actividad ? String(l.actividad.unit_rate) : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esCuadrilla, concepto, actividades]);
+  }, [esCuadrilla, texto, actividades]);
   const totalCuadrilla = r2(numero(cantTxt) * numero(tarifaTxt));
   useEffect(() => {
     if (esCuadrilla && !montoManual) setSalida(totalCuadrilla > 0 ? totalCuadrilla.toFixed(2) : "");
@@ -294,9 +300,9 @@ export function CajaHoja({
 
   // ⏳ Fondo a rendir: quién recibe sale de lo escrito.
   useEffect(() => {
-    if (esFondo && !respManual) setResponsable(leerResponsable(concepto));
+    if (esFondo && !respManual) setResponsable(leerResponsable(texto));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [esFondo, concepto]);
+  }, [esFondo, texto]);
 
   // 💳 ¿Cómo se pagó? Lo que vale según lo que sea.
   const opcionesPago = useMemo(() => {
@@ -325,16 +331,36 @@ export function CajaHoja({
 
   // Categoría sola: la del mismo concepto de antes o la que dicen las palabras («agua» → Alimentación). Se cambia con un clic.
   const codigosCat = useMemo(() => new Set(categorias.map((c) => c.codigo)), [categorias]);
-  const categoriaDe = (txt: string) => catPorConcepto.get(sinTilde(txt)) ?? categoriaPorPalabras(txt, codigosCat);
+  // Lo que más se le ha puesto a cada persona o máquina del primer recuadro.
+  const catPorSujeto = useMemo(() => {
+    const cuenta = new Map<string, Map<string, number>>();
+    for (const [txt, c] of catPorConcepto) {
+      const corte = txt.lastIndexOf(" · ");
+      if (corte < 0) continue;
+      const s = txt.slice(0, corte);
+      const m = cuenta.get(s) ?? new Map<string, number>();
+      m.set(c, (m.get(c) ?? 0) + 1); cuenta.set(s, m);
+    }
+    return new Map([...cuenta].map(([s, m]) => [s, [...m].sort((a, b) => b[1] - a[1])[0][0]]));
+  }, [catPorConcepto]);
+  // Orden: la regla con quién y qué → lo mismo escrito antes → regla de quién → regla de la palabra → las palabras de lo
+  // que se hizo → lo que siempre se le pone a esa persona → las palabras del primer recuadro.
+  const categoriaDe = (s: string, c: string): string | null => {
+    const txt = unir(s, c);
+    const valida = (x?: string | null) => (x && codigosCat.has(x) ? x : null);
+    return valida(buscarRegla(txt, reglas, "ambas")) ?? catPorConcepto.get(sinTilde(txt)) ?? catPorConcepto.get(sinTilde(c))
+      ?? (tieneSuFlujo(txt) ? null : valida(buscarRegla(txt, reglas, "quien")) ?? valida(buscarRegla(txt, reglas, "palabra"))
+        ?? categoriaPorPalabras(c, codigosCat) ?? catPorSujeto.get(sinTilde(s)) ?? categoriaPorPalabras(s, codigosCat));
+  };
   useEffect(() => {
     if (catManual) return;
     if (catFija) { if (catTxt) setCatTxt(""); return; }
     const conMaquina = tipoQuien === "planta" || (tipoQuien === "transporte" && !!quien?.id);
-    const dicho = conMaquina ? nombreCortoPorConcepto(concepto) : null;
-    const codigo = categoriaDe(concepto);
+    const dicho = conMaquina ? nombreCortoPorConcepto(texto) : null;
+    const codigo = categoriaDe(sujeto, concepto);
     setCatTxt(dicho ?? (codigo ? nombreCat.get(codigo) ?? "" : ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [concepto, tipoQuien, quien?.id, catManual, catFija, codigosCat]);
+  }, [texto, tipoQuien, quien?.id, catManual, catFija, codigosCat, reglas]);
 
   // Saldo acumulado con TODOS los movimientos (también los de otros módulos aunque estén escondidos).
   const filas = useMemo(() => {
@@ -373,11 +399,11 @@ export function CajaHoja({
     if (!ir()) setTimeout(ir, 0);
   };
   const limpiar = () => {
-    setConcepto(""); setCatTxt(""); setEntrada(""); setSalida(""); setError("");
+    setSujeto(""); setConcepto(""); setCatTxt(""); setEntrada(""); setSalida(""); setError("");
     setQuienTxt(""); setQuienManual(false); setCatManual(false); setMontoManual(false); setPago(PAGO_GAVETA); setPideMaquina(null);
     setResponsable(""); setRespManual(false); setAcreedor(""); setActTxt(""); setCantTxt(""); setTarifaTxt(""); setCuadTxt("CUADRILLA");
     setCuadManual({ act: false, cant: false, tarifa: false }); setClienteTxt("CONSUMIDOR FINAL"); setFiado(false);
-    enfocar("concepto");
+    enfocar("sujeto");
   };
 
   const limpiarTodo = () => { setFecha(hoy); limpiar(); };
@@ -413,7 +439,7 @@ export function CajaHoja({
     }
   };
   const encolar = (fila: HojaNueva) => {
-    const campos: Campos = { concepto, catTxt, quienTxt, quienManual, catManual, entrada, salida, montoManual, pago, responsable, acreedor, actTxt, cantTxt, tarifaTxt, cuadTxt, clienteTxt, fiado };
+    const campos: Campos = { sujeto, concepto, catTxt, quienTxt, quienManual, catManual, entrada, salida, montoManual, pago, responsable, acreedor, actTxt, cantTxt, tarifaTxt, cuadTxt, clienteTxt, fiado };
     idCola.current += 1;
     const id = idCola.current;
     cambiarCola((c) => [...c, { id, fila, campos, estado: "espera" }]);
@@ -422,13 +448,13 @@ export function CajaHoja({
   };
   const reintentar = (c: FilaEnCola) => { marcar(c.id, "espera"); void procesarCola(); };
   const corregir = (c: FilaEnCola) => {
-    if (concepto.trim() || entrada || salida) { setError("Termina o limpia la fila antes de corregir la que no se guardó."); return; }
+    if (texto || entrada || salida) { setError("Termina o limpia la fila antes de corregir la que no se guardó."); return; }
     const v = c.campos;
-    setConcepto(v.concepto); setCatTxt(v.catTxt); setQuienTxt(v.quienTxt); setQuienManual(v.quienManual || true); setCatManual(v.catManual); setEntrada(v.entrada); setSalida(v.salida);
+    setSujeto(v.sujeto); setConcepto(v.concepto); setCatTxt(v.catTxt); setQuienTxt(v.quienTxt); setQuienManual(v.quienManual || true); setCatManual(v.catManual); setEntrada(v.entrada); setSalida(v.salida);
     setMontoManual(true); setPago(v.pago); setResponsable(v.responsable); setRespManual(true); setAcreedor(v.acreedor); setActTxt(v.actTxt); setCantTxt(v.cantTxt); setTarifaTxt(v.tarifaTxt);
     setCuadTxt(v.cuadTxt); setCuadManual({ act: true, cant: true, tarifa: true }); setClienteTxt(v.clienteTxt); setFiado(v.fiado);
     cambiarCola((l) => l.filter((x) => x.id !== c.id));
-    enfocar("concepto");
+    enfocar("sujeto");
   };
 
   const guardar = (forzada?: HojaCategoria | null) => {
@@ -436,7 +462,7 @@ export function CajaHoja({
     let destino = conQuien ? resolverQuien(quienTxt) : null;
     if (conQuien && !destino) { setError(`No hay «${quienTxt.trim()}» en ¿Para qué?. Elígelo de la lista.`); enfocar("quien"); return; }
     // Quien escribe rápido llega al monto antes de que la categoría aparezca en la celda: se calcula aquí también.
-    const catSola = catManual ? "" : nombreCat.get(categoriaDe(concepto) ?? "") ?? "";
+    const catSola = catManual ? "" : nombreCat.get(categoriaDe(sujeto, concepto) ?? "") ?? "";
     let elegida = forzada ?? (destino && CATEGORIA_FIJA[destino.tipo] ? null : resolverCat(catTxt || catSola));
     // Una venta que se eligió por categoría sigue el flujo de venta.
     if (elegida?.codigo === "VENTA_DETALLE") {
@@ -457,23 +483,27 @@ export function CajaHoja({
     const nombreMonto = tipoFila === "INCOME" ? "Entradas" : "Salidas";
     // Lo que pide más datos (o tiene su propio flujo) abre su panel; de Transporte/socio no.
     if (elegida && tipoFila === "EXPENSE" && esTrabajo(elegida.codigo) && !deOtro) {
-      // En el Excel un repuesto no decía máquina: si no se sabe cuál, a la segunda queda en PILADORA · OTROS.
-      const otros = maquinasPlanta.find((m) => sinTilde(m.area) === "piladora" && sinTilde(m.section) === "otros");
-      if (pideMaquina?.codigo === elegida.codigo && otros && monto > 0) { destino = otros; deOtro = true; }
+      // En el Excel un repuesto no siempre decía máquina. Si dice el área («Montacarga»), va a sus OTROS sin preguntar;
+      // si no dice nada, se pregunta y a la segunda queda en PILADORA · OTROS.
+      const otrosDe = (area: string) => maquinasPlanta.find((m) => sinTilde(m.area) === sinTilde(area) && sinTilde(m.section) === "otros");
+      const delArea = [...new Set(maquinasPlanta.map((m) => m.area))].filter((a) => dicePalabras(texto, a)).map(otrosDe).find(Boolean);
+      const otros = delArea ?? otrosDe("piladora");
+      if (otros && monto > 0 && (delArea || pideMaquina?.codigo === elegida.codigo)) { destino = otros; deOtro = true; }
       else {
         setPideMaquina({ codigo: elegida.codigo, monto: monto > 0 ? monto : null });
-        setError(`¿En qué máquina? Elígela en «¿Para qué?»${otros ? ", o sigue con Enter y queda en PILADORA · OTROS" : ""}.`); enfocar("quien"); return;
+        setError(`¿En qué máquina? Elígela en «¿Para qué?»${otros ? `, o sigue con Enter y queda en ${otros.area} · ${otros.section}` : ""}.`); enfocar("quien"); return;
       }
     }
-    if (elegida && !saltaFormulario(destino, elegida.codigo) && esCompleja(elegida.codigo, tipoFila)) { onFormularioCompleto(tipoFila, elegida.codigo, concepto.trim(), monto > 0 ? monto : null); limpiar(); return; }
+    if (elegida && !saltaFormulario(destino, elegida.codigo) && esCompleja(elegida.codigo, tipoFila)) { onFormularioCompleto(tipoFila, elegida.codigo, texto, monto > 0 ? monto : null); limpiar(); return; }
     if (t !== "cuadrilla" && !(monto > 0)) { setError(`Escribe el monto en ${nombreMonto}.`); enfocar(celdaMonto); return; }
-    if (concepto.trim().length < 2) { setError("Escribe el concepto o la descripción."); enfocar("concepto"); return; }
-    const base: HojaNueva = { movement: tipoFila, category: elegida?.codigo ?? "", amount: monto, description: concepto.trim(), codigo: CODIGO, medio,
+    if (texto.length < 2) { setError("Escribe qué se hizo."); enfocar("concepto"); return; }
+    const base: HojaNueva = { movement: tipoFila, category: elegida?.codigo ?? "", amount: monto, description: texto, codigo: CODIGO, medio,
       destino: destino ?? undefined, fecha: fecha !== hoy ? fecha : undefined };
     if (t === "venta") {
-      const v = leerVenta(concepto, productos);
+      const v = leerVenta(texto, productos);
       if (!v) { setError("Escribe qué se vendió, por ejemplo: 20 lb de 0,11 · 1 qq de polvillo · $10 de corriente."); enfocar("concepto"); return; }
-      const cliente = clienteTxt.trim() || "CONSUMIDOR FINAL";
+      // El primer recuadro, si se llenó, es el cliente de la venta.
+      const cliente = (/^consumidor\s*final$/i.test(clienteTxt.trim()) ? sujeto.trim() : clienteTxt.trim()) || "CONSUMIDOR FINAL";
       if (fiado && /consumidor\s*final/i.test(cliente)) { setError("Para fiar escribe el nombre de quien queda debiendo."); enfocar("cliente"); return; }
       const c = calcularVentaDetalle({ cantidad: v.cantidad ?? monto, precioLibra: v.producto.precioLibra || 1, modo: v.modo, descuentoQq });
       const libras = v.modo === "LIBRA" ? (v.cantidad ?? 0) : v.modo === "QQ" ? (v.cantidad ?? 0) * 100 : c?.libras ?? 0;
@@ -503,10 +533,24 @@ export function CajaHoja({
   // Enter = siguiente celda (Tab ya lo hace el navegador); Enter en el monto guarda; Esc limpia la fila.
   // Concepto y Categoría llegan con el valor ya elegido de su lista (`valor`), sin esperar al estado.
   const celdaMontoDe = (d: HojaDestino | null, c: HojaCategoria | null): Celda => (d && SIEMPRE_ENTRADA.has(d.tipo)) || (!d?.tipo || !SIEMPRE_SALIDA.has(d.tipo)) && c?.tipo === "INGRESO" ? "entrada" : "salida";
-  const siguiente = (c: Celda, valor?: string) => {
-    if (c === "concepto") {
-      const txt = valor ?? concepto;
+  const siguiente = (c: Celda, valor?: string, s = sujeto) => {
+    if (c === "sujeto") {
+      const t = (valor ?? sujeto).trim();
+      if (valor !== undefined) setSujeto(valor);
+      if (concepto.trim()) { siguiente("concepto", undefined, t); return; }
+      if (!t) { enfocar("concepto"); return; }
+      // Quien escribe toda la línea en el primer recuadro («comida», «20 lb de 0,11») sigue como antes: pasa a «qué se hizo».
+      const d = detectarQuien(t);
+      const esMaquina = d?.tipo === "planta" || (d?.tipo === "transporte" && !!d.id);
+      const conocido = esMaquina || maquinasPlanta.some((m) => sinTilde(m.area) === sinTilde(t)) || reglas.some((r) => r.quien && dicePalabras(t, r.quien)) || catPorSujeto.has(sinTilde(t));
+      if (!conocido && (d || categoriaPorPalabras(t, codigosCat) || catPorConcepto.has(sinTilde(t)))) {
+        setSujeto(""); setConcepto(t); siguiente("concepto", t, ""); return;
+      }
+      enfocar("concepto");
+    } else if (c === "concepto") {
+      const cTxt = valor ?? concepto;
       if (valor !== undefined && valor !== concepto) setConcepto(valor);
+      const txt = unir(s, cTxt);
       const detectado = !quienManual ? detectarQuien(txt) : quien;
       if (detectado && !quienManual) setQuienTxt(detectado.valor);
       const tq = detectado?.tipo;
@@ -516,8 +560,8 @@ export function CajaHoja({
       // Con la categoría ya conocida se salta directo al monto.
       const conMaquina = tq === "planta" || (tq === "transporte" && !!detectado?.id);
       const dicho = conMaquina ? nombreCortoPorConcepto(txt) : null;
-      const previa = categoriaDe(txt);
-      const conocida = resolverCat(catTxt || dicho || (previa ? nombreCat.get(previa) ?? "" : ""));
+      const previa = categoriaDe(s, cTxt);
+      const conocida = resolverCat((catManual ? catTxt : "") || dicho || (previa ? nombreCat.get(previa) ?? "" : "") || catTxt);
       if (conocida) {
         if (!catManual) setCatTxt(dicho ?? conocida.nombre);
         if (!saltaFormulario(detectado, conocida.codigo) && !esTrabajo(conocida.codigo) && esCompleja(conocida.codigo, conocida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) enfocar("categoria");
@@ -539,7 +583,7 @@ export function CajaHoja({
     } else if (c === "actividad") {
       const texto = valor ?? actTxt;
       const a = actividades.find((x) => etiquetaActividad(x) === texto);
-      if (a && !cuadManual.tarifa && !leerCuadrilla(concepto, actividades)?.tarifa) setTarifaTxt(String(a.unit_rate));
+      if (a && !cuadManual.tarifa && !leerCuadrilla(texto, actividades)?.tarifa) setTarifaTxt(String(a.unit_rate));
       enfocar(cantTxt ? "salida" : "cantidad");
     } else if (c === "cantidad") enfocar(tarifaTxt ? "salida" : "tarifa");
     else if (c === "tarifa" || c === "cuadrilla" || c === "responsable" || c === "acreedor") enfocar("salida");
@@ -563,6 +607,15 @@ export function CajaHoja({
     ...categorias.map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" }))
   ], [categorias, hayPlanta]);
   const opcionesConcepto = useMemo(() => sugerencias.map((x) => ({ valor: x })), [sugerencias]);
+  // Primer recuadro: máquinas, lo de las reglas, y las personas ya usadas.
+  const opcionesSujeto = useMemo(() => {
+    const vistos = new Set<string>(); const lista: Opcion[] = [];
+    const poner = (valor: string, detalle?: string) => { const k = sinTilde(valor); if (k && !vistos.has(k)) { vistos.add(k); lista.push({ valor, detalle }); } };
+    for (const m of maquinasPlanta) { poner(m.area, "área"); if (sinTilde(m.section) !== "otros") poner(`${m.section} ${m.area}`, "máquina"); }
+    for (const r of reglas) if (r.quien) poner(r.quien, r.categoria_nombre ?? undefined);
+    for (const k of catPorSujeto.keys()) poner(k.toUpperCase());
+    return lista;
+  }, [maquinasPlanta, reglas, catPorSujeto]);
   const opcionesQuien = useMemo(() => destinos.map((d) => ({ valor: d.valor, detalle: d.detalle, tono: d.tipo === "propio" ? "" : d.tipo === "socio" || SIEMPRE_ENTRADA.has(d.tipo) ? "is-in" : "is-out" })), [destinos]);
   const opcionesActividad = useMemo(() => actividades.map((a) => ({ valor: etiquetaActividad(a) })), [actividades]);
   const opcionesCliente = useMemo(() => clientes.map((c) => ({ valor: c })), [clientes]);
@@ -696,9 +749,14 @@ export function CajaHoja({
                   onChange={(e) => setFecha(e.target.value || hoy)} />
               </td>
               <td>
-                <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
-                  placeholder="Ej: 20 lb de 0,11 · comida · abono Gabino · motor piladora" disabled={false} ariaLabel="Concepto o descripción"
-                  onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiarTodo} />
+                <div className="cjh-dos">
+                  <CeldaSugerida inputRef={(el) => { refs.current.sujeto = el; }} value={sujeto} opciones={opcionesSujeto} minimo={1} elegirPrimera={false}
+                    placeholder="¿Quién o qué? Ej: Danny · Secadora 3" disabled={false} ariaLabel="Cliente, persona o máquina"
+                    onChange={setSujeto} onEnter={(v) => siguiente("sujeto", v)} onEscape={limpiarTodo} />
+                  <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
+                    placeholder="¿Qué se hizo? Ej: reparación · cambio de bandas · comida" disabled={false} ariaLabel="Concepto o descripción"
+                    onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiarTodo} />
+                </div>
                 <div className="cjh-nueva__tags">
                   <label>
                     <span>Categoría</span>
@@ -820,12 +878,12 @@ export function CajaHoja({
       <div className="cjh-pie">
         {pideMaquina && (
           <button type="button" className="cjh-masDatos"
-            onClick={() => { onFormularioCompleto("EXPENSE", pideMaquina.codigo, concepto.trim(), pideMaquina.monto); limpiar(); }}>
+            onClick={() => { onFormularioCompleto("EXPENSE", pideMaquina.codigo, texto, pideMaquina.monto); limpiar(); }}>
             Va a bodega o son varios: abrir formulario
           </button>
         )}
         {error ? <span className="cjh-error">⚠️ {error}</span> : (
-          <span>Escribe como en tu Excel y <kbd>Enter</kbd>: <i>comida</i> · <i>20 lb de 0,11</i> · <i>abono Gabino</i> · <i>motor piladora</i> · <i>cuadrilla embarque 315 x 0,20</i> · <i>anticipo Jacobo</i>.
+          <span>Primero quién o qué máquina (si no hay, <kbd>Enter</kbd>) y luego qué se hizo: <i>Secadora 3</i> → <i>cambio de bandas</i>. También en una sola línea: <i>comida</i> · <i>20 lb de 0,11</i> · <i>abono Gabino</i> · <i>cuadrilla embarque 315 x 0,20</i>.
             {" "}<kbd>Enter</kbd> en el monto guarda y sigues con la próxima · <kbd>Esc</kbd> limpia{opcionesPago.length > 0 && <> · <b>💳</b> = no salió de la gaveta</>}
             {movimientos.some((m) => origenExterno(m)) && <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (pedidos, anticipos, compras…).</span>}</span>
         )}

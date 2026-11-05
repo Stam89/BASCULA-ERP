@@ -10,7 +10,8 @@ const palabrasDe = (x: string) => limpio(x).split(/[^a-z0-9ñ]+/).filter(Boolean
 const dice = (escritas: string[], w: string) => escritas.some((e) => e === w || (w.length >= 5 && e.startsWith(w)));
 
 export function detectarMaquina<T extends MaquinaPlanta>(txt: string, maquinas: T[]): T | null {
-  const escritas = palabrasDe(txt);
+  // En el Excel «Secadora 3» es el túnel 3.
+  const escritas = palabrasDe(limpio(txt).replace(/\bsecadora\s*(\d)\b/g, "secadora tunel $1"));
   if (!escritas.length) return null;
   const candidatas = maquinas
     .map((m) => ({ m, palabras: palabrasDe(m.section), conArea: palabrasDe(m.area).every((w) => dice(escritas, w)) }))

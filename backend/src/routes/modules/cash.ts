@@ -122,6 +122,43 @@ cashRouter.get("/conceptos-usados", asyncRoute(async (req, res) => {
   res.json(r.rows);
 }));
 
+// 📐 Reglas de la Caja (Configuración): «si dice esto, es esta categoría». El rubro no se guarda aquí: es el que ya tiene
+// la categoría en Costos Operativos, así no hay dos lugares que se contradigan.
+cashRouter.get("/reglas", asyncRoute(async (_req, res) => {
+  const r = await pool.query(
+    `SELECT r.id, r.quien, r.palabra, r.category, c.nombre AS categoria_nombre,
+            (SELECT cr.nombre FROM costo_rubros cr WHERE r.category = ANY (cr.categorias) ORDER BY cr.orden LIMIT 1) AS rubro
+       FROM caja_reglas r LEFT JOIN cash_categories c ON c.codigo = r.category
+      ORDER BY lower(r.quien), lower(r.palabra)`
+  );
+  res.json(r.rows);
+}));
+
+cashRouter.post("/reglas", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    quien: z.string().trim().max(80).default(""),
+    palabra: z.string().trim().max(80).default(""),
+    category: z.string().min(2).max(40)
+  }).parse(req.body);
+  if (!body.quien && !body.palabra) throw new ApiError(400, "Escribe quién o qué se hizo.");
+  const cat = await pool.query("SELECT 1 FROM cash_categories WHERE codigo = $1", [body.category]);
+  if (!cat.rowCount) throw new ApiError(400, "Esa categoría no existe.");
+  const r = await pool.query(
+    `INSERT INTO caja_reglas (quien, palabra, category, created_by) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (lower(quien), lower(palabra)) DO UPDATE SET category = EXCLUDED.category
+     RETURNING id, quien, palabra, category`,
+    [body.quien, body.palabra, body.category, (req as AuthenticatedRequest).user?.id ?? null]
+  );
+  res.status(201).json(r.rows[0]);
+}));
+
+cashRouter.delete("/reglas/:id", requireAdmin, asyncRoute(async (req, res) => {
+  const id = z.string().uuid().parse(req.params.id);
+  const r = await pool.query("DELETE FROM caja_reglas WHERE id = $1", [id]);
+  if (!r.rowCount) throw new ApiError(404, "Esa regla ya no existe.");
+  res.json({ ok: true });
+}));
+
 // ── Subcategorías de gasto (memoria para el datalist del form de Caja) ───────
 cashRouter.get("/subcategorias", asyncRoute(async (req, res) => {
   try {
