@@ -141,7 +141,7 @@ export function TarifasOperadorCatalogo({ activos, operadores, onError, onChange
               <td>{unidadLabel(t.unidad)}</td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <button type="button" onClick={() => editar(t)} title="Editar tarifa" style={{ marginRight: 6 }}>✎</button>
-                <button type="button" onClick={() => eliminar(t)} title="Eliminar" style={{ color: "#dc2626" }}>🗑</button>
+                {esAdministrador() && <button type="button" onClick={() => eliminar(t)} title="Eliminar" style={{ color: "#dc2626" }}>🗑</button>}
               </td>
             </tr>
           ))}

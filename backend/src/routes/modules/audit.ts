@@ -13,7 +13,8 @@ auditRouter.get("/", requireAdmin, asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT id, username, action, table_name, summary, record_id, status_code, created_at
      FROM audit_logs
-     ${soloAccesos ? "WHERE table_name = 'auth' OR action = 'DENEGADO'" : ""}
+     WHERE COALESCE(path, '') NOT LIKE '%/auth/refresh'
+     ${soloAccesos ? "AND (table_name = 'auth' OR action = 'DENEGADO')" : ""}
      ORDER BY created_at DESC
      LIMIT $1`,
     [limit]

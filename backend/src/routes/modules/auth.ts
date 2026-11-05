@@ -418,6 +418,8 @@ authRouter.post("/refresh", requireAuth, asyncRoute(async (req, res) => {
     [current.id]
   );
   if (!result.rowCount) throw new ApiError(401, "Usuario inactivo o no encontrado");
+  // Renovar cuenta como uso: la app lo hace al volver a ella y cada 30 minutos.
+  pool.query("UPDATE users SET ultimo_ingreso_at = now() WHERE id = $1", [current.id]).catch(() => undefined);
 
   const user = result.rows[0];
   const publicUser = {

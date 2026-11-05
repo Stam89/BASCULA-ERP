@@ -10,7 +10,7 @@ try {
   // ── A. Base sana ───────────────────────────────────────────────────────
   const sano = await api("GET", "/integridad?forzar=1");
   check(sano.ok && sano.data.ok === true && sano.data.reglas >= 35 && sano.data.hallazgos.length === 0, `A1. la base sana pasa los ${sano.data?.reglas} controles`, sano.data?.hallazgos);
-  check((await apiComo(admin.id, "operador.sim", "Operador")("GET", "/integridad")).status === 403, "A2. solo el administrador ve el control (403 para los demás)");
+  check((await (await S.operador("sim_integridad"))("GET", "/integridad")).status === 403, "A2. solo el administrador ve el control (403 para los demás)");
   const hoy0 = (await api("GET", "/dashboard/hoy")).data.tareas;
   check(!hoy0.some((t) => t.key === "integridad"), "A3. «Hoy» no muestra nada de integridad si todo está bien");
 

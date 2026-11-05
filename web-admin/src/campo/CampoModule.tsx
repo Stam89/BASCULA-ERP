@@ -2314,7 +2314,7 @@ function LibroView({ cuentas, version, onReversed, onError }: {
                 <td className="num" style={{ color: r.entrada > 0 ? "#15803d" : undefined }}>{r.entrada > 0 ? money(r.entrada) : "—"}</td>
                 <td className="num" style={{ color: r.salida > 0 ? "#b91c1c" : undefined }}>{r.salida > 0 ? money(r.salida) : "—"}</td>
                 <td className="num" style={{ fontWeight: 700, color: r.saldo_corrido < 0 ? "#b91c1c" : undefined }}>{money(r.saldo_corrido)}</td>
-                <td>{r.reversible ? <button type="button" className="btnSecondary" disabled={reversando === r.id} onClick={() => reversar(r)}>{reversando === r.id ? "Reversando…" : "↩ Reversar"}</button> : <span className="muted">—</span>}</td>
+                <td>{r.reversible && esAdministrador() ? <button type="button" className="btnSecondary" disabled={reversando === r.id} onClick={() => reversar(r)}>{reversando === r.id ? "Reversando…" : "↩ Reversar"}</button> : <span className="muted">—</span>}</td>
               </tr>
             ))}
           </tbody>
@@ -3802,7 +3802,7 @@ function DocumentosFlotaCampo({ activos, onChanged, onError }: { activos: Activo
                 ) : (
                   <div className="campoDocs__acc">
                     <button type="button" className="btnSecondary" onClick={() => setRenovando({ id: d.id, vence: "", numero: d.numero ?? "" })}>🔄 Renovar</button>
-                    <button type="button" className="btnGhost" disabled={busy} onClick={async () => (await quitar(d))}>Quitar</button>
+                    {esAdministrador() && <button type="button" className="btnGhost" disabled={busy} onClick={async () => (await quitar(d))}>Quitar</button>}
                   </div>
                 )}
               </div>

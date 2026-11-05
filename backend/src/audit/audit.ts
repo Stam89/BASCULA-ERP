@@ -107,6 +107,8 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
     const denegado = res.statusCode === 403; // intentó algo sin permiso: es justo lo que hay que poder revisar
     if (res.statusCode >= 400 && !denegado) return; // solo acciones exitosas
     if (!segment || segment === "audit") return;
+    // Renovar la sesión no es una acción de nadie: pasa sola y tapaba lo demás (180 de 248 filas en un día).
+    if (segment === "auth" && originalUrl.split("?")[0].endsWith("/refresh")) return;
     if (res.locals.envioRepetido) return; // reintento de algo ya guardado: no pasó nada nuevo
 
     const label = RESOURCE_LABELS[segment] || segment;

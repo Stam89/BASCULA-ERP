@@ -226,7 +226,8 @@ const SUB_DE_LECTURA_RUTAS: Array<{ prefix: string; module: string; subs: string
   { prefix: "admin-payroll", module: "Nomina", subs: ["sueldo-admin", "pagos"], test: () => true },
   { prefix: "nomina-semanal", module: "Nomina", subs: ["pagos"], test: () => true },
   { prefix: "resultado-mensual", module: "Costos Operativos", subs: ["resultado"], test: () => true },
-  { prefix: "prestamos", module: "Por Pagar", subs: ["prestamos"], test: () => true }
+  { prefix: "prestamos", module: "Por Pagar", subs: ["prestamos"], test: () => true },
+  { prefix: "historial", module: "Caja", subs: ["historial"], test: () => true }
 ];
 
 /** Sub-pestaña(s) que exige esta lectura (basta tener una), o null. */
@@ -266,23 +267,34 @@ const SUB_DE_ESCRITURA: Array<{ module: AppModule; prefix: string; sub: string; 
   { module: "Nomina", prefix: "nomina-semanal", sub: "pagos", exigeVer: true, test: () => true },
   // Los sueldos pendientes también se pagan desde «Pagos».
   { module: "Nomina", prefix: "admin-payroll", sub: "sueldo-admin", verCon: ["pagos"], exigeVer: true, test: () => true },
+  // Lo que se paga desde «Pagos» (bajada de carro, cuadrilla y sus anticipos) también se abre con esa sub-pestaña.
+  { module: "Nomina", prefix: "cuadrilla", sub: "bajada", alt: ["pagos"], exigeVer: true, test: (_m, r) => /^\/bajadas\/pagar\/?$/.test(r) },
   { module: "Nomina", prefix: "cuadrilla", sub: "bajada", exigeVer: true, test: (_m, r) => r.startsWith("/bajadas") },
+  { module: "Nomina", prefix: "cuadrilla", sub: "cuadrilla", alt: ["pagos"], exigeVer: true, test: (_m, r) => /^\/(pay-worker|advances)(\/|$)/.test(r) },
   { module: "Nomina", prefix: "cuadrilla", sub: "cuadrilla", exigeVer: true, test: () => true },
   { module: "Costos Operativos", prefix: "costos", sub: "diario", exigeVer: true, test: () => true },
   { module: "Costos Operativos", prefix: "resultado-mensual", sub: "resultado", exigeVer: true, test: () => true },
   // Secciones nuevas (2026-11-04). Sin ninguna marcada ve y hace todo, como siempre.
+  { module: "Caja", prefix: "cash", sub: "resumen", exigeVer: true, test: () => true },
+  { module: "Caja", prefix: "expenses", sub: "resumen", exigeVer: true, test: () => true },
   { module: "Caja", prefix: "sales", sub: "venta_detalle", exigeVer: true, test: () => true },
   { module: "Caja", prefix: "advances", sub: "anticipo", exigeVer: true, test: () => true },
-  { module: "Caja", prefix: "expenses", sub: "gastos", exigeVer: true, test: () => true },
   { module: "Caja", prefix: "sacks", sub: "sacos", exigeVer: true, test: () => true },
+  // El trabajo en una máquina también se escribe desde la hoja, sin el formulario.
+  { module: "Caja", prefix: "equipment", sub: "mantenimiento", alt: ["resumen"], exigeVer: true, test: (_m, r) => /^\/(planta|transporte)\/gasto\/?$/.test(r) },
   { module: "Caja", prefix: "equipment", sub: "mantenimiento", exigeVer: true, test: () => true },
   { module: "Caja", prefix: "repuestos", sub: "mantenimiento", exigeVer: true, test: () => true },
   { module: "Caja", prefix: "fomentos", sub: "fomentos", exigeVer: true, test: () => true },
+  { module: "Fomentos", prefix: "fomentos", sub: "lista", exigeVer: true, test: () => true },
   { module: "Inventario", prefix: "inventory", sub: "existencias", exigeVer: true, test: () => true },
   { module: "Inventario", prefix: "sacks", sub: "sacos", exigeVer: true, test: () => true },
   { module: "Inventario", prefix: "repuestos", sub: "repuestos", exigeVer: true, test: () => true },
   { module: "Bascula", prefix: "lots", sub: "corregir", exigeVer: true, test: () => true },
   { module: "Bascula", prefix: "weighing-tickets", sub: "corregir", exigeVer: true, test: (_m, r) => /^\/[^/]+\/accionista\/?$/.test(r) },
+  { module: "Bascula", prefix: "weighing-tickets", sub: "tickets", exigeVer: true, test: () => true },
+  { module: "Bascula", prefix: "tickets", sub: "sync", alt: ["tickets"], exigeVer: true, test: (_m, r) => /^\/(import-bascula|refresh-firebase)\/?$/.test(r) },
+  { module: "Bascula", prefix: "tickets", sub: "tickets", exigeVer: true, test: () => true },
+  { module: "Liquidaciones", prefix: "tickets", sub: "nueva", exigeVer: true, test: () => true },
   { module: "Liquidaciones", prefix: "liquidations", sub: "realizadas", exigeVer: true, test: (m, r) => m === "PUT" || /^\/set-lock\/?$/.test(r) },
   { module: "Liquidaciones", prefix: "liquidations", sub: "nueva", exigeVer: true, test: () => true },
   { module: "Secadoras", prefix: "labor", sub: "guardia", exigeVer: true, test: () => true },
@@ -539,7 +551,13 @@ export function requireAdmin(req: Request, _res: Response, next: NextFunction) {
  * igual que el `iat` del token, para que la sesión que acaba de cambiar su clave siga viva con su token nuevo).
  */
 export async function sesionVigente(token: string): Promise<AuthUser> {
-  const user = verifyToken(token) as AuthUser & { iat?: number };
+  let user: AuthUser & { iat?: number };
+  try {
+    user = verifyToken(token);
+  } catch {
+    throw new ApiError(401, "Sesión expirada o inválida. Inicia sesión nuevamente.");
+  }
+  // Un fallo de la base NO es un 401: la web cerraría la sesión de todos por un parpadeo del servidor.
   const fila = (await pool.query(
     `SELECT u.is_active, u.sesiones_desde, r.name AS role_name
        FROM users u LEFT JOIN roles r ON r.id = u.role_id
@@ -561,9 +579,7 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
   sesionVigente(header.slice("Bearer ".length)).then((user) => {
     (req as AuthenticatedRequest).user = user;
     next();
-  }, (err) => {
-    next(err instanceof ApiError ? err : new ApiError(401, "Sesión expirada o inválida. Inicia sesión nuevamente."));
-  });
+  }, next);
 }
 
 // Resuelve a qué accionista (socio) pertenecen los datos de esta request, a

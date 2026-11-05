@@ -19,7 +19,10 @@ try {
   check(ing.ok, "puede ingresar materia prima (Báscula)", ing.ok ? undefined : ing.data);
   const sec = await pedir("POST", "/process-flow/drying", { entry_ids: [ing.data.ingreso.id], tunnel_number: 3, dryer_name: "Secadora 3", rice_type: "0.11", moisture_before: 20, filled_at: new Date().toISOString() });
   check(sec.ok, "puede llenar un túnel (Secadoras)", sec.ok ? undefined : sec.data);
-  check((await pedir("GET", "/nomina-semanal/vista")).ok, "puede ver la nómina de la semana (Nómina)");
+  // En CEYRO solo tiene Nómina › Cuadrilla: la semana y los sueldos son de Pagos.
+  check((await pedir("GET", "/cuadrilla/workers")).ok, "puede ver la cuadrilla (Nómina › Cuadrilla)");
+  check((await pedir("GET", "/nomina-semanal/vista")).status === 403, "NO ve la nómina de la semana (no tiene Pagos)");
+  check((await pedir("GET", "/admin-payroll/staff")).status === 403, "NO ve los sueldos");
   // Lo que NO puede
   const no = async (nombre, m, p, b) => { const r = await pedir(m, p, b); check(r.status === 403 || r.status === 401, `NO puede: ${nombre}`, r.status); };
   await no("abrir caja (no tiene Caja)", "POST", "/cash/registers/open", { name: "X", tipo: "EFECTIVO", opening_balance_cash: 1 });

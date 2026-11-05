@@ -21,7 +21,7 @@ const cfg = async () => (await q("SELECT activo, hora, destinatarios, ultimo_env
 
 try {
   // ── A. Solo el administrador ───────────────────────────────────────────
-  const noAdmin = apiComo(admin.id, "operador.sim", "Operador");
+  const noAdmin = await S.operador("sim_resumen");
   const na = await noAdmin("GET", "/resumen-diario/config");
   check(na.status === 403, "A1. quien no es administrador no ve ni cambia el resumen (403)", na.status);
   const c0 = exigir(await api("GET", "/resumen-diario/config"), "A2. el administrador lee la configuración");

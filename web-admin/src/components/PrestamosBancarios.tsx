@@ -336,7 +336,7 @@ export function PrestamosBancarios({ cajaAbiertaId, cajaMixta, puedeEditar, pued
                         <td className="prest__estado">
                           {c.estado === "PAGADA"
                             ? <><span className="chip ok">✓ Pagada{c.pagada_fuera ? " por fuera" : ""}</span>
-                              {c.pagada_fuera && puedeEditar && <button type="button" className="btnGhost" title="Volver a pendiente" disabled={busy} onClick={() => deshacerFuera(detalle, c)}>↺</button>}
+                              {c.pagada_fuera && puedeAnular && <button type="button" className="btnGhost" title="Volver a pendiente" disabled={busy} onClick={() => deshacerFuera(detalle, c)}>↺</button>}
                               {c.pagada_at && <small className="prest__desg">{new Date(c.pagada_at).toLocaleDateString("es-EC")}</small>}</>
                             : <>
                               {vencida && <span className="chip bad" style={{ marginRight: 4 }}>Vencida</span>}

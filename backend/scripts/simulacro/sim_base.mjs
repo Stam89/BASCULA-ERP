@@ -91,7 +91,15 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   };
   const cerrar = async () => { await new Promise((r) => server.close(r)); await c.end(); await pool.end().catch(() => {}); };
   const apiComo = (userId, username, nombre, acc = matriz) => { const tk = signToken({ id: userId, username, name: nombre, role_id: null, role_name: null, allowed_modules: null }); return async (method, path, body) => { const r = await fetch(`http://127.0.0.1:${puerto}/api/v1${path}`, { method, headers: { "content-type": "application/json", authorization: `Bearer ${tk}`, "x-accionista-id": acc }, body: body === undefined ? undefined : JSON.stringify(body) }); const t = await r.text(); let d = t; try { d = JSON.parse(t); } catch {} return { status: r.status, ok: r.ok, data: d }; }; };
-  return { api, apiComo, descargar, q, matriz, arranque, admin, cerrar, c };
+  // Operador inventado, solo en la copia. El rol sale de la base y no del token: para probar «quien no es administrador»
+  // hace falta un usuario de verdad que no lo sea.
+  const operador = async (nombre, modulos = [], acc = matriz) => {
+    const username = `${nombre}_${Date.now()}`;
+    const u = (await q("INSERT INTO users (name, username, password_hash, role_id, is_active) SELECT $1, $1, 'x', id, true FROM roles WHERE name = 'OPERADOR' RETURNING id", [username]))[0];
+    await q("INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules) VALUES ($1, $2, $3)", [u.id, acc, modulos]);
+    return apiComo(u.id, username, username, acc);
+  };
+  return { api, apiComo, operador, descargar, q, matriz, arranque, admin, cerrar, c };
 }
 
 let fallas = 0; const lineas = [];

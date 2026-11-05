@@ -1,7 +1,7 @@
 import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/fomentoMosaico";
 import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { apiFetch, apiOk, apiGet, apiGetSRI, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
+import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
 import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
 import type { BasculaSyncStatus } from "./api";
@@ -13,6 +13,8 @@ import { ClienteSearchInput } from "./components/ClienteSearchInput";
 import { CampanitaNotificaciones } from "./components/Notificaciones";
 import { BuscadorHistorial } from "./components/BuscadorHistorial";
 import type { GanaOperacion } from "./components/ResultadoMensual";
+import { QuienPuedeQue } from "./components/QuienPuedeQue";
+import { PERFILES_PERMISOS, clavesDeLaMatriz, clavesFueraDeMatriz, haceCuanto } from "./components/permisosUtil";
 import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, SacosMovimientosRecientes, SacosPorComprarAlerta, SacosSinMinimosAviso, SacosTablero, type SacoPorComprar } from "./components/SacosModule";
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
@@ -311,6 +313,8 @@ type AdminUser = {
   accionista_ids?: string[] | null;
   /** Módulos permitidos por accionista (permisos individuales por accionista). */
   accionista_modules?: Array<{ accionista_id: string; modules: string[] }> | null;
+  /** Último ingreso o renovación de sesión. */
+  ultimo_ingreso_at?: string | null;
 };
 
 type AdminAccionista = { id: string; name: string; code: string; is_active: boolean; puede_envejecer?: boolean; modulo_envejecido_habilitado?: boolean };
@@ -1828,8 +1832,9 @@ const APP_MODULES: string[] = [...tabs.filter((t) => t !== "Configuracion"), "Tr
 // del menú + módulos especiales + permisos de acción críticos. Las claves se guardan
 // como strings en allowed_modules (el backend acepta strings arbitrarios). Los
 // permisos "PERM:*" no son pestañas del Sidebar (no lo alteran); son banderas de acción.
-const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: string }> }> = [
-  { label: "PRINCIPAL", rows: [{ key: "Dashboard", label: "Dashboard" }] },
+const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: string; ayuda?: string }> }> = [
+  // La pantalla de Inicio la ve todo el mundo; esta fila solo abre el Panel Integral (clave histórica «Dashboard»).
+  { label: "PRINCIPAL", rows: [{ key: "Dashboard", label: "Panel Integral", ayuda: "Compras, ventas, caja y deudas de TODOS los accionistas. El Inicio lo ven todos sin esto." }] },
   { label: "OPERACIÓN", rows: [
     { key: "Bascula", label: "Báscula" }, { key: "Secadoras", label: "Secadoras" },
     { key: "Produccion", label: "Producción" }, { key: "Gana", label: "Gana" },
@@ -1848,13 +1853,14 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
   { label: "PERMISOS ESPECIALES", rows: [
-    { key: "PERM:EDITAR_PRECIOS", label: "Permitir Editar Precios y Tarifas" },
-    { key: "PERM:SALDOS_INICIALES", label: "Permitir cargar Saldos iniciales (lo ve en su Inicio)" },
-    { key: "PERM:FOMENTO_GASTO_ADM", label: "Fomentos: cambiar gasto administrativo (tasa, por entrega, cobrar hasta)" },
-    { key: "PERM:FOMENTO_ELIMINAR", label: "Fomentos: eliminar fomentos, entregas y pagos" },
+    { key: "PERM:EDITAR_PRECIOS", label: "Editar precios y tarifas", ayuda: "Precio de venta en Gana, bloquear liquidaciones, tarifa distinta en Selección y gasto administrativo de Fomentos. Las tarifas de Configuración siguen siendo del administrador." },
+    { key: "PERM:SALDOS_INICIALES", label: "Cargar Saldos iniciales", ayuda: "La tarjeta le sale en su Inicio. Anular lo cargado es del administrador." },
+    { key: "PERM:FOMENTO_GASTO_ADM", label: "Fomentos: cambiar gasto administrativo", ayuda: "Tasa, por entrega y cobrar hasta." },
+    { key: "PERM:FOMENTO_ELIMINAR", label: "Fomentos: eliminar", ayuda: "Fomentos, entregas y pagos, si no movieron la caja. Es la única excepción a «anular solo el administrador»." },
   ] },
 ];
 const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.key));
+const permAyuda: React.CSSProperties = { display: "block", whiteSpace: "normal", maxWidth: 340, fontWeight: 400, fontSize: 11, lineHeight: 1.3, color: "var(--c-text-muted)" };
 
 // Sub-pestañas gobernables por accionista. Se guardan como claves
 // "SUB:<Módulo>:<sub>" dentro de allowed_modules (mismo mecanismo que EDIT:/PERM:,
@@ -1864,6 +1870,41 @@ const PERM_ALL_KEYS: string[] = PERM_MATRIX.flatMap((g) => g.rows.map((r) => r.k
 // histórico). Solo cuando el admin marca al menos una, se restringe a las marcadas.
 // Los administradores siempre ven todas.
 const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
+  Bascula: [
+    { key: "tickets", label: "Tickets de báscula" },
+    { key: "corregir", label: "Corregir accionista" },
+    { key: "sync", label: "Sincronización" },
+  ],
+  Secadoras: [
+    { key: "operacion", label: "Secado y túneles" },
+    { key: "guardia", label: "Guardia semanal" },
+  ],
+  Inventario: [
+    { key: "existencias", label: "Existencias" },
+    { key: "sacos", label: "Sacos" },
+    { key: "repuestos", label: "Repuestos de planta" },
+  ],
+  Caja: [
+    { key: "resumen", label: "Hoja de movimientos" },
+    { key: "anticipo", label: "Arroz en cáscara" },
+    { key: "venta_detalle", label: "Venta Detalle" },
+    { key: "fomentos", label: "Fomentos" },
+    { key: "sacos", label: "Sacos" },
+    { key: "mantenimiento", label: "Mantenimiento de equipos" },
+    { key: "historial", label: "¿Cuándo se hizo?" },
+  ],
+  "Por Pagar": [
+    { key: "cuentas", label: "Cuentas por pagar" },
+    { key: "prestamos", label: "Préstamos del banco" },
+  ],
+  Liquidaciones: [
+    { key: "nueva", label: "Nueva liquidación" },
+    { key: "realizadas", label: "Liquidaciones realizadas" },
+  ],
+  Fomentos: [
+    { key: "lista", label: "Fomentos" },
+    { key: "intereses", label: "Gasto administrativo" },
+  ],
   Ventas: [
     { key: "nuevo", label: "Nuevo Pedido" },
     { key: "despachos", label: "Cola de Despachos" },
@@ -1916,6 +1957,8 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   ],
 };
 function subTabKey(moduleKey: string, sub: string): string { return `SUB:${moduleKey}:${sub}`; }
+// Lo que la matriz sí muestra: el resto de claves guardadas son antiguas y se listan al final para poder quitarlas.
+const CLAVES_MATRIZ = clavesDeLaMatriz(PERM_ALL_KEYS, SUB_TABS);
 // 🚜 Transporte y Cosechadora en el editor de permisos: columna propia (pedido del dueño 2026-10-22). Por dentro sigue
 // siendo el permiso «Transporte / Cosechadora» de la Matriz: al abrir se separa y al guardar se vuelve a juntar.
 const COL_TRANSPORTE = "__TRANSPORTE__";
@@ -3156,8 +3199,9 @@ export function App() {
     { sub: "usuarios", tarjeta: "✉️ Correo para recuperar claves", claves: "correo gmail email recuperar clave contrasena olvide olvidaste perdio restablecer codigo smtp" },
     { sub: "usuarios", tarjeta: "📬 Resumen diario por correo", claves: "resumen diario correo gmail email reporte cierre del dia informe automatico enviar hora" },
     { sub: "usuarios", tarjeta: "👤 Crear usuario", claves: "usuario clave contrasena rol operador administrador cedula correo recuperacion" },
-    { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver" },
-    { sub: "sistema", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino" }
+    { sub: "usuarios", tarjeta: "Usuarios registrados", claves: "usuarios permisos modulos accionistas editar sub pestanas solo ver cerrar sesiones ultimo ingreso" },
+    { sub: "usuarios", tarjeta: "¿Quién puede qué?", claves: "permisos accesos quien puede que revisar perfiles panel integral claves antiguas" },
+    { sub: "sistema", tarjeta: "🕓 Actividad del sistema", claves: "auditoria log historial quien creo modifico elimino ingresos entro permisos intentos sin permiso" }
   ];
 
   const subLabel = Object.fromEntries(cfgSecciones.map((x) => [x.id, `${x.icono} ${x.titulo}`])) as Record<CfgSub, string>;
@@ -3286,6 +3330,7 @@ export function App() {
   const [sequences, setSequences] = useState<SeqRow[]>([]);
   const [seqModal, setSeqModal] = useState<{ prefijo: string; next_number: string } | null>(null);
   const [auditLog, setAuditLog] = useState<AuditEntry[]>([]);
+  const [auditSoloAccesos, setAuditSoloAccesos] = useState(false);
   const [laborRatesForm, setLaborRatesForm] = useState<LaborRates>(defaultLaborRates);
   // ¿Se cargaron las tarifas desde el backend? Si el fetch aún no respondió o
   // falló, no se debe registrar combustible (evita guardar un gasto en $0).
@@ -5253,6 +5298,11 @@ export function App() {
   // "EDIT:<módulo>" = Editar. Un operador "Solo Ver" (sin EDIT:) NO debe ver los
   // botones de crear/editar/guardar de ese módulo (el backend también lo bloquea).
   const canEdit = (module: string) => isAdmin || activeAllowedPerms.has(`EDIT:${module}`);
+  // Aviso general de «Solo lectura» (las pestañas con sub-pestañas de lectura propia ya traen el suyo: avisoSoloLectura).
+  const EDITA_TAMBIEN_CON: Record<string, string[]> = { "Por Cobrar": ["Caja", "Ventas"], "Por Pagar": ["Caja"], Compras: ["Inventario"], Gana: ["Produccion"] };
+  const CON_AVISO_PROPIO = new Set(["Dashboard", "Ventas", "Seleccion", "Nomina", "Costos Operativos", "Reportes", "Estados Financieros", "Configuracion"]);
+  const pestanaSoloLectura = !isAdmin && !CON_AVISO_PROPIO.has(activeTab) && activeAllowedPerms.has(activeTab)
+    && !canEdit(activeTab) && !(EDITA_TAMBIEN_CON[activeTab] ?? []).some(canEdit);
   // Sub-pestaña en «Solo ver» (módulo sin EDIT: o RO:SUB: marcada): aviso visible.
   // Solo si el usuario tiene el módulo mismo (si llega por otro módulo no se juzga aquí).
   const avisoSoloLectura = (moduleKey: string, sub: string) => {
@@ -5651,6 +5701,25 @@ export function App() {
     }
   }, [authUser, isAdmin, puedeVerSubTab, costosView]);
 
+  // Secciones con permiso propio (2026-11-04): si la abierta quedó fuera, a la primera permitida.
+  useEffect(() => {
+    if (!authUser || isAdmin) return;
+    const primera = (m: string) => SUB_TABS[m].find((s) => puedeVerSubTab(m, s.key))?.key;
+    if (!puedeVerSubTab("Bascula", basculaVista)) { const k = primera("Bascula"); if (k) setBasculaVista(k as typeof basculaVista); }
+    if (!puedeVerSubTab("Secadoras", secadorasVista)) { const k = primera("Secadoras"); if (k) setSecadorasVista(k as typeof secadorasVista); }
+    if (!puedeVerSubTab("Inventario", invVista)) { const k = primera("Inventario"); if (k) setInvVista(k as typeof invVista); }
+    if (!puedeVerSubTab("Liquidaciones", liqVista)) { const k = primera("Liquidaciones"); if (k) setLiqVista(k as typeof liqVista); }
+    if (!puedeVerSubTab("Fomentos", fomentoVista)) { const k = primera("Fomentos"); if (k) setFomentoVista(k as typeof fomentoVista); }
+    // El formulario completo de la Caja es parte de la hoja. En un socio, lo que es solo de la Matriz no cuenta.
+    const clave = cajaSubTab === "movimiento" || cajaSubTab === "gastos" ? "resumen" : cajaSubTab;
+    if (!puedeVerSubTab("Caja", clave)) {
+      const fueraDelSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO" ? ["mantenimiento", "historial", "sacos"] : [];
+      const k = SUB_TABS.Caja.find((s) => puedeVerSubTab("Caja", s.key) && !fueraDelSocio.includes(s.key))?.key;
+      if (k) setCajaSubTab(k as typeof cajaSubTab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser, isAdmin, puedeVerSubTab, basculaVista, secadorasVista, invVista, liqVista, fomentoVista, cajaSubTab]);
+
   useEffect(() => {
     if (!authUser || isAdmin) return;
     if (!puedeVerSubTab("Reportes", reportKind)) {
@@ -5767,7 +5836,7 @@ export function App() {
         apiGet<AdminUser[]>("/auth/users"),
         apiGet<AdminAccionista[]>("/auth/accionistas").catch(() => [] as AdminAccionista[]),
         apiGet<{ directory: string; backups: Array<{ name: string; size_kb: number; created_at: string }> }>("/settings/backups").catch(() => null),
-        apiGet<AuditEntry[]>("/audit?limit=200").catch(() => [] as AuditEntry[]),
+        apiGet<AuditEntry[]>(`/audit?limit=200${auditSoloAccesos ? "&tipo=accesos" : ""}`).catch(() => [] as AuditEntry[]),
         apiGet<CompanyReadiness>("/settings/company-readiness").catch(() => null)
       ]);
       setAdminUsers(users);
@@ -5976,11 +6045,14 @@ export function App() {
           setPagosCuadRows(cuad.rows);
         } catch { setPagosCuadRows([]); }
       } else { setNominaRows([]); setPagosNominaRows([]); setPagosCuadRows([]); setBajadaPend(null); }
-      // Personal administrativo: por accionista, se paga en Pagos (todos los accionistas).
-      await loadAdminStaff();
-      await loadAdminHistory();
-      await loadAdminPending();
-      loadSemana().catch(() => undefined);
+      // Personal administrativo: por accionista, se paga en Pagos (todos los accionistas). Quien no ve Pagos ni
+      // Sueldo Administrativo no pide sueldos: el servidor tampoco se los da.
+      if (puedeVerSubTab("Nomina", "pagos") || puedeVerSubTab("Nomina", "sueldo-admin")) {
+        await loadAdminStaff();
+        await loadAdminHistory();
+        await loadAdminPending();
+        loadSemana().catch(() => undefined);
+      }
     } catch (e) {
       addToast(`Error al cargar nómina: ${e instanceof Error ? e.message : "desconocido"}`, "error");
     } finally {
@@ -7799,6 +7871,12 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     addToast(`Permisos de ${permsEditor.user.username} actualizados`, "success");
     setPermsEditor(null);
     await refreshConfig();
+  }
+
+  async function cerrarSesionesUsuario(user: AdminUser) {
+    if (!(await confirmar(`¿Cerrar las sesiones abiertas de ${user.name}?\n\nTendrá que volver a entrar con su clave en todos sus equipos. Sirve si perdió el celular o dejó una sesión abierta. No cambia su clave.`))) return;
+    await apiPost(`/auth/users/${user.id}/cerrar-sesiones`, {});
+    addToast(`Sesiones de ${user.name} cerradas`, "success");
   }
 
   async function toggleUserActive(user: AdminUser) {
@@ -14852,6 +14930,7 @@ Motivo (obligatorio):`, ""));
         </header>
         <div className="content">
         <BannerConexion conexion={conexionServidor} pendientes={pedidosEnCelular} onEnviarAhora={enviarPedidosAhora} />
+        {pestanaSoloLectura && <div className="soloLecturaAviso" role="status">👁️ <strong>Solo lectura</strong> · puedes ver {tabLabel(activeTab)}, pero no registrar cambios.</div>}
 
         {/* 🛒 MOSTRADOR (pedido del dueño 2026-10-22): la tablet de báscula solo vende al detalle. La plata entra a la caja
             abierta de la Matriz como «Decidir después»; el cajero la asigna al cierre. */}
@@ -15106,17 +15185,17 @@ Motivo (obligatorio):`, ""));
             return (
               <div className="tablePanel" style={{ marginBottom: 12, padding: 8 }}>
                 <nav className="segmented basculaTabs" aria-label="Vistas de Báscula">
-                  <button type="button" className={basculaVista === "tickets" ? "active" : ""} onClick={() => setBasculaVista("tickets")}>
+                  {puedeVerSubTab("Bascula", "tickets") && <button type="button" className={basculaVista === "tickets" ? "active" : ""} onClick={() => setBasculaVista("tickets")}>
                     📲 Tickets de báscula
-                  </button>
-                  {hayCorregir && (
+                  </button>}
+                  {hayCorregir && puedeVerSubTab("Bascula", "corregir") && (
                     <button type="button" className={basculaVista === "corregir" ? "active" : ""} onClick={() => setBasculaVista("corregir")}>
                       🔁 Corregir accionista
                     </button>
                   )}
-                  <button type="button" className={basculaVista === "sync" ? "active" : ""} onClick={() => setBasculaVista("sync")}>
+                  {puedeVerSubTab("Bascula", "sync") && <button type="button" className={basculaVista === "sync" ? "active" : ""} onClick={() => setBasculaVista("sync")}>
                     🔗 Sincronización <span aria-hidden="true" style={{ color: basculaSync == null && !basculaSyncErr ? "#9ca3af" : enLinea ? "#16a34a" : "#dc2626" }}>●</span>
-                  </button>
+                  </button>}
                 </nav>
               </div>
             );
@@ -15605,10 +15684,10 @@ Motivo (obligatorio):`, ""));
           <section className="panelGrid">
             <div className="tablePanel" style={{ gridColumn: "1 / -1", padding: 8 }}>
               <nav className="segmented" aria-label="Vistas de Secadoras">
-                <button type="button" className={secadorasVista === "operacion" ? "active" : ""} onClick={() => setSecadorasVista("operacion")}>🔥 Secado y túneles</button>
-                <button type="button" className={secadorasVista === "guardia" ? "active" : ""} onClick={() => setSecadorasVista("guardia")}>
+                {puedeVerSubTab("Secadoras", "operacion") && <button type="button" className={secadorasVista === "operacion" ? "active" : ""} onClick={() => setSecadorasVista("operacion")}>🔥 Secado y túneles</button>}
+                {puedeVerSubTab("Secadoras", "guardia") && <button type="button" className={secadorasVista === "guardia" ? "active" : ""} onClick={() => setSecadorasVista("guardia")}>
                   🌙 Guardia semanal{secadorSemana ? ` · ${secadorSemana}` : ""}
-                </button>
+                </button>}
               </nav>
             </div>
             {secadorasVista === "operacion" && combustiblePendiente.length > 0 && (
@@ -16780,7 +16859,7 @@ Motivo (obligatorio):`, ""));
                                   <button type="button" onClick={() => guardarActivoFijo(item).catch((e) => addToast(e.message, "error"))}>
                                     Guardar
                                   </button>
-                                  <button type="button" title="Descartar / eliminar este activo fijo"
+                                  <button type="button" title="Descartar / eliminar este activo fijo" hidden={!isAdmin}
                                     onClick={() => eliminarActivoFijo(item).catch((e) => addToast(e.message, "error"))}
                                     style={{ background: "transparent", border: "none", cursor: "pointer", color: "var(--c-danger-text)", fontSize: 15, padding: "2px 4px" }}>
                                     🗑️
@@ -17177,9 +17256,9 @@ Motivo (obligatorio):`, ""));
             {/* Pestañas: existencias del accionista · sacos (Matriz o socio con sacos propios) · repuestos de la planta (solo Matriz). */}
             {(esMatrizActiva || manejaSacosPropios) && (
               <nav className="cajaSubNav invNav" style={{ gridColumn: "1 / -1", marginBottom: 0 }}>
-                <button type="button" className={invVista === "existencias" ? "active" : ""} onClick={() => setInvVista("existencias")}>📦 Existencias</button>
-                {manejaSacosPropios && <button type="button" className={invVista === "sacos" ? "active" : ""} onClick={() => setInvVista("sacos")}>🧵 Sacos</button>}
-                {esMatrizActiva && <button type="button" className={invVista === "repuestos" ? "active" : ""} onClick={() => setInvVista("repuestos")}>🔧 Repuestos de planta</button>}
+                {puedeVerSubTab("Inventario", "existencias") && <button type="button" className={invVista === "existencias" ? "active" : ""} onClick={() => setInvVista("existencias")}>📦 Existencias</button>}
+                {manejaSacosPropios && puedeVerSubTab("Inventario", "sacos") && <button type="button" className={invVista === "sacos" ? "active" : ""} onClick={() => setInvVista("sacos")}>🧵 Sacos</button>}
+                {esMatrizActiva && puedeVerSubTab("Inventario", "repuestos") && <button type="button" className={invVista === "repuestos" ? "active" : ""} onClick={() => setInvVista("repuestos")}>🔧 Repuestos de planta</button>}
               </nav>
             )}
             {esMatrizActiva && invVista === "repuestos" ? (
@@ -20151,7 +20230,8 @@ Motivo (obligatorio):`, ""));
                   const esSocio = accionistas.find((a) => a.id === activeAccionistaId)?.tipo === "SOCIO";
                   const soloMatriz = manejaSacosPropios ? ["mantenimiento", "historial"] : ["sacos", "mantenimiento", "historial"];
                   const visibles = (["resumen", "venta_detalle", "anticipo", "movimiento", "sacos", "mantenimiento", "historial", "fomentos"] as const)
-                    .filter((t) => !(esSocio && soloMatriz.includes(t)));
+                    .filter((t) => !(esSocio && soloMatriz.includes(t)))
+                    .filter((t) => puedeVerSubTab("Caja", t === "movimiento" ? "resumen" : t));
                   const fomentosActivos = fomentos.filter((f) => f.status === "ACTIVOS").length;
                   const acciones: Array<{ key: typeof visibles[number]; icon: string; label: string; hint: string }> = [
                     { key: "anticipo", icon: "🌾", label: "Arroz en cáscara", hint: "Anticipo o pago al agricultor" },
@@ -20296,6 +20376,7 @@ Motivo (obligatorio):`, ""));
                                   <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes</span>
                                 </button>
                               )}
+                              {visibles.includes("movimiento") && <>
                               <div className="cj-menu-sep" />
                               <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); abrirMovimientoCaja("INCOME"); }}>
                                 <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Ingreso con todos los datos <kbd>F2</kbd></span>
@@ -20303,6 +20384,7 @@ Motivo (obligatorio):`, ""));
                               <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); abrirMovimientoCaja("EXPENSE"); }}>
                                 <span className="cj-menu-ico">📝</span><span className="cj-menu-label">Egreso con todos los datos <kbd>F3</kbd></span>
                               </button>
+                              </>}
                             </div>
                           )}
                         </div>
@@ -20335,8 +20417,8 @@ Motivo (obligatorio):`, ""));
                           : cajaSubTab === "movimiento" ? `📝 Formulario completo · ${movType === "INCOME" ? "ingreso" : "egreso"}` : cajaSubTab === "mantenimiento" ? "📋 Hoja de vida y repuestos" : "";
                         return titulo ? (
                           <div className="cj-crumb">
-                            <button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Hoja de movimientos</button>
-                            <span className="cj-crumb-sep">/</span>
+                            {visibles.includes("resumen") && <><button type="button" className="cj-crumb-back" onClick={() => abrir("resumen")}>← Hoja de movimientos</button>
+                            <span className="cj-crumb-sep">/</span></>}
                             <strong>{titulo}</strong>
                           </div>
                         ) : null;
@@ -21985,10 +22067,12 @@ Motivo (obligatorio):`, ""));
         {activeTab === "Liquidaciones" && (
           <section className="liqLayout">
             <nav className="cajaSubNav liqTabs" role="tablist" aria-label="Liquidaciones">
-              <button type="button" role="tab" aria-selected={liqVista === "nueva"} className={liqVista === "nueva" ? "active" : ""} onClick={() => setLiqVista("nueva")}>🧾 Nueva Liquidación</button>
+              {puedeVerSubTab("Liquidaciones", "nueva") && <button type="button" role="tab" aria-selected={liqVista === "nueva"} className={liqVista === "nueva" ? "active" : ""} onClick={() => setLiqVista("nueva")}>🧾 Nueva Liquidación</button>}
+              {puedeVerSubTab("Liquidaciones", "realizadas") && (
               <button type="button" role="tab" aria-selected={liqVista === "realizadas"} className={liqVista === "realizadas" ? "active" : ""} onClick={() => setLiqVista("realizadas")}>
                 📚 Liquidaciones Realizadas{liqBatches.length > 0 ? ` (${liqBatches.length})` : ""}
               </button>
+              )}
             </nav>
 
             {/* ── Pestaña 1 · Nueva Liquidación: flujo vertical a todo el ancho ── */}
@@ -22615,8 +22699,8 @@ Motivo (obligatorio):`, ""));
           <section className="tabSection">
             <h2>Fomentos de Insumos</h2>
             <nav className="cajaSubNav fomNav" aria-label="Vistas de Fomentos">
-              <button type="button" className={fomentoVista === "lista" ? "active" : ""} onClick={() => setFomentoVista("lista")}>📋 Fomentos</button>
-              <button type="button" className={fomentoVista === "intereses" ? "active" : ""} onClick={() => setFomentoVista("intereses")}>📈 Gasto administrativo</button>
+              {puedeVerSubTab("Fomentos", "lista") && <button type="button" className={fomentoVista === "lista" ? "active" : ""} onClick={() => setFomentoVista("lista")}>📋 Fomentos</button>}
+              {puedeVerSubTab("Fomentos", "intereses") && <button type="button" className={fomentoVista === "intereses" ? "active" : ""} onClick={() => setFomentoVista("intereses")}>📈 Gasto administrativo</button>}
             </nav>
             {fomentoVista === "intereses" ? (
               <FomentoIntereses key={activeAccionistaId ?? ""} accionistaNombre={accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "el accionista activo"} />
@@ -23586,6 +23670,7 @@ Motivo (obligatorio):`, ""));
           return (
           <section className="cuentasLayout">
             {/* Diseño estilo «Transporte y Cosechadora» (ver Por Cobrar). */}
+            {puedeVerSubTab("Por Pagar", "cuentas") && (
             <div className="tablePanel" style={{ gridColumn: "1 / -1" }}>
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
@@ -23660,8 +23745,9 @@ Motivo (obligatorio):`, ""));
                 al pagar aquí baja la Por Cobrar del otro, entra a su caja y le llega un aviso 🔔.
               </p>
             </div>
+            )}
 
-            <PrestamosBancarios
+            {puedeVerSubTab("Por Pagar", "prestamos") && <PrestamosBancarios
               cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
               cajaMixta={dashboard.current_cash_register?.tipo === "MIXTO"}
               puedeEditar={canEdit("Por Pagar") || canEdit("Caja")}
@@ -23669,7 +23755,7 @@ Motivo (obligatorio):`, ""));
               avisar={(m, t) => addToast(m, t)}
               onCambio={() => { const id = dashboard.current_cash_register?.id; if (id) refreshCaja(id).catch(() => undefined); }}
               foco={prestamosFoco}
-            />
+            />}
 
             {detalleGrupo && (
               <CuentaDetalleModal
@@ -26701,7 +26787,7 @@ Motivo (obligatorio):`, ""));
                         const has = mods.includes(m);
                         setPerms(id, has
                           ? mods.filter((x) => x !== m && x !== `EDIT:${m}` && !x.startsWith(`SUB:${m}:`) && !x.startsWith(`RO:SUB:${m}:`))
-                          : [...new Set([...mods, m, `EDIT:${m}`])]);
+                          : [...new Set([...mods, m, ...(m === "Dashboard" ? [] : [`EDIT:${m}`])])]);
                       };
                       const toggleSubNuevo = (id: string, m: string, sub: string) => {
                         const k = subTabKey(m, sub);
@@ -26711,7 +26797,6 @@ Motivo (obligatorio):`, ""));
                           ? mods.filter((x) => x !== k)
                           : [...new Set([...mods, k, m, `EDIT:${m}`])]); // cascada: marca el módulo
                       };
-                      const marcarTodos = (id: string) => setPerms(id, [...new Set([...APP_MODULES, ...APP_MODULES.map((m) => `EDIT:${m}`)])]);
                       const limpiar = (id: string) => setPerms(id, []);
                       // 🚜 Transporte y Cosechadora se elige aparte, como un accionista más (pedido del dueño 2026-10-22). Por dentro
                       // sigue siendo el permiso «Transporte / Cosechadora» de la Matriz (así lo entiende el servidor).
@@ -26804,7 +26889,7 @@ Motivo (obligatorio):`, ""));
                             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
                               <span className="permLabel">Módulos de <b>{nombreAcc(expanded)}</b></span>
                               <div style={{ display: "flex", gap: 8 }}>
-                                <button type="button" className="btnGhost userSelectionAction" onClick={() => setPerms(expanded, [...new Set([...APP_MODULES.filter((m) => expanded !== matId || m !== TR).flatMap((m) => [m, `EDIT:${m}`]), ...(expanded === matId ? modsOf(expanded).filter(esDeTr) : [])])])}>Seleccionar todos</button>
+                                <button type="button" className="btnGhost userSelectionAction" onClick={() => setPerms(expanded, [...new Set([...APP_MODULES.filter((m) => m !== "Dashboard" && m !== "Mostrador" && (expanded !== matId || m !== TR)).flatMap((m) => [m, `EDIT:${m}`]), ...(expanded === matId ? modsOf(expanded).filter(esDeTr) : [])])])}>Seleccionar todos</button>
                                 <button type="button" className="btnGhost userSelectionAction" onClick={() => setPerms(expanded, expanded === matId ? modsOf(expanded).filter(esDeTr) : [])}>Limpiar</button>
                                 <button type="button" className="btnGhost userSelectionAction" style={{ color: "#b91c1c" }} onClick={() => {
                                   if (expanded === matId && trSel) setPerms(expanded, modsOf(expanded).filter(esDeTr)); else toggleAcc(expanded);
@@ -26824,7 +26909,7 @@ Motivo (obligatorio):`, ""));
                                   // ── Módulo simple: pill ──
                                   return (
                                     <button key={m} type="button" className={on ? "permPill on" : "permPill"} aria-pressed={on} onClick={() => toggleModulo(expanded, m)}>
-                                      <span className="permDot">{on ? "✓" : "○"}</span>{m}
+                                      <span className="permDot">{on ? "✓" : "○"}</span>{m === "Dashboard" ? "Panel Integral" : m}
                                     </button>
                                   );
                                 }
@@ -26891,11 +26976,8 @@ Motivo (obligatorio):`, ""));
                     <table className="cajaTable" style={{ marginTop: 10, minWidth: 640 }}>
                       <thead>
                         <tr>
-                          <th>Nombre</th>
                           <th>Usuario</th>
-                          <th>Correo</th>
-                          <th style={{ whiteSpace: "nowrap" }}>Rol</th>
-                          <th style={{ whiteSpace: "nowrap" }}>Permisos</th>
+                          <th>Acceso</th>
                           <th>Estado</th>
                           <th style={{ whiteSpace: "nowrap" }}>Acciones</th>
                         </tr>
@@ -26903,24 +26985,25 @@ Motivo (obligatorio):`, ""));
                       <tbody>
                         {adminUsers.map((u) => (
                           <tr key={u.id}>
-                            <td>{u.name}</td>
-                            <td>{u.username}</td>
-                            <td className="muted" style={{ fontSize: 12.5 }}>{u.recovery_email ?? "—"}</td>
-                            <td style={{ textTransform: "capitalize" }}>{(u.role_name ?? "—").toLowerCase()}</td>
+                            <td>
+                              <strong>{u.name}</strong>
+                              <small className="muted" style={{ display: "block" }}>{u.username}{u.recovery_email ? ` · ${u.recovery_email}` : " · sin correo"}</small>
+                            </td>
                             <td>
                               {u.role_name === "ADMINISTRADOR" ? (
                                 <span className="chip info">Acceso total</span>
                               ) : (() => {
                                 const conMod = (u.accionista_modules ?? []).filter((x) => (x.modules ?? []).length > 0).length;
-                                return <span className="muted">{conMod > 0 ? `${conMod} accionista(s) con permisos` : "Sin permisos"}</span>;
+                                return <span className="muted">Operador · {conMod > 0 ? `${conMod} accionista(s)` : "sin permisos"}</span>;
                               })()}
                             </td>
-                            <td>
+                            <td style={{ whiteSpace: "nowrap" }}>
                               <span className={u.is_active ? "chip ok" : "chip bad"}>
                                 {u.is_active ? "Activo" : "Inactivo"}
                               </span>
+                              <small className="muted" style={{ display: "block", marginTop: 2 }} title={u.ultimo_ingreso_at ? new Date(u.ultimo_ingreso_at).toLocaleString("es-EC") : undefined}>Uso: {haceCuanto(u.ultimo_ingreso_at).toLowerCase()}</small>
                             </td>
-                            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                            <td style={{ textAlign: "right" }}>
                               <button
                                 type="button"
                                 className="btnGhost"
@@ -26965,6 +27048,12 @@ Motivo (obligatorio):`, ""));
                                   {u.is_active ? "Desactivar" : "Activar"}
                                 </button>
                               )}
+                              {u.id !== authUser.id && u.is_active && (
+                                <button type="button" className="btnGhost" style={{ marginLeft: 6 }} title="Lo saca de todos sus equipos; su clave no cambia"
+                                  onClick={() => cerrarSesionesUsuario(u).catch((err) => addToast(err.message, "error"))}>
+                                  Cerrar sesiones
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}
@@ -26972,6 +27061,11 @@ Motivo (obligatorio):`, ""));
                     </table>
                     </div>
                   )}
+                </details>
+
+                <details className="cfgCard tablePanel" style={{ gridColumn: "1 / -1" }}>
+                  <summary>{cfgSum("🔎", "¿Quién puede qué?", "Los permisos de todos en una tabla y lo que conviene revisar")}</summary>
+                  <QuienPuedeQue usuarios={adminUsers} accionistas={adminAccionistas} grupos={PERM_MATRIX} conocidas={CLAVES_MATRIZ} />
                 </details>
 
                 {/* Modal: editar datos de un usuario registrado */}
@@ -27114,11 +27208,21 @@ Motivo (obligatorio):`, ""));
                       : (p.can_view ? { can_view: false, can_edit: false } : { can_view: true, can_edit: false });
                     setItem(idx, { modules: aplicarPermisoSub(it.modules, moduleKey, sub, nuevo), access: true });
                   };
-                  // Marcar todo = VER + EDITAR de cada módulo + permisos especiales.
-                  const allKeysConEdit = [...PERM_ALL_KEYS, ...PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:")).map((k) => `EDIT:${k}`)];
+                  // Marcar todo = VER + EDITAR de cada módulo. Los permisos especiales se dan uno por uno (y los que ya tenía se quedan).
+                  // Tampoco el Panel Integral (cifras de todos los accionistas) ni el Mostrador: esos se marcan a propósito.
+                  const modulosMatriz = PERM_ALL_KEYS.filter((k) => !k.startsWith("PERM:") && k !== "Dashboard" && k !== "Mostrador");
+                  const allKeysConEdit = [...modulosMatriz, ...modulosMatriz.map((k) => `EDIT:${k}`)];
                   const colMarcarTodo = (idx: number) => setItem(idx, { access: true, modules: items[idx].accionista_id === COL_TRANSPORTE
                     ? [MOD_TRANSPORTE, `EDIT:${MOD_TRANSPORTE}`]
-                    : [...new Set(allKeysConEdit.filter((k) => !esPermisoTransporte(k)))] });
+                    : [...new Set([...items[idx].modules.filter((k) => k.startsWith("PERM:")), ...allKeysConEdit.filter((k) => !esPermisoTransporte(k))])] });
+                  // Un perfil reemplaza los módulos de esa columna; los permisos especiales no los toca.
+                  const aplicarPerfil = (idx: number, key: string) => {
+                    const perfil = PERFILES_PERMISOS.find((p) => p.key === key);
+                    if (!perfil) return;
+                    setItem(idx, { access: true, modules: [...new Set([...items[idx].modules.filter((k) => k.startsWith("PERM:")), ...perfil.modules])] });
+                    addToast(`Perfil «${perfil.label}» en ${nombreAcc(items[idx].accionista_id)}: revísalo y guarda`, "success");
+                  };
+                  const clavesAntiguas = [...new Map(items.flatMap((it) => clavesFueraDeMatriz(it.modules, CLAVES_MATRIZ)).map((c) => [c.clave, c])).values()];
                   const colLimpiar = (idx: number) => setItem(idx, { access: false, modules: [] });
                   // Copia los permisos del PRIMER accionista (plantilla) al resto.
                   const duplicarATodos = () => {
@@ -27164,6 +27268,13 @@ Motivo (obligatorio):`, ""));
                                       <button type="button" onClick={() => colMarcarTodo(idx)} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #86efac", background: "transparent", color: "#15803d", cursor: "pointer" }}>Marcar todo</button>
                                       <button type="button" onClick={() => colLimpiar(idx)} style={{ fontSize: 10, padding: "2px 6px", borderRadius: 5, border: "1px solid #fca5a5", background: "transparent", color: "#b91c1c", cursor: "pointer" }}>Limpiar</button>
                                     </div>
+                                    {it.accionista_id !== COL_TRANSPORTE && (
+                                      <select aria-label={`Aplicar un perfil en ${nombreAcc(it.accionista_id)}`} value="" onChange={(e) => aplicarPerfil(idx, e.target.value)}
+                                        style={{ fontSize: 11, marginTop: 4, width: "100%", maxWidth: 140, padding: "2px 4px" }}>
+                                        <option value="">Aplicar perfil…</option>
+                                        {PERFILES_PERMISOS.map((p) => <option key={p.key} value={p.key} title={p.ayuda}>{p.label}</option>)}
+                                      </select>
+                                    )}
                                   </th>
                                 ))}
                               </tr>
@@ -27182,7 +27293,7 @@ Motivo (obligatorio):`, ""));
                                     return (
                                     <React.Fragment key={row.key}>
                                     <tr>
-                                      <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}</td>
+                                      <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{row.label}{row.ayuda && <small style={permAyuda}>{row.ayuda}</small>}</td>
                                       {items.map((it, idx) => (
                                         <td key={it.accionista_id} style={{ ...cellStyle, background: it.access ? undefined : "rgba(0,0,0,.02)" }}>
                                           {noAplicaEn(row.key, it.accionista_id) ? noAplica : esPerm ? (
@@ -27193,7 +27304,7 @@ Motivo (obligatorio):`, ""));
                                                 <input type="checkbox" checked={it.modules.includes(row.key)} onChange={() => toggleVer(idx, row.key)} />
                                                 <span style={{ fontSize: 11 }}>👁️</span>
                                               </label>
-                                              {(() => {
+                                              {row.key !== "Dashboard" && (() => {
                                                 // Con sub-pestañas en «solo ver», el ✏️ del módulo queda a medias (indeterminado).
                                                 const editMod = it.modules.includes(`EDIT:${row.key}`);
                                                 const parcial = editMod && subTabs.some((st) => it.modules.includes(subSoloVerKey(row.key, st.key)));
@@ -27247,10 +27358,32 @@ Motivo (obligatorio):`, ""));
                                   })}
                                 </React.Fragment>
                               ))}
+                              {/* Claves guardadas que ya no tienen fila: antes no se veían ni se podían quitar. */}
+                              {clavesAntiguas.length > 0 && (
+                                <React.Fragment>
+                                  <tr>
+                                    <td colSpan={1 + items.length} style={{ padding: "6px 10px", fontWeight: 800, fontSize: 11, letterSpacing: ".05em", color: "#b45309", background: "#fffbeb", borderBottom: "1px solid var(--c-border)" }}>
+                                      🧹 CLAVES ANTIGUAS: ya no tienen fila en esta tabla
+                                    </td>
+                                  </tr>
+                                  {clavesAntiguas.map((c) => (
+                                    <tr key={c.clave}>
+                                      <td style={{ position: "sticky", left: 0, background: "var(--c-surface)", padding: "5px 10px 5px 18px", borderBottom: "1px solid var(--c-border)", whiteSpace: "nowrap" }}>{c.clave}<small style={permAyuda}>{c.efecto}</small></td>
+                                      {items.map((it, idx) => (
+                                        <td key={it.accionista_id} style={cellStyle}>
+                                          {it.modules.includes(c.clave)
+                                            ? <button type="button" className="btnGhost" style={{ fontSize: 11, padding: "2px 6px" }} onClick={() => setItem(idx, { modules: it.modules.filter((k) => k !== c.clave) })}>Quitar</button>
+                                            : <span className="muted" style={{ fontSize: 12 }}>—</span>}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </React.Fragment>
+                              )}
                             </tbody>
                           </table>
                         )}
-                        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Nota: los cambios aplican cuando el usuario vuelva a iniciar sesión.</p>
+                        <p className="muted" style={{ marginTop: 10, fontSize: 12 }}>Al guardar, el servidor los aplica de inmediato. La pantalla del usuario se actualiza cuando vuelve a la app o en máximo 30 minutos.</p>
                       </div>
 
                       {/* Pie fijo */}
@@ -28056,6 +28189,13 @@ Motivo (obligatorio):`, ""));
                   <div>
                     <p className="muted" style={{ margin: 0 }}>Registro de quién creó, modificó o eliminó información. Se guarda automáticamente.</p>
                   </div>
+                  <label className="catProd__check" style={{ margin: 0 }}>
+                    <input type="checkbox" checked={auditSoloAccesos} onChange={(e) => {
+                      const solo = e.target.checked;
+                      setAuditSoloAccesos(solo);
+                      apiGet<AuditEntry[]>(`/audit?limit=200${solo ? "&tipo=accesos" : ""}`).then(setAuditLog).catch((err) => addToast(err.message, "error"));
+                    }} /> Solo ingresos, usuarios, permisos e intentos sin permiso
+                  </label>
                   <button type="button" className="btnSecondary" onClick={() => refreshConfig().catch((e) => addToast(e.message, "error"))}>
                     ↻ Actualizar
                   </button>
@@ -28081,7 +28221,7 @@ Motivo (obligatorio):`, ""));
                           <td style={{ whiteSpace: "nowrap" }}>{new Date(a.created_at).toLocaleString("es-EC")}</td>
                           <td>{a.username ?? "—"}</td>
                           <td>
-                            <span className={a.action === "ELIMINAR" ? "chip bad" : a.action === "CREAR" ? "chip ok" : "chip info"}>
+                            <span className={["ELIMINAR", "DENEGADO", "INGRESO_FALLIDO"].includes(a.action) ? "chip bad" : ["CREAR", "INGRESO"].includes(a.action) ? "chip ok" : "chip info"}>
                               {a.summary ?? `${a.action} ${a.table_name}`}
                             </span>
                           </td>
@@ -28845,7 +28985,7 @@ function LoginScreen({ onLogin }: { onLogin: (user: AuthUser) => void }) {
   const [email, setEmail] = useState("");
   const [codigo, setCodigo] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [aviso, setAviso] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(() => leerAvisoDeSesion());
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {

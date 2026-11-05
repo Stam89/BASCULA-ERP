@@ -70,8 +70,30 @@ function handleUnauthorized(response: Response) {
   // por clave incorrecta no debe recargar la página).
   if (response.status === 401 && localStorage.getItem(authStorageKey)) {
     localStorage.removeItem(authStorageKey);
-    window.location.reload();
+    // El motivo (cambió la clave, un administrador cerró la sesión, usuario desactivado) se muestra al volver a entrar.
+    response.clone().json()
+      .then((j: { error?: string }) => { if (j?.error) sessionStorage.setItem(AVISO_SESION, j.error); })
+      .catch(() => undefined)
+      .finally(() => window.location.reload());
   }
+}
+
+const AVISO_SESION = "bascula-erp:aviso-sesion";
+/** Por qué se cerró la sesión; se muestra una sola vez en la pantalla de entrada. */
+export function leerAvisoDeSesion(): string | null {
+  try {
+    const aviso = sessionStorage.getItem(AVISO_SESION);
+    if (aviso) sessionStorage.removeItem(AVISO_SESION);
+    return aviso;
+  } catch { return null; }
+}
+
+/** Al cambiar mi clave se cierran las demás sesiones y esta sigue con un token nuevo. */
+export function guardarTokenDeSesion(token: string): void {
+  try {
+    const raw = localStorage.getItem(authStorageKey);
+    if (raw) localStorage.setItem(authStorageKey, JSON.stringify({ ...JSON.parse(raw), token }));
+  } catch { /* sin almacenamiento: a la siguiente petición pedirá entrar otra vez */ }
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {

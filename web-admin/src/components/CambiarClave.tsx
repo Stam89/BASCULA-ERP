@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { apiPut } from "../api";
+import { apiPut, guardarTokenDeSesion } from "../api";
 
 // 🔑 Cambiar MI clave (botón junto al nombre en el menú). También se abre sola
 // después de entrar con una clave de menos de 8 caracteres (creada antes de la
@@ -23,8 +23,9 @@ export function CambiarClaveModal({ claveCorta, onCerrar, avisar }: {
     if (nueva !== repetir) { avisar("Las dos claves nuevas no coinciden", "error"); return; }
     setGuardando(true);
     try {
-      await apiPut("/auth/me/password", { current_password: actual, password: nueva });
-      avisar("Clave cambiada. Úsala la próxima vez que entres.", "success");
+      const r = await apiPut<{ token?: string }>("/auth/me/password", { current_password: actual, password: nueva });
+      if (r.token) guardarTokenDeSesion(r.token);
+      avisar("Clave cambiada. Tus sesiones en otros equipos se cerraron.", "success");
       onCerrar();
     } catch (err) {
       avisar(err instanceof Error ? err.message : "No se pudo cambiar la clave", "error");

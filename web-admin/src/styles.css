@@ -4774,6 +4774,15 @@ textarea::placeholder {
 .desglosePop__fila { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 12.5px; }
 .desglosePop__total { border-top: 1px solid #e2e8f0; margin-top: 4px; padding-top: 6px; font-weight: 700; }
 /* Aviso de sub-pestaña en «Solo ver». */
+/* 🔎 ¿Quién puede qué? */
+.quienPuede { display: grid; gap: 10px; margin-top: 8px; }
+.quienPuede__acc { max-width: 260px; }
+.quienPuede__leyenda { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; font-size: 12px; }
+.quienPuede__tabla { overflow-x: auto; }
+.quienPuede__celda { text-align: center; }
+.quienPuede__titulo { margin: 8px 0 0; }
+.quienPuede__lista { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.quienPuede__lista ul { margin: 4px 0; padding-left: 18px; }
 .soloLecturaAviso { margin: 8px 0 4px; padding: 8px 12px; border: 1px solid #e2e8f0; border-left: 3px solid #64748b; border-radius: 8px; background: #f8fafc; color: #334155; font-size: 13px; }
 /* Buscador con sugerencias (BuscadorCombo y buscador de equipo). */
 .combo { position: relative; }
