@@ -97,8 +97,11 @@ export function clasificarMovimiento(e: EgresoClasificable, rubros: RubroRegla[]
     }
     if (tipo) {
       const r = rubros.find((x) => (x.nomina ?? []).includes(tipo))
-        // Antes la bajada de carro contaba como cuadrilla: si ningún rubro la tiene, sigue ahí.
-        ?? (tipo === "BAJADA_CARRO" ? rubros.find((x) => (x.nomina ?? []).includes("CUADRILLA")) : undefined);
+        // Antes la bajada de carro contaba como cuadrilla: si ningún rubro la tiene, sigue ahí. Y al revés: la cuadrilla va
+        // al rubro de la bajada si es el único. El de polvillo es de planta: va con pilador y estibador.
+        ?? (tipo === "BAJADA_CARRO" ? rubros.find((x) => (x.nomina ?? []).includes("CUADRILLA")) : undefined)
+        ?? (tipo === "CUADRILLA" ? rubros.find((x) => (x.nomina ?? []).includes("BAJADA_CARRO")) : undefined)
+        ?? (tipo === "POLVILLO" ? rubros.find((x) => (x.nomina ?? []).includes("PILADOR")) : undefined);
       if (r) return r.id;
     }
     return clasificarEgreso([[e.subcategoria], [e.description]], rubros);

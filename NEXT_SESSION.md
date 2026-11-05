@@ -2,7 +2,17 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🧭 Todo desde la hoja de Caja (2026-11-04)
+## Último cambio: 🏷️ La hoja pone sola la categoría, como el DETALLE del Excel (2026-11-04)
+
+- Cadena: concepto → categoría → rubro del Resultado mensual. El rubro ya salía de la categoría (`clasificarMovimiento`); ahora también la categoría sale sola.
+- `cajaHojaLeer.ts`: `PALABRAS_CATEGORIA` se ajustó con los 2,846 egresos con DETALLE del Excel; `TIENE_SU_FLUJO` no pone categoría a lo que tiene su propio camino (fomentos, abonos, nómina).
+- Memoria: `GET /cash/conceptos-usados` da la última categoría de cada concepto escrito a mano (180 días, sin anulados ni fondos). Una corrección de la cajera queda aprendida.
+- `guardar` y Enter en el concepto calculan la categoría al momento: si no, quien escribía rápido llegaba al monto antes de que la celda se llenara.
+- Repuesto, mantenimiento o material sin máquina: se pregunta y con otro Enter queda en PILADORA · OTROS.
+- `clasificarMovimiento`: cuadrilla sin rubro propio va al de bajada; polvillo al de pilador.
+- Medido sobre 1,720 gastos normales del Excel, simulando que cada corrección se aprende: acierta 73%, pregunta 17%, se equivoca 9.9%.
+
+## Cambio anterior: 🧭 Todo desde la hoja de Caja (2026-11-04)
 - Pedido del dueño: «que todo se pueda hacer en la Hoja de movimientos». `components/cajaHojaLeer.ts` (pura) entiende lo escrito como en el Excel: `leerVenta` («20 lb de 0,11»), `leerCuadrilla` («cuadrilla embarque 315 x 0,20»), `leerPersona` (no adivina con dos candidatas), `leerResponsable`, `categoriaPorPalabras`.
 - `CajaHoja`: «¿Para qué?» es el enrutador (tipos nuevos: venta, cuadrilla, fondo, agricultor, cobro, pago); lo que falte se pide en `.cjh-extra`, debajo de la fila. 💳 abre «¿Cómo se pagó?»: gaveta, banco, lo pagó un socio o a crédito. De Transporte con socio o crédito va a `/campo/mantenimientos/nota` o `/campo/movimientos` y se ve en la hoja como «no sale de caja» (`creditosTransporte`).
 - **Cola**: Enter limpia la fila al instante y `procesarCola` guarda en orden; una sola relectura al final (`onRefrescar`). `guardarFilaHoja` ya no relee la caja. Lo que falla queda en rojo con Corregir, Reintentar y Quitar. Los inputs ya no se bloquean.

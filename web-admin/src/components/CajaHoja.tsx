@@ -92,8 +92,10 @@ export function CajaHoja({
   movimientos, creditos, verOtros, origenExterno, saldoInicial, categorias, sugerencias, mixto, puedeAnular,
   esCompleja, onGuardar, onFormularioCompleto, onAnular, onAnularCredito, onRepetir, onLiquidarFondo,
   destinos = [], puedeBanco = false, abiertaEl = null,
-  productos = [], actividades = [], clientes = [], descuentoQq = DESCUENTO_QQ_DEFECTO, socios = [], onRefrescar, onError
+  productos = [], actividades = [], clientes = [], descuentoQq = DESCUENTO_QQ_DEFECTO, socios = [], memoria = [], onRefrescar, onError
 }: {
+  /** La última categoría que se le puso a cada concepto en esta caja (meses anteriores incluidos). */
+  memoria?: Array<{ concepto: string; category: string }>;
   /** Productos que se venden al detalle (con su tarifa por libra). */
   productos?: ProductoHoja[];
   /** Trabajos de la cuadrilla con su tarifa. */
@@ -314,21 +316,22 @@ export function CajaHoja({
 
   // Memoria: el mismo concepto escrito antes sugiere su categoría.
   const catPorConcepto = useMemo(() => {
-    const m = new Map<string, string>();
+    const m = new Map<string, string>(memoria.map((x) => [sinTilde(x.concepto), x.category]));
     for (const x of [...movimientos].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))) {
       if (x.description && !x.reference_type && !x.reversal_of) m.set(sinTilde(x.description), x.category);
     }
     return m;
-  }, [movimientos]);
+  }, [movimientos, memoria]);
 
   // Categoría sola: la del mismo concepto de antes o la que dicen las palabras («agua» → Alimentación). Se cambia con un clic.
   const codigosCat = useMemo(() => new Set(categorias.map((c) => c.codigo)), [categorias]);
+  const categoriaDe = (txt: string) => catPorConcepto.get(sinTilde(txt)) ?? categoriaPorPalabras(txt, codigosCat);
   useEffect(() => {
     if (catManual) return;
     if (catFija) { if (catTxt) setCatTxt(""); return; }
     const conMaquina = tipoQuien === "planta" || (tipoQuien === "transporte" && !!quien?.id);
     const dicho = conMaquina ? nombreCortoPorConcepto(concepto) : null;
-    const codigo = catPorConcepto.get(sinTilde(concepto)) ?? categoriaPorPalabras(concepto, codigosCat);
+    const codigo = categoriaDe(concepto);
     setCatTxt(dicho ?? (codigo ? nombreCat.get(codigo) ?? "" : ""));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [concepto, tipoQuien, quien?.id, catManual, catFija, codigosCat]);
@@ -432,7 +435,9 @@ export function CajaHoja({
     setError(""); setPideMaquina(null);
     let destino = conQuien ? resolverQuien(quienTxt) : null;
     if (conQuien && !destino) { setError(`No hay «${quienTxt.trim()}» en ¿Para qué?. Elígelo de la lista.`); enfocar("quien"); return; }
-    let elegida = forzada ?? (destino && CATEGORIA_FIJA[destino.tipo] ? null : resolverCat(catTxt));
+    // Quien escribe rápido llega al monto antes de que la categoría aparezca en la celda: se calcula aquí también.
+    const catSola = catManual ? "" : nombreCat.get(categoriaDe(concepto) ?? "") ?? "";
+    let elegida = forzada ?? (destino && CATEGORIA_FIJA[destino.tipo] ? null : resolverCat(catTxt || catSola));
     // Una venta que se eligió por categoría sigue el flujo de venta.
     if (elegida?.codigo === "VENTA_DETALLE") {
       const v = destinos.find((d) => d.tipo === "venta");
@@ -445,15 +450,20 @@ export function CajaHoja({
     if (!tipoFila) { setError(catTxt.trim() ? `No hay una categoría «${catTxt.trim()}». Elígela de la lista.` : "Escribe la categoría."); enfocar("categoria"); return; }
     // Una entrada o un gasto corriente que nombra una máquina sigue siendo de esta caja.
     if (tipoFila === "INCOME" && destino?.tipo === "planta") destino = destinos[0];
-    const deOtro = !!destino && destino.tipo !== "propio";
+    let deOtro = !!destino && destino.tipo !== "propio";
     if (tipoFila === "INCOME" && deOtro && !SIEMPRE_ENTRADA.has(destino!.tipo)) { setError("Solo una salida puede ser de Transporte, de un operador o de un socio."); enfocar("quien"); return; }
     const monto = r2(numero(tipoFila === "INCOME" ? entrada : salida));
     const celdaMonto: Celda = tipoFila === "INCOME" ? "entrada" : "salida";
     const nombreMonto = tipoFila === "INCOME" ? "Entradas" : "Salidas";
     // Lo que pide más datos (o tiene su propio flujo) abre su panel; de Transporte/socio no.
     if (elegida && tipoFila === "EXPENSE" && esTrabajo(elegida.codigo) && !deOtro) {
-      setPideMaquina({ codigo: elegida.codigo, monto: monto > 0 ? monto : null });
-      setError("¿En qué máquina? Escríbela en el concepto o elígela en «¿Para qué?»."); enfocar("quien"); return;
+      // En el Excel un repuesto no decía máquina: si no se sabe cuál, a la segunda queda en PILADORA · OTROS.
+      const otros = maquinasPlanta.find((m) => sinTilde(m.area) === "piladora" && sinTilde(m.section) === "otros");
+      if (pideMaquina?.codigo === elegida.codigo && otros && monto > 0) { destino = otros; deOtro = true; }
+      else {
+        setPideMaquina({ codigo: elegida.codigo, monto: monto > 0 ? monto : null });
+        setError(`¿En qué máquina? Elígela en «¿Para qué?»${otros ? ", o sigue con Enter y queda en PILADORA · OTROS" : ""}.`); enfocar("quien"); return;
+      }
     }
     if (elegida && !saltaFormulario(destino, elegida.codigo) && esCompleja(elegida.codigo, tipoFila)) { onFormularioCompleto(tipoFila, elegida.codigo, concepto.trim(), monto > 0 ? monto : null); limpiar(); return; }
     if (t !== "cuadrilla" && !(monto > 0)) { setError(`Escribe el monto en ${nombreMonto}.`); enfocar(celdaMonto); return; }
@@ -506,9 +516,10 @@ export function CajaHoja({
       // Con la categoría ya conocida se salta directo al monto.
       const conMaquina = tq === "planta" || (tq === "transporte" && !!detectado?.id);
       const dicho = conMaquina ? nombreCortoPorConcepto(txt) : null;
-      const previa = catPorConcepto.get(sinTilde(txt)) ?? categoriaPorPalabras(txt, codigosCat);
+      const previa = categoriaDe(txt);
       const conocida = resolverCat(catTxt || dicho || (previa ? nombreCat.get(previa) ?? "" : ""));
       if (conocida) {
+        if (!catManual) setCatTxt(dicho ?? conocida.nombre);
         if (!saltaFormulario(detectado, conocida.codigo) && !esTrabajo(conocida.codigo) && esCompleja(conocida.codigo, conocida.tipo === "INGRESO" ? "INCOME" : "EXPENSE")) enfocar("categoria");
         else enfocar(conocida.tipo === "INGRESO" ? "entrada" : "salida");
       } else enfocar("categoria");
@@ -520,6 +531,8 @@ export function CajaHoja({
     } else if (c === "quien") {
       const elegido = resolverQuien(valor ?? quienTxt);
       if (elegido) setQuienTxt(elegido.valor);
+      // Se le preguntó la máquina y siguió con Enter sin elegir: queda en PILADORA · OTROS.
+      if (pideMaquina && (!elegido || elegido.tipo === "propio")) { guardar(); return; }
       if (elegido?.tipo === "cuadrilla") { enfocar(actTxt ? "cantidad" : "actividad"); return; }
       if (elegido?.tipo === "fondo") { enfocar(responsable ? "salida" : "responsable"); return; }
       enfocar(elegido ? celdaMontoDe(elegido, cat) : "quien");

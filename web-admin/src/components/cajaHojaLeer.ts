@@ -108,24 +108,35 @@ export function leerResponsable(txt: string): string {
 }
 
 // ── Categoría por lo escrito ───────────────────────────────────────────────
+// Sale de la columna DETALLE de las cajas de 2026 (2,846 egresos clasificados a mano): cada palabra lleva a la categoría
+// que la cajera le ponía. La categoría ya cae sola en su rubro del Resultado mensual. El orden importa: gana la primera.
+const TIENE_SU_FLUJO = /\b(fomentos?|abonos?|anticipos?|adelanto|sueldos?|prestamos?|pilador|estibador|estibada|estibado|secador|cuadrilla|bajada|secada|guardiania|quincena|15na|lenin)\b/;
 const PALABRAS_CATEGORIA: Array<[RegExp, string]> = [
-  [/\b(planilla|luz|cnel|internet|telefono|agua potable)\b/, "SERVICIOS_BASICOS"],
-  [/\bmontacargas?\b/, "GASOLINA_MONTACARGA"],
-  [/\b(diesel|dieses)\b/, "DIESEL"],
+  [/\b(planillas?|luz|cnel|internet|telefono|agua potable|tanquero)\b/, "SERVICIOS_BASICOS"],
+  [/\bgenerador\b/, "GASTO_OPERATIVO"],
+  [/\b(montacargas?|carburador|bujias?|bobina)\b/, "GASOLINA_MONTACARGA"],
+  [/\b(guayaquil|tinton)\b/, "CUADRILLA_GUAYAQUIL"],
+  [/\b(kia|fiat|fia|peajes?|tag|gasolina)\b/, "GASTOS_FIAT"],
+  [/\b(reparaci\w*|reparcion|arreglos?|maestro|rebobin\w*|fumigacion|fuminex|cambio de aceite|mantenimiento|limpieza de (cilindro|secadora|tunel)\w*)\b/, "MANTENIMIENTO_EQUIPO"],
+  [/\b(repuestos?|pernos?|bandas?|correas?|discos?|rulimanes|ruliman|rodamientos?|chumaceras?|pelotas|aletas?|refrigerante|brocas?|codos?|clavos?|contrapesas?|tubos?|prisioneros?|mangueras?|filtros?|soldadura|electrodos?|grasa|poleas?|candados?|ejes?|cables?|palas?|aceite|silicon)\b/, "REPUESTOS"],
+  [/\b(diesel|disel)\b/, "DIESEL"],
   [/\b(cilindro de gas|gas|bombona)\b/, "GAS"],
-  [/\b(comidas?|almuerzos?|desayunos?|meriendas?|cenas?|refrigerios?|agua|aguas|pacas?|colas?|gaseosas?|cafe|azucar)\b/, "ALIMENTACION"],
-  [/\b(cocinera|limpieza|escobas?|detergentes?|cloro|desinfectante)\b/, "COCINERA"],
-  [/\b(fletes?|movilizacion)\b/, "FLETE"],
-  [/\b(fiat|kia)\b/, "GASTOS_FIAT"],
-  [/\b(obra civil|cemento|estibada)\b/, "GASTO_OPERATIVO"],
-  [/\b(retiro del banco|retiro de banco|retiro banco|banco)\b/, "RETIRO_BANCO"],
+  [/\b(sacos?|sacoplast|saquillos?)\b/, "COMPRA_SACOS"],
+  [/\b(comidas?|almuerzos?|desayunos?|meriendas?|cenas?|refrigerios?|agua|aguas|bot|botellon(es)?|pacas?|pollos?|carnes?|legumbres?|chancho|tuti|tuty|pescado|colas?|gaseosas?|cafe|azucar)\b/, "ALIMENTACION"],
+  [/\b(cocinera|cocinada|limpieza|escobas?|detergentes?|cloro|desinfectante|trapeador)\b/, "COCINERA"],
+  [/\bfletes?\b/, "FLETE"],
+  [/\b(fletes?|taxis?|movilizacion|resmas?|hojas|bomberos?|tortas?|obra civil|cemento|utiles|oficina|seguros?)\b/, "GASTO_OPERATIVO"],
+  [/\bno deducible\b/, "GASTO_NO_DEDUCIBLE"],
+  [/\b(donacion|contribucion)\b/, "GASTOS_VARIOS"],
+  [/^(retiro\s+)?(del?\s+)?banco\b/, "RETIRO_BANCO"],
   [/\btamo\b/, "TAMO"],
-  [/\b(bascula|pesada|pesadas)\b/, "SERVICIO_BASCULA"]
+  [/\b(bascula|pesadas?)\b/, "SERVICIO_BASCULA"]
 ];
 
 /** Código de la categoría que sugiere lo escrito, si esa caja la tiene. */
 export function categoriaPorPalabras(txt: string, codigos: Set<string>): string | null {
   const t = limpio(txt);
+  if (TIENE_SU_FLUJO.test(t)) return null;
   for (const [re, codigo] of PALABRAS_CATEGORIA) if (re.test(t) && codigos.has(codigo)) return codigo;
   return null;
 }

@@ -5390,6 +5390,7 @@ export function App() {
   }, [activeTab, esMatrizActiva, authUser?.id]);
   // 🚜 Lo que se registró a crédito en Transporte desde que se abrió esta caja: no mueve la gaveta pero se ve en la hoja.
   const [creditosTransporte, setCreditosTransporte] = useState<HojaCredito[]>([]);
+  const [memoriaHoja, setMemoriaHoja] = useState<Array<{ concepto: string; category: string }>>([]);
   async function cargarCreditosTransporte() {
     const permitidos = accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? [];
     const abierta = dashboard.current_cash_register?.opened_at;
@@ -5404,6 +5405,7 @@ export function App() {
   useEffect(() => {
     if (activeTab !== "Caja" || !authUser) return;
     cargarCreditosTransporte().catch(() => undefined);
+    apiGet<Array<{ concepto: string; category: string }>>("/cash/conceptos-usados").then(setMemoriaHoja).catch(() => undefined);
     refreshReceivables().catch(() => undefined);
     apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle").then(setPersonasVentaDetalle).catch(() => undefined);
     if (esMatrizActiva) apiGet<CuadrillaActivity[]>("/cuadrilla/activities").then(setCuadActivities).catch(() => undefined);
@@ -20732,6 +20734,7 @@ Motivo (obligatorio):`, ""));
                           clientes={[...new Set(personasVentaDetalle.map((x) => x.full_name))]}
                           descuentoQq={descuentoQqDefecto}
                           socios={sociosDelGasto.map((a) => ({ id: a.id, name: a.name }))}
+                          memoria={memoriaHoja}
                           onRefrescar={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); await Promise.all([refreshReceivables(), cargarCreditosTransporte()]).catch(() => undefined); }}
                           onError={(m) => addToast(m, "error")}
                           onFormularioCompleto={abrirFormularioDesdeHoja}

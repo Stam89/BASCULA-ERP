@@ -92,6 +92,11 @@ describe("clasificarMovimiento (categoría de Caja + nómina por tipo)", () => {
     expect(clasificarMovimiento(pago, conBajada)).toBe("bajada");
     expect(clasificarMovimiento(nomina("cuadrilla_entries", "Pago cuadrilla CUADRILLA"), conBajada)).toBe("cuadrilla");
   });
+  it("cuadrilla y polvillo sin rubro propio van al de su familia", () => {
+    const rubros = [{ id: "bajada", claves: [], nomina: ["BAJADA_CARRO"] }, { id: "planta", claves: [], nomina: ["PILADOR", "ESTIBADOR"] }];
+    expect(clasificarMovimiento(nomina("cuadrilla_entries", "Pago cuadrilla CUADRILLA: EMBARQUE Y DESEMBARQUE 315 × $0.2"), rubros)).toBe("bajada");
+    expect(clasificarMovimiento(nomina("worker_payments", "Pago semana polvillo JOSE"), rubros)).toBe("planta");
+  });
   it("sueldo administrativo cuyo cargo nombra otro rubro", () => {
     expect(clasificarMovimiento(nomina("admin_salary_payments", "Sueldo Cocinera MARIA"), R)).toBe("cocinera");
   });

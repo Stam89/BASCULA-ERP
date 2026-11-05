@@ -106,6 +106,22 @@ async function validarCategoriaManual(
   }
 }
 
+// 🧭 Memoria de la hoja de Caja: la última categoría que se le puso a cada concepto escrito a mano. Si la cajera corrige
+// una categoría, la próxima vez que escriba lo mismo sale la corregida.
+cashRouter.get("/conceptos-usados", asyncRoute(async (req, res) => {
+  const r = await pool.query(
+    `SELECT concepto, category FROM (
+       SELECT DISTINCT ON (lower(btrim(m.description))) btrim(m.description) AS concepto, m.category, m.created_at
+         FROM cash_movements m JOIN cash_registers c ON c.id = m.cash_register_id
+        WHERE c.accionista_id = $1 AND m.reference_type IS NULL AND m.reversal_of IS NULL AND m.reversed_at IS NULL
+          AND COALESCE(m.es_fondo, false) = false AND btrim(COALESCE(m.description, '')) <> '' AND m.created_at > now() - interval '180 days'
+        ORDER BY lower(btrim(m.description)), m.created_at DESC
+     ) x ORDER BY created_at DESC LIMIT 1500`,
+    [(req as AuthenticatedRequest).accionistaId]
+  );
+  res.json(r.rows);
+}));
+
 // ── Subcategorías de gasto (memoria para el datalist del form de Caja) ───────
 cashRouter.get("/subcategorias", asyncRoute(async (req, res) => {
   try {
