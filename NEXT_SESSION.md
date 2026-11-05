@@ -6,7 +6,7 @@ Actualizado: 2026-11-04
 
 - `milling_drafts.lot_id` (migración 20261139): un borrador es de un túnel o de un lote sin secado (saldo inicial, solo pilada). La clave en `/processing-batches/drafts/:id` y `reference_id` de inventario y nómina es el id del lote. Solo un lote a la vez.
 - `dry-in-storage` trae `has_draft`: el lote sale del selector y se retoma con Continuar en Procesos guardados.
-- Datos: cáscara 0.11 de STALYN al 03/11, SI-031126-001 a -007 (662.24 QQ) en Lotes guardados. El stock de producto del 03/11 YA incluye lo pilado de las piladas del 03 y 04-nov: al guardarlas hay que restarlo con saldo negativo o se duplica.
+- Datos: cáscara 0.11 de STALYN al 03/11, SI-031126-001 a -007 (662.24 QQ) en Lotes guardados. SI-031126-008 y -009 (piladas del 03 y 04-nov, 5 y 4 tulas por pesar) quedaron como proceso guardado; lo pilado ya estaba en el stock del 03/11, así que cada uno lleva saldos negativos que lo compensan (el neto no cambió). Al finalizarlos con el total real el stock queda bien: esos saldos NO se anulan. Faltan nombres de turno y N.º de tulas para el pago.
 - Simulacro `borrador_lote`. `cascara_borrador` y `stock_varios_lotes` no corren en la copia actual: piden secadoras reales y la base no tiene.
 
 ## Cambio anterior: 🧾 Hoja de Caja con dos recuadros y Reglas de la Caja (2026-11-05)
