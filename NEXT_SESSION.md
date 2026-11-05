@@ -2,7 +2,14 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🧾 Hoja de Caja con dos recuadros y Reglas de la Caja (2026-11-05)
+## Último cambio: 💾 Guardar Proceso con lotes de Desde Stock (2026-11-05)
+
+- `milling_drafts.lot_id` (migración 20261139): un borrador es de un túnel o de un lote sin secado (saldo inicial, solo pilada). La clave en `/processing-batches/drafts/:id` y `reference_id` de inventario y nómina es el id del lote. Solo un lote a la vez.
+- `dry-in-storage` trae `has_draft`: el lote sale del selector y se retoma con Continuar en Procesos guardados.
+- Datos: cáscara 0.11 de STALYN al 03/11, SI-031126-001 a -007 (662.24 QQ) en Lotes guardados. El stock de producto del 03/11 YA incluye lo pilado de las piladas del 03 y 04-nov: al guardarlas hay que restarlo con saldo negativo o se duplica.
+- Simulacro `borrador_lote`. `cascara_borrador` y `stock_varios_lotes` no corren en la copia actual: piden secadoras reales y la base no tiene.
+
+## Cambio anterior: 🧾 Hoja de Caja con dos recuadros y Reglas de la Caja (2026-11-05)
 
 - Como CLIENTE y CONCEPTO del Excel: `sujeto` («¿Quién o qué?») y `concepto` («¿Qué se hizo?»). Se leen juntos con `unir` y se guardan como `sujeto · concepto`.
 - Quien escribe la línea entera en el primer recuadro («comida», «20 lb de 0,11») sigue igual: pasa sola al segundo. Vacío + Enter va al segundo.

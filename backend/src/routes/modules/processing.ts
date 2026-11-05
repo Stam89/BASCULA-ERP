@@ -50,6 +50,9 @@ async function retirarInventarioDeBorradores(client: PoolClient, processingBatch
     [processingBatchId]
   );
   for (const x of r.rows) ids.add(String(x.drying_report_id));
+  // Un lote sin secado guarda su proceso con el id del lote.
+  const lote = await client.query("SELECT lot_id FROM processing_batches WHERE id = $1", [processingBatchId]);
+  if (lote.rows[0]?.lot_id) ids.add(String(lote.rows[0].lot_id));
   for (const id of ids) {
     await sincronizarInventarioBorrador(client, id, null, createdBy);
     await sincronizarCascaraBorrador(client, id, createdBy);
@@ -63,20 +66,22 @@ async function retirarInventarioDeBorradores(client: PoolClient, processingBatch
 processingRouter.get("/drafts", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await pool.query(
-    `SELECT d.drying_report_id, d.report, d.pilado_entries, d.saved_at,
-            t.tunnel_number, t.rice_type,
+    `SELECT COALESCE(d.drying_report_id, d.lot_id) AS drying_report_id, d.lot_id IS NOT NULL AS es_lote, d.lot_id AS lote_id,
+            d.report, d.pilado_entries, d.saved_at,
+            t.tunnel_number, COALESCE(t.rice_type::text, l.rice_type::text) AS rice_type,
             -- 🔗 Pilar juntos: el borrador guarda en report.juntos las otras secadoras; se suman sus QQ y túneles.
-            (t.total_quintals + COALESCE(j.qq, 0)) AS total_quintals,
+            (COALESCE(t.total_quintals, (SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.lot_id = d.lot_id AND m.reference_type = 'saldo_inicial'),
+                      (SELECT SUM(wt.quintals) FROM weighing_tickets wt WHERE wt.lot_id = d.lot_id), 0) + COALESCE(j.qq, 0)) AS total_quintals,
             COALESCE(j.tuneles, ARRAY[]::int[]) AS tuneles_juntos,
             COALESCE(j.lotes, ARRAY[]::text[]) AS lotes_juntos,
             l.lot_code,
             EXISTS (
               SELECT 1 FROM processing_batches b
-              WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NULL AND b.status <> 'CANCELLED'
+              WHERE (b.drying_report_id = d.drying_report_id OR b.lot_id = d.lot_id) AND b.finished_at IS NULL AND b.status <> 'CANCELLED'
             ) AS has_open_batch
      FROM milling_drafts d
-     JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
-     JOIN lots l ON l.id = t.lot_id
+     LEFT JOIN drying_tunnel_reports t ON t.id = d.drying_report_id
+     JOIN lots l ON l.id = COALESCE(t.lot_id, d.lot_id)
      LEFT JOIN LATERAL (
        SELECT SUM(x.total_quintals) AS qq, array_agg(x.tunnel_number ORDER BY x.tunnel_number) AS tuneles,
               array_agg(xl.lot_code ORDER BY x.tunnel_number) AS lotes
@@ -88,7 +93,7 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
      WHERE l.accionista_id = $1
        AND NOT EXISTS (
          SELECT 1 FROM processing_batches b
-         WHERE b.drying_report_id = d.drying_report_id AND b.finished_at IS NOT NULL
+         WHERE (b.drying_report_id = d.drying_report_id OR b.lot_id = d.lot_id) AND b.finished_at IS NOT NULL
        )
      ORDER BY d.saved_at DESC`,
     [accionistaId]
@@ -253,7 +258,7 @@ processingRouter.patch("/:id/gana-whatsapp", asyncRoute(async (req, res) => {
 
 processingRouter.get("/drafts/:dryingId", asyncRoute(async (req, res) => {
   const result = await pool.query(
-    "SELECT drying_report_id, report, pilado_entries, saved_at FROM milling_drafts WHERE drying_report_id = $1",
+    "SELECT COALESCE(drying_report_id, lot_id) AS drying_report_id, report, pilado_entries, saved_at FROM milling_drafts WHERE drying_report_id = $1 OR lot_id = $1",
     [req.params.dryingId]
   );
   res.json(result.rows[0] ?? null);
@@ -263,12 +268,20 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = draftSchema.parse(req.body);
 
+  // La clave es el túnel o, en un lote sin secado (saldo inicial, solo pilada), el lote.
   const drying = await pool.query("SELECT 1 FROM drying_tunnel_reports WHERE id = $1", [req.params.dryingId]);
-  if (!drying.rowCount) throw new ApiError(404, "Secado no encontrado");
+  const esLote = !drying.rowCount;
+  if (esLote) {
+    const lote = await pool.query(
+      "SELECT 1 FROM lots WHERE id = $1 AND accionista_id = $2 AND status = 'WEIGHED' AND (saldo_inicial OR operation_type = 'PILADO')",
+      [req.params.dryingId, accionistaId]
+    );
+    if (!lote.rowCount) throw new ApiError(404, "Secado no encontrado");
+  }
 
   const dryingId = String(req.params.dryingId);
   const cerrado = await pool.query(
-    "SELECT 1 FROM processing_batches WHERE drying_report_id = $1 AND finished_at IS NOT NULL AND status <> 'CANCELLED' LIMIT 1",
+    "SELECT 1 FROM processing_batches WHERE (drying_report_id = $1 OR lot_id = $1) AND finished_at IS NOT NULL AND status <> 'CANCELLED' LIMIT 1",
     [dryingId]
   );
   if (cerrado.rowCount) throw new ApiError(409, "Este túnel ya se piló y se cerró: no se puede guardar otra vez su proceso.");
@@ -277,14 +290,14 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   const result = await inTransaction(async (client) => {
     const antes = await tunelesDelBorrador(client, dryingId);
     const r = await client.query(
-      `INSERT INTO milling_drafts (drying_report_id, accionista_id, report, pilado_entries, saved_by)
+      `INSERT INTO milling_drafts (${esLote ? "lot_id" : "drying_report_id"}, accionista_id, report, pilado_entries, saved_by)
        VALUES ($1, $2, $3::jsonb, $4::jsonb, $5)
-       ON CONFLICT (drying_report_id) DO UPDATE SET
+       ON CONFLICT ${esLote ? "(lot_id) WHERE lot_id IS NOT NULL" : "(drying_report_id)"} DO UPDATE SET
          report = EXCLUDED.report,
          pilado_entries = EXCLUDED.pilado_entries,
          saved_by = EXCLUDED.saved_by,
          saved_at = now()
-       RETURNING drying_report_id, report, pilado_entries, saved_at`,
+       RETURNING COALESCE(drying_report_id, lot_id) AS drying_report_id, report, pilado_entries, saved_at`,
       [dryingId, accionistaId, JSON.stringify(body.report), JSON.stringify(body.pilado_entries), body.saved_by ?? null]
     );
     // Lo ya pilado y guardado cuenta en inventario desde ahora.
@@ -303,7 +316,7 @@ processingRouter.delete("/drafts/:dryingId", asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     await sincronizarNominaBorrador(client, String(req.params.dryingId), null);
     const tuneles = await tunelesDelBorrador(client, String(req.params.dryingId));
-    await client.query("DELETE FROM milling_drafts WHERE drying_report_id = $1", [req.params.dryingId]);
+    await client.query("DELETE FROM milling_drafts WHERE drying_report_id = $1 OR lot_id = $1", [req.params.dryingId]);
     // Descartado: lo que había puesto en inventario se retira y la cáscara vuelve a bodega.
     await sincronizarInventarioBorrador(client, String(req.params.dryingId), null);
     for (const id of tuneles) await sincronizarCascaraBorrador(client, id);

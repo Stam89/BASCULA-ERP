@@ -406,7 +406,8 @@ export async function sincronizarNominaBorrador(
     return;
   }
   const dueno = await client.query(
-    "SELECT l.accionista_id FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1", [dryingReportId]
+    `SELECT l.accionista_id FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1
+     UNION ALL SELECT accionista_id FROM lots WHERE id = $1`, [dryingReportId]
   );
   const rates = await getRates(client, dueno.rows[0]?.accionista_id ?? null);
   const datos = datosNominaBorrador(guardado.entradas, guardado.reporte);
@@ -468,7 +469,8 @@ export async function createProductionWorkerPayments(
 
     const tuneles = (await client.query(
       `SELECT drying_report_id AS id FROM processing_batches WHERE id = $1 AND drying_report_id IS NOT NULL
-       UNION SELECT drying_report_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NOT NULL`,
+       UNION SELECT drying_report_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NOT NULL
+       UNION SELECT lot_id FROM processing_batches WHERE id = $1 AND lot_id IS NOT NULL`,
       [opts.batchId]
     )).rows.map((x) => String(x.id));
     const delBorrador = (await client.query(
@@ -647,7 +649,7 @@ laborRouter.get("/worker-receipt", asyncRoute(async (req, res) => {
        LEFT JOIN processing_batches b
          ON wp.reference_type IN ('processing_batch', 'processing_batches') AND b.id = wp.reference_id
        LEFT JOIN drying_tunnel_reports dt ON wp.reference_type = 'milling_draft' AND dt.id = wp.reference_id
-       LEFT JOIN lots l ON l.id = COALESCE(b.lot_id, dt.lot_id)
+       LEFT JOIN lots l ON l.id = COALESCE(b.lot_id, dt.lot_id, CASE WHEN wp.reference_type = 'milling_draft' THEN wp.reference_id END)
       WHERE wp.worker_role = $1 AND wp.worker_name = $2 AND wp.work_date BETWEEN $3 AND $4
         ${q.status ? "AND wp.status = $5" : ""}
       ORDER BY wp.work_date ASC, wp.created_at ASC`,

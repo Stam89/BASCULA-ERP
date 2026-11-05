@@ -60,8 +60,10 @@ export async function sincronizarInventarioBorrador(
   const clave = (p: string, w: string, l: string | null, a: string | null) => `${p}|${w}|${l ?? ""}|${a ?? ""}`;
   if (guardado) {
     const t = (await client.query(
-      `SELECT t.rice_type, l.id AS lot_id, l.accionista_id, l.operation_type, l.is_maquila
-         FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1`,
+      `SELECT t.rice_type::text AS rice_type, l.id AS lot_id, l.accionista_id, l.operation_type, l.is_maquila
+         FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1
+       UNION ALL
+       SELECT l.rice_type::text, l.id, l.accionista_id, l.operation_type, l.is_maquila FROM lots l WHERE l.id = $1`,
       [dryingReportId]
     )).rows[0];
     if (t && !loteEsMaquila({ operation_type: t.operation_type, is_maquila: t.is_maquila })) {
@@ -110,7 +112,12 @@ export async function sincronizarCascaraBorrador(client: PoolClient, dryingRepor
                         OR (jsonb_typeof(md.report->'juntos') = 'array' AND md.report->'juntos' ? t.id::text))
             AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.drying_report_id = md.drying_report_id
                               AND b.finished_at IS NOT NULL AND b.status <> 'CANCELLED')) AS en_borrador
-       FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1`,
+       FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1
+       UNION ALL
+       SELECT l.id, l.operation_type,
+              EXISTS (SELECT 1 FROM milling_drafts md WHERE md.lot_id = l.id)
+              AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.lot_id = l.id AND b.finished_at IS NOT NULL AND b.status <> 'CANCELLED')
+         FROM lots l WHERE l.id = $1`,
     [dryingReportId]
   )).rows[0];
   if (!t) return;
@@ -154,7 +161,7 @@ export async function sincronizarCascaraBorrador(client: PoolClient, dryingRepor
 
 /** Túneles de un borrador: el principal y los juntados (report.juntos). */
 export async function tunelesDelBorrador(client: PoolClient, dryingReportId: string): Promise<string[]> {
-  const r = (await client.query("SELECT report->'juntos' AS juntos FROM milling_drafts WHERE drying_report_id = $1", [dryingReportId])).rows[0];
+  const r = (await client.query("SELECT report->'juntos' AS juntos FROM milling_drafts WHERE drying_report_id = $1 OR lot_id = $1", [dryingReportId])).rows[0];
   const juntos = Array.isArray(r?.juntos) ? (r.juntos as unknown[]).map(String) : [];
   return [...new Set([dryingReportId, ...juntos])];
 }

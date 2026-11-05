@@ -218,7 +218,8 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
           AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.status <> 'CANCELLED' AND b.finished_at IS NOT NULL
                             AND (b.lot_id = l.id OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.lot_id = l.id)))
      )
-     SELECT base.*, COALESCE(f.full_name, CASE WHEN base.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name
+     SELECT base.*, COALESCE(f.full_name, CASE WHEN base.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name,
+            EXISTS (SELECT 1 FROM milling_drafts md WHERE md.lot_id = base.id) AS has_draft
        FROM base LEFT JOIN farmers f ON f.id = base.farmer_id
       WHERE base.quintals > 0
       ORDER BY base.created_at DESC

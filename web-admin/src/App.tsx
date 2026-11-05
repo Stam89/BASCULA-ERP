@@ -1292,6 +1292,8 @@ function computeMillingMix(entries: MillingPiladoEntry[]): { tulaQq: number; sac
 /** Pilado guardado a medias en el servidor (proceso en curso), por túnel. */
 type MillingDraft = {
   drying_report_id: string;
+  /** Lote sin secado (saldo inicial, solo pilada): drying_report_id trae el id del lote. */
+  es_lote?: boolean;
   report: Record<string, unknown>;
   pilado_entries: MillingPiladoEntry[];
   saved_at: string;
@@ -4664,8 +4666,8 @@ export function App() {
   // terminado + en bodega + sin procesar); NO se listan lotes en secadora ni sin
   // secar. El guard de quintales es defensa extra por si llega alguno en 0.
   const stockLotsDisponibles = useMemo(
-    () => dryStorageLots.filter((lot) => Number(lot.quintals ?? 0) > 0),
-    [dryStorageLots]
+    () => dryStorageLots.filter((lot) => Number(lot.quintals ?? 0) > 0 && (!lot.has_draft || productionStockPick.includes(lot.id))),
+    [dryStorageLots, productionStockPick]
   );
   // Los elegidos, con los secados primero: el principal entra como secadora y el resto se suma a la misma pilada.
   const stockElegidos = useMemo(
@@ -12515,7 +12517,15 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     });
   }
 
-  function continueMillingDraft(dryingId: string) {
+  function continueMillingDraft(dryingId: string, esLote?: boolean) {
+    setMillingYields(null);
+    if (esLote) {
+      setProductionSource("stock");
+      setProductionDryingId(""); setProductionDryingExtras([]);
+      setProductionStockPick([dryingId]);
+      loadDraftFor(dryingId).catch((error) => addToast(error instanceof Error ? error.message : "No se pudo cargar el proceso guardado", "error"));
+      return;
+    }
     setProductionSource("drying");
     setProductionStockPick([]);
     updateProductionDryingId(dryingId);
@@ -12635,16 +12645,22 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   // Guarda el pilado a medias EN EL SERVIDOR (por túnel), para poder
   // retomarlo desde cualquier equipo.
   async function saveMillingProcess() {
-    if (!selectedProductionDrying) {
+    // Desde Stock se guarda con el id del secado, o del lote si no tuvo secado.
+    const claveBorrador = productionSource === "stock" ? String(selectedStockLot?.drying_report_id ?? selectedStockLot?.id ?? "") : productionDryingId;
+    if (!claveBorrador || (productionSource !== "stock" && !selectedProductionDrying)) {
       const msg = "Seleccione la secadora antes de guardar el proceso";
       setMessage(msg);
       addToast(msg, "error");
       return;
     }
+    if (productionSource === "stock" && stockElegidos.length > 1) {
+      addToast("Para guardar a medias elige un solo lote.", "error");
+      return;
+    }
     // Auto-captura del QQ escrito sin añadir, para no perderlo en el borrador.
     const effEntries = (await flushPendingPiladoEntry());
     if (!effEntries) return;
-    await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${productionDryingId}`, {
+    await apiPut<{ saved_at: string }>(`/processing-batches/drafts/${claveBorrador}`, {
       // Con los nombres de turno, lo guardado ya aparece en Nómina › Pagos (al retomarlo se actualiza, no se duplica).
       report: {
         ...millingReport, juntos: productionDryingExtras,
@@ -12665,6 +12681,10 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     setMillingYields(null);
     setMillingDraftSavedAt(null);
     setProductionDryingId(""); setProductionDryingExtras([]);
+    if (productionSource === "stock") {
+      setProductionStockPick([]);
+      apiGet<Lot[]>("/lots/dry-in-storage").then(setDryStorageLots).catch(() => undefined);
+    }
     addToast(`Proceso guardado: lo pilado ya cuenta en el inventario${millingEsServicio ? " (salvo servicio de pilada: el arroz es del cliente)" : ""} y en Nómina › Pagos. Retómalo desde «Procesos guardados» con Continuar / Finalizar lote.`, "success");
     if (!piladorName.trim() || !estibadorName.trim()) addToast("Falta el nombre del pilador o del estibador en «Personal de turno»: a ese no le aparece el pago hasta que lo pongas y guardes.", "error");
   }
@@ -13226,11 +13246,9 @@ Motivo (obligatorio):`, ""));
     setProductionResult(production);
     setMillingPiladoEntries([]);
     setMillingReport(defaultMillingReport);
-    // El proceso ya se cerró: se borra el borrador del servidor (solo aplica al
-    // origen desde secadora; el stock no tiene borrador porque no hay drying_report).
-    if (src.drying_report_id) {
-      await apiFetch(`/processing-batches/drafts/${src.drying_report_id}`, { method: "DELETE" }).catch(() => undefined);
-    }
+    // El proceso ya se cerró: se borra el borrador del servidor (el del túnel o, sin secado, el del lote).
+    const claveCerrada = src.drying_report_id ?? src.lot_id;
+    if (claveCerrada) await apiFetch(`/processing-batches/drafts/${claveCerrada}`, { method: "DELETE" }).catch(() => undefined);
     setProductionDryingId(""); setProductionDryingExtras([]);
     setProductionStockPick([]);
     setMillingDraftSavedAt(null);
@@ -17749,7 +17767,7 @@ Motivo (obligatorio):`, ""));
                     {millingDrafts.map((d) => (
                       <tr key={d.drying_report_id}>
                         <td style={{ fontWeight: 600 }}>{[d.lot_code ?? "—", ...(d.lotes_juntos ?? [])].join(" + ")}</td>
-                        <td>{(d.tuneles_juntos ?? []).length ? `Túneles ${[d.tunnel_number, ...(d.tuneles_juntos ?? [])].join(" + ")} 🔗` : `Túnel ${d.tunnel_number}`}</td>
+                        <td>{d.es_lote ? "Desde Stock" : (d.tuneles_juntos ?? []).length ? `Túneles ${[d.tunnel_number, ...(d.tuneles_juntos ?? [])].join(" + ")} 🔗` : `Túnel ${d.tunnel_number}`}</td>
                         <td>{d.rice_type === "CORRIENTE" ? "Corriente" : "0.11"}</td>
                         <td className="num">{Number(d.total_quintals ?? 0).enReal()}</td>
                         <td className="muted">{new Date(d.saved_at).toLocaleString("es-EC")}</td>
@@ -17763,7 +17781,7 @@ Motivo (obligatorio):`, ""));
                         <td style={{ textAlign: "right" }}>
                           <div style={{ display: "inline-flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
                             <button type="button" className="btnSecondary"
-                              onClick={() => continueMillingDraft(d.drying_report_id)}>
+                              onClick={() => continueMillingDraft(d.drying_report_id, d.es_lote)}>
                               Continuar / Finalizar lote
                             </button>
                             {!d.has_open_batch && (
@@ -18238,8 +18256,8 @@ Motivo (obligatorio):`, ""));
               </label>
               <div className="productionActionBar">
                 <button type="button" className="btnSecondary" onClick={() => saveMillingProcess().catch((e) => addToast(e.message, "error"))}
-                  disabled={!selectedProductionDrying || !millingPuedeGuardar}
-                  title={productionSource === "stock" ? "El origen desde stock no usa borradores: finaliza directo" : (!selectedProductionDrying ? "Selecciona una secadora para guardar el borrador" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Guardar borrador"))}
+                  disabled={!(productionSource === "stock" ? stockElegidos.length === 1 : selectedProductionDrying) || !millingPuedeGuardar}
+                  title={productionSource === "stock" && stockElegidos.length !== 1 ? "Elige un solo lote para guardarlo a medias" : (productionSource !== "stock" && !selectedProductionDrying ? "Selecciona una secadora para guardar el borrador" : (!millingPuedeGuardar ? "Ingresa el arroz pilado (Cantidad en QQ) o un subproducto (> 0)" : "Guardar borrador"))}
                   style={{ flex: "1 1 200px", maxWidth: 300, padding: "12px 16px", fontSize: 15, fontWeight: 700, borderRadius: 10, background: "transparent", border: "1.5px solid #2563eb", color: "#2563eb" }}>
                   💾 Guardar Proceso
                 </button>
