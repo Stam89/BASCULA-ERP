@@ -54,7 +54,7 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
-import { CajaHoja, claveMaq, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
+import { CajaHoja, claveMaq, type HojaCredito, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
 import { CajaResumenGlobal } from "./components/CajaResumenGlobal";
 
 // Módulos bajo demanda: si la pestaña quedó con una versión anterior y el
@@ -2923,7 +2923,7 @@ export function App() {
   const [liqVista, setLiqVista] = useState<"nueva" | "realizadas">("nueva");
 
   // ── Caja ──────────────────────────────────────────────────────────────────
-  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
+  const [cajaSubTab, setCajaSubTab] = useState<"resumen" | "nomina" | "anticipo" | "movimiento" | "gastos" | "sacos" | "mantenimiento" | "historial" | "venta_detalle" | "cuentas" | "fomentos">("resumen");
   // Caja: menú desplegable abierto de la barra de herramientas (solo UI).
   const [cajaMenu, setCajaMenu] = useState<null | "acciones" | "opciones">(null);
   // Lista de movimientos: por defecto solo lo registrado en Caja; los de otros módulos, con un botón.
@@ -5388,14 +5388,27 @@ export function App() {
       .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo })))).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, esMatrizActiva, authUser?.id]);
+  // 🚜 Lo que se registró a crédito en Transporte desde que se abrió esta caja: no mueve la gaveta pero se ve en la hoja.
+  const [creditosTransporte, setCreditosTransporte] = useState<HojaCredito[]>([]);
+  async function cargarCreditosTransporte() {
+    const permitidos = accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? [];
+    const abierta = dashboard.current_cash_register?.opened_at;
+    if (!esMatrizActiva || !abierta || !(authUser?.role_name === "ADMINISTRADOR" || permitidos.includes("Transporte / Cosechadora"))) { setCreditosTransporte([]); return; }
+    const r = await apiGet<{ cuentas: Array<{ id: string; acreedor: string; concepto: string | null; monto: number; saldo: number; origen: string | null; created_at: string }> }>("/campo/cxp");
+    setCreditosTransporte(r.cuentas.filter((c) => c.origen === "EGRESO_CREDITO" && c.created_at >= abierta).map((c) => ({
+      id: `campo-${c.id}`, amount: c.monto, balance: c.saldo, status: "CONFIRMED", created_at: c.created_at, description: c.concepto,
+      categoria: "Transporte", proveedor_nombre: c.acreedor, transporte: true
+    })));
+  }
   // 🧭 La hoja reconoce cobros, clientes y trabajos de cuadrilla: se leen al entrar a la Caja.
   useEffect(() => {
     if (activeTab !== "Caja" || !authUser) return;
+    cargarCreditosTransporte().catch(() => undefined);
     refreshReceivables().catch(() => undefined);
     apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle").then(setPersonasVentaDetalle).catch(() => undefined);
     if (esMatrizActiva) apiGet<CuadrillaActivity[]>("/cuadrilla/activities").then(setCuadActivities).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, esMatrizActiva, authUser?.id, activeAccionistaId]);
+  }, [activeTab, esMatrizActiva, authUser?.id, activeAccionistaId, dashboard.current_cash_register?.id]);
   // «¿De quién es este gasto?»: socios a los que la caja de la Matriz les puede pagar un gasto, y en qué categorías
   // (las que tienen flujo propio —mantenimiento, sacos, repuestos, activos, pagos enlazados— no).
   const sociosDelGasto = accionistas.filter((a) => a.tipo === "SOCIO" && a.id !== activeAccionistaId);
@@ -5706,6 +5719,9 @@ export function App() {
     if (!restringido) return true;
     return allowed.has(subTabKey(moduleKey, sub));
   }, [isAdmin, accionistas, activeAccionistaId]);
+
+  // 🧭 Lo que no cabe en una fila (sacos, fomentos, formulario completo…) se abre encima de la hoja: no se sale de ella.
+  const cajaEnCapa = cajaSubTab !== "resumen" && puedeVerSubTab("Caja", "resumen");
 
   useEffect(() => {
     if (authUser && !visibleTabs.includes(activeTab)) {
@@ -10918,6 +10934,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     setMovFormaPago("EFECTIVO"); setMovDeTransporte(false); setMovTrCategoria(""); setMovTrActivo("");
     setMovOpcionesOpen(false);
     await loadSubcategorias(); // refresca la memoria del datalist
+    setCajaSubTab("resumen");
     const gs = creado.gasto_por_socio;
     const pp = creado.pagado_por;
     addToast(
@@ -20435,8 +20452,8 @@ Motivo (obligatorio):`, ""));
                                   <span className="cj-menu-ico">🤝</span><span className="cj-menu-label">Cuentas entre socios</span>
                                 </button>
                               )}
-                              {esMatrizActiva && visibleTabs.includes("Nomina") && (
-                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); irADestino("Nomina", "pagos"); }}>
+                              {esMatrizActiva && (
+                                <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setCajaSubTab("nomina"); loadSemana().catch(() => undefined); }}>
                                   <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes</span>
                                 </button>
                               )}
@@ -20475,7 +20492,7 @@ Motivo (obligatorio):`, ""));
                       )}
 
                       {/* Título de la sección abierta (fuera de Movimientos / Nuevo movimiento) */}
-                      {cajaSubTab !== "resumen" && (() => {
+                      {cajaSubTab !== "resumen" && !cajaEnCapa && (() => {
                         const x = acciones.find((a) => a.key === cajaSubTab);
                         const titulo = x ? `${x.icon} ${x.label}` : cajaSubTab === "historial" ? "🔎 ¿Cuándo se hizo?"
                           : cajaSubTab === "movimiento" ? `📝 Formulario completo · ${movType === "INCOME" ? "ingreso" : "egreso"}` : cajaSubTab === "mantenimiento" ? "📋 Hoja de vida y repuestos" : "";
@@ -20629,7 +20646,7 @@ Motivo (obligatorio):`, ""));
                 <div className="cj-work">
 
                 {/* ── Movimientos ── */}
-                {cajaSubTab === "resumen" && (
+                {(cajaSubTab === "resumen" || cajaEnCapa) && (
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
                       <span>📋 Hoja de movimientos de la sesión</span>
@@ -20695,7 +20712,7 @@ Motivo (obligatorio):`, ""));
                       return (
                         <CajaHoja
                           movimientos={cashMovements}
-                          creditos={cajaCreditos}
+                          creditos={[...cajaCreditos, ...creditosTransporte]}
                           verOtros
                           origenExterno={origenExternoCaja}
                           saldoInicial={Number(dashboard.current_cash_register?.opening_balance ?? 0)}
@@ -20715,7 +20732,7 @@ Motivo (obligatorio):`, ""));
                           clientes={[...new Set(personasVentaDetalle.map((x) => x.full_name))]}
                           descuentoQq={descuentoQqDefecto}
                           socios={sociosDelGasto.map((a) => ({ id: a.id, name: a.name }))}
-                          onRefrescar={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); await refreshReceivables().catch(() => undefined); }}
+                          onRefrescar={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); await Promise.all([refreshReceivables(), cargarCreditosTransporte()]).catch(() => undefined); }}
                           onError={(m) => addToast(m, "error")}
                           onFormularioCompleto={abrirFormularioDesdeHoja}
                           onAnular={(m) => reverseCashMovement(m as CashMovement)}
@@ -20728,9 +20745,24 @@ Motivo (obligatorio):`, ""));
                   </div>
                 )}
 
+                {/* Lo demás va en un panel sobre la hoja. */}
+                <div className={cajaEnCapa ? "cj-capa" : undefined}>
+                <div className={cajaEnCapa ? "cj-capa__caja" : undefined}>
+                {cajaEnCapa && (
+                  <div className="cj-capa__head">
+                    <strong>{({ anticipo: "🌾 Arroz en cáscara", venta_detalle: "🛒 Venta Detalle", fomentos: "🌾 Fomentos", sacos: "📦 Sacos", mantenimiento: "🔧 Mantenimiento de equipos",
+                      historial: "🔎 ¿Cuándo se hizo?", nomina: "🗓️ Pagar nómina", gastos: "Gastos", cuentas: "Cuentas" } as Record<string, string>)[cajaSubTab]
+                      ?? `📝 Formulario completo · ${movType === "INCOME" ? "ingreso" : "egreso"}`}</strong>
+                    <button type="button" className="btnSecondary" onClick={() => setCajaSubTab("resumen")}>✕ Volver a la hoja</button>
+                  </div>
+                )}
+                {cajaSubTab === "nomina" && esMatrizActiva && (
+                  <PagarSemana vista={semanaVista} cargando={semanaBusy} hasta={semanaHasta} onHasta={setSemanaHasta}
+                    cajaAbierta={!!dashboard.current_cash_register} onAbrirCaja={async () => setCajaSubTab("resumen")} onPagar={pagarSemana} />
+                )}
                 {/* ── Anticipo ── */}
                 {cajaSubTab === "anticipo" && (
-                  <form onSubmit={(event) => submitCajaAnticipo(event).then(() => setAnticipoFarmerId("")).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
+                  <form onSubmit={(event) => submitCajaAnticipo(event).then(() => { setAnticipoFarmerId(""); setCajaSubTab("resumen"); }).catch((e) => addToast(e.message, "error"))} style={{ background: "white", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "24px" }}>
                     {(() => {
                       // 🌾 Arroz en cáscara (mejora 3): cualquier agricultor (o uno nuevo). Lo que se le debe se paga
                       // primero; lo que pase queda de anticipo y se descuenta solo en su próxima liquidación.
@@ -22036,6 +22068,8 @@ Motivo (obligatorio):`, ""));
 
                   </div>
                 )}
+                </div>
+                </div>
                 </div>
               </>
             )}

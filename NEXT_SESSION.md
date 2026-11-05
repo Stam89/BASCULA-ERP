@@ -2,7 +2,16 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 🔐 Revisión de permisos (2026-11-04)
+## Último cambio: 🧭 Todo desde la hoja de Caja (2026-11-04)
+- Pedido del dueño: «que todo se pueda hacer en la Hoja de movimientos». `components/cajaHojaLeer.ts` (pura) entiende lo escrito como en el Excel: `leerVenta` («20 lb de 0,11»), `leerCuadrilla` («cuadrilla embarque 315 x 0,20»), `leerPersona` (no adivina con dos candidatas), `leerResponsable`, `categoriaPorPalabras`.
+- `CajaHoja`: «¿Para qué?» es el enrutador (tipos nuevos: venta, cuadrilla, fondo, agricultor, cobro, pago); lo que falte se pide en `.cjh-extra`, debajo de la fila. 💳 abre «¿Cómo se pagó?»: gaveta, banco, lo pagó un socio o a crédito. De Transporte con socio o crédito va a `/campo/mantenimientos/nota` o `/campo/movimientos` y se ve en la hoja como «no sale de caja» (`creditosTransporte`).
+- **Cola**: Enter limpia la fila al instante y `procesarCola` guarda en orden; una sola relectura al final (`onRefrescar`). `guardarFilaHoja` ya no relee la caja. Lo que falla queda en rojo con Corregir, Reintentar y Quitar. Los inputs ya no se bloquean.
+- Servidor: `POST /cuadrilla/pago-directo` (nace el registro con origen CAJA y se paga solo ese; al anular el pago el registro se borra en `reabrirPagoNomina`; tarifa = monto/cantidad, anotada si difiere del catálogo). `/advances`: `pagado_con_banco` y `fecha`. `/sales/retail`: `fecha`.
+- Lo que no cabe en una fila (sacos, fomentos, mantenimiento, formulario completo, nómina semanal) abre `.cj-capa` sobre la hoja (`cajaEnCapa`); `cajaSubTab` «nomina» muestra `PagarSemana`. Las cajas de socios también tienen «¿Para qué?» (sin cuadrilla, Transporte ni máquinas).
+- Sin imprimir: la venta desde la hoja no saca ticket; para ticket, Otros registros › Venta Detalle. Cobros y pagos de cuentas solo con fecha de hoy y solo cuentas de la caja activa (el cobro de un cliente de un socio sigue en Por Cobrar).
+- Simulacro `hoja_todo` (30). `venta_detalle_por_asignar` A9 y D5 fallan en la copia por la venta real de polvillo $14 por asignar del 04/11 (ROVINSON con -18.10 QQ).
+
+## Cambio anterior: 🔐 Revisión de permisos (2026-11-04)
 - Pedido del dueño: revisar los permisos como profesional. Se cruzaron las 565 rutas del servidor con la matriz y se comparó, ruta por ruta, qué podía y qué puede cada una de las 14 cuentas reales antes de publicar.
 - **Sesiones** (`require-auth.ts`): `sesionVigente` lee rol y activo de la base en cada petición (antes un admin degradado o desactivado seguía 12 h, y en `/auth` podía crear usuarios). `users.sesiones_desde` (migración 20261137): cambiar la clave o `POST /auth/users/:id/cerrar-sesiones` corta las sesiones; `PUT /auth/me/password` devuelve token nuevo. Un fallo de la base da 500, no 401 (si no, la web sacaría a todos). El motivo del cierre sale en la pantalla de entrada (`leerAvisoDeSesion`).
 - **Cerrado por defecto**: escritura sin regla = 403 para operadores. Prefijos sin módulo a propósito en `ESCRITURA_SIN_MODULO`, lecturas libres en `LECTURA_SIN_MODULO`. `cobertura-permisos.test.ts` falla si se monta un prefijo sin clasificar. Decisiones puras en `rechazoDeEscritura` y `rechazoDeLectura`.
