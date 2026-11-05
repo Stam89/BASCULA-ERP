@@ -9,7 +9,7 @@ import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { calculateNetWeight, calculateQuintals } from "../../utils/rice-formulas.js";
 import { loteAfectaInventarioPropio } from "../../services/patrimonial-inventory.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirModuloEn, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { hoyEc } from "../../utils/fechas.js";
 
 export const weighingRouter = Router();
@@ -66,6 +66,8 @@ weighingRouter.put("/:id/accionista", asyncRoute(async (req, res) => {
     if (!ticket.rowCount) throw new ApiError(404, "Ingreso de materia prima no encontrado");
     const actual = ticket.rows[0];
     if (actual.accionista_id === body.accionista_id) return { ...actual, sin_cambios: true };
+    await exigirModuloEn(req, actual.accionista_id, "Bascula");
+    await exigirModuloEn(req, body.accionista_id, "Bascula");
 
     // Si ya entró a un lote, mover solo este pesaje descuadraría el lote: para
     // eso está el traspaso de lote, que además reparte la plata ya pagada.

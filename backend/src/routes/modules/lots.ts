@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirModuloEn, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { loteEsMaquila } from "../../utils/maquila.js";
 
 export const lotsRouter = Router();
@@ -36,6 +36,8 @@ lotsRouter.put("/:id/accionista", asyncRoute(async (req, res) => {
     if (!lotResult.rowCount) throw new ApiError(404, "Lote no encontrado");
     const lot = lotResult.rows[0];
     if (lot.accionista_id === body.accionista_id) return { ...lot, sin_cambios: true };
+    await exigirModuloEn(req, lot.accionista_id, "Bascula");
+    await exigirModuloEn(req, body.accionista_id, "Bascula");
 
     const destino = await client.query(
       "SELECT id, name FROM accionistas WHERE id = $1 AND is_active = true",

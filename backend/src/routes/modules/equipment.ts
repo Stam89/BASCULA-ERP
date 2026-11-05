@@ -15,7 +15,7 @@ import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuesto
 import { resolverProveedor } from "../../services/proveedores.js";
 import { cuentasMatrizTransporte, registrarGastoTransporte } from "../../services/gasto-transporte.js";
 import { registrarPagoConBanco } from "../../services/pagado-con-banco.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Agrega la URL firmada (válida 1 hora) para ver la foto del recibo en un
 // <img src> sin exponer el JWT de sesión. receipt_photo_url se guarda como
@@ -174,7 +174,7 @@ equipmentRouter.post("/categories", asyncRoute(async (req, res) => {
 // referencial por tipo: se BLOQUEA si ya está en uso en el histórico de
 // mantenimientos (equipment_maintenance) o, para un ÁREA, si tiene secciones
 // hijas. En ese caso, usar "Desactivar".
-equipmentRouter.delete("/categories/:id", asyncRoute(async (req, res) => {
+equipmentRouter.delete("/categories/:id", requireAdmin, asyncRoute(async (req, res) => {
   const cur = await pool.query(
     "SELECT id, kind, nombre, area FROM maintenance_categories WHERE id = $1",
     [req.params.id]
@@ -848,7 +848,7 @@ equipmentRouter.get("/maintenance/all", asyncRoute(async (req, res) => {
 }));
 
 // DELETE equipo (con lógica inteligente)
-equipmentRouter.delete("/:id", asyncRoute(async (req, res) => {
+equipmentRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
   const equip = await pool.query("SELECT * FROM equipment WHERE id = $1", [req.params.id]);
   if (!equip.rows[0]) { res.status(404).json({ error: "Equipo no encontrado" }); return; }
 

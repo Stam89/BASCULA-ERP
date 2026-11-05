@@ -4,6 +4,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { liquidationLines, saleTicketLines, weighingTicketLines } from "../../utils/print-documents.js";
+import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const documentsRouter = Router();
 
@@ -14,8 +15,8 @@ documentsRouter.get("/weighing-ticket/:id/print-data", asyncRoute(async (req, re
      JOIN lots l ON l.id = t.lot_id
      LEFT JOIN farmers f ON f.id = t.farmer_id
      LEFT JOIN vehicles v ON v.id = t.vehicle_id
-     WHERE t.id = $1`,
-    [req.params.id]
+     WHERE t.id = $1 AND t.accionista_id = $2`,
+    [req.params.id, (req as AuthenticatedRequest).accionistaId]
   );
   if (!result.rowCount) throw new ApiError(404, "Documento no encontrado");
   res.json({ document_type: "WEIGHING_TICKET", lines: weighingTicketLines(result.rows[0]) });
@@ -27,8 +28,8 @@ documentsRouter.get("/liquidation/:id/print-data", asyncRoute(async (req, res) =
      FROM liquidations l
      JOIN farmers f ON f.id = l.farmer_id
      JOIN lots lot ON lot.id = l.lot_id
-     WHERE l.id = $1`,
-    [req.params.id]
+     WHERE l.id = $1 AND l.accionista_id = $2`,
+    [req.params.id, (req as AuthenticatedRequest).accionistaId]
   );
   if (!result.rowCount) throw new ApiError(404, "Documento no encontrado");
   res.json({ document_type: "LIQUIDATION", lines: liquidationLines(result.rows[0]) });
@@ -39,8 +40,8 @@ documentsRouter.get("/sale/:id/print-data", asyncRoute(async (req, res) => {
     `SELECT s.*, c.full_name AS customer_name
      FROM sales s
      LEFT JOIN customers c ON c.id = s.customer_id
-     WHERE s.id = $1`,
-    [req.params.id]
+     WHERE s.id = $1 AND s.accionista_id = $2`,
+    [req.params.id, (req as AuthenticatedRequest).accionistaId]
   );
   if (!result.rowCount) throw new ApiError(404, "Documento no encontrado");
   res.json({ document_type: "SALE_TICKET", lines: saleTicketLines(result.rows[0]) });

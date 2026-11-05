@@ -284,7 +284,7 @@ prestamosRouter.post("/:id/pagadas-fuera", asyncRoute(async (req, res) => {
 }));
 
 // Deshacer: la cuota vuelve a pendiente (solo las pagadas por fuera; las de Caja se anulan en Caja).
-prestamosRouter.post("/:id/cuotas/:cuotaId/deshacer-fuera", asyncRoute(async (req, res) => {
+prestamosRouter.post("/:id/cuotas/:cuotaId/deshacer-fuera", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const acc = accId(req);
   await inTransaction(async (client) => {
     const p = await prestamoDelAccionista(client, String(req.params.id), acc, true);

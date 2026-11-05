@@ -26,7 +26,20 @@ const RESOURCE_LABELS: Record<string, string> = {
   fomentos: "Fomento",
   farmers: "Agricultor",
   settings: "Configuración",
-  auth: "Usuarios"
+  auth: "Usuarios",
+  orders: "Pedido",
+  "guias-remision": "Guía de remisión",
+  purchases: "Compra",
+  suppliers: "Proveedor",
+  labor: "Nómina",
+  "nomina-semanal": "Nómina semanal",
+  "admin-payroll": "Sueldo administrativo",
+  cuadrilla: "Cuadrilla",
+  selection: "Selección",
+  campo: "Transporte y Cosechadora",
+  prestamos: "Préstamo",
+  repuestos: "Repuesto",
+  tickets: "Ticket de báscula"
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -91,14 +104,15 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
   res.on("finish", () => {
     const user = (req as AuthenticatedRequest).user;
     if (!user) return; // sin usuario identificado (p.ej. sync de la app Android)
-    if (res.statusCode >= 400) return; // solo acciones exitosas
+    const denegado = res.statusCode === 403; // intentó algo sin permiso: es justo lo que hay que poder revisar
+    if (res.statusCode >= 400 && !denegado) return; // solo acciones exitosas
     if (!segment || segment === "audit") return;
     if (res.locals.envioRepetido) return; // reintento de algo ya guardado: no pasó nada nuevo
 
     const label = RESOURCE_LABELS[segment] || segment;
-    const verb = method === "POST" ? "Creó" : method === "PUT" ? "Actualizó" : method === "DELETE" ? "Eliminó" : method;
-    const summary = `${verb} · ${label}`;
-    const action = method === "POST" ? "CREAR" : method === "PUT" ? "ACTUALIZAR" : method === "DELETE" ? "ELIMINAR" : method;
+    const verb = method === "POST" ? "Creó" : method === "PUT" ? "Actualizó" : method === "DELETE" ? "Eliminó" : "Modificó";
+    const summary = denegado ? `Sin permiso · ${label}` : (typeof res.locals.auditResumen === "string" && res.locals.auditResumen) || `${verb} · ${label}`;
+    const action = denegado ? "DENEGADO" : method === "POST" ? "CREAR" : method === "PUT" ? "ACTUALIZAR" : method === "DELETE" ? "ELIMINAR" : "MODIFICAR";
     const recordId = capturedId && UUID_RE.test(capturedId) ? capturedId : null;
 
     pool.query(

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import type { AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { calcularResultadoMensual, CATEGORIAS_NO_OPERATIVAS } from "../../services/resultado-mensual.js";
 import { inTransaction } from "../../db/transaction.js";
 
@@ -250,7 +250,7 @@ resultadoMensualRouter.post("/manual", asyncRoute(async (req, res) => {
   res.status(201).json(r.rows[0]);
 }));
 
-resultadoMensualRouter.delete("/manual/:id", asyncRoute(async (req, res) => {
+resultadoMensualRouter.delete("/manual/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   await exigirMatriz(req as AuthenticatedRequest);
   await pool.query("DELETE FROM resultado_mensual_manual WHERE id = $1", [req.params.id]);
   res.json({ ok: true });

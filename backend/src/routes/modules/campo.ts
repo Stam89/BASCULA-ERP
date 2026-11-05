@@ -1069,7 +1069,7 @@ campoRouter.post("/mantenimientos/nota", asyncRoute(async (req, res) => {
 // aplica a movimientos manuales y mantenimientos. Los registros ligados a
 // servicios, nomina, CxP, vales, transferencias o cierres tienen flujos propios
 // y se bloquean para no desajustar sus modulos de origen.
-campoRouter.post("/movimientos/:id/reversar", asyncRoute(async (req, res) => {
+campoRouter.post("/movimientos/:id/reversar", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const mov = (await client.query(
@@ -1694,7 +1694,7 @@ campoRouter.patch("/tarifas-operador/:id", asyncRoute(async (req, res) => {
   res.json(row);
 }));
 
-campoRouter.delete("/tarifas-operador/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/tarifas-operador/:id", requireAdmin, asyncRoute(async (req, res) => {
   const r = await pool.query("DELETE FROM campo_tarifas_operador WHERE id = $1", [req.params.id]);
   if (!r.rowCount) throw new ApiError(404, "Tarifa no encontrada");
   res.json({ ok: true });
@@ -3528,7 +3528,7 @@ campoRouter.patch("/documentos/:id", asyncRoute(async (req, res) => {
   res.json((await pool.query(`${SELECT_DOCS} WHERE d.id = $1`, [req.params.id])).rows[0]);
 }));
 
-campoRouter.delete("/documentos/:id", asyncRoute(async (req, res) => {
+campoRouter.delete("/documentos/:id", requireAdmin, asyncRoute(async (req, res) => {
   const r = await pool.query("DELETE FROM campo_documentos WHERE id = $1", [req.params.id]);
   if (!r.rowCount) throw new ApiError(404, "Documento no encontrado");
   res.json({ ok: true });

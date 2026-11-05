@@ -14,6 +14,7 @@ import {
 } from "../../services/recuperacion-clave.js";
 import { APP_MODULES, requireAdmin, requireAuth, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { claveEsDebil, hashToken, mensajeCodigoIngreso, nuevoTokenDispositivo, problemaDeClave, vieneDeInternet } from "../../services/acceso-seguro.js";
+import { resumenCambioPermisos } from "../../services/resumen-permisos.js";
 
 /** Claves nuevas: además del mínimo, se rechazan las obvias. */
 function exigirClaveSegura(clave: string | undefined, usuario?: string | null): void {
@@ -105,7 +106,7 @@ function correoDelBody(valor: string | undefined): string | null | undefined {
 authRouter.get("/users", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   await ensureUserColumns();
   const result = await pool.query(
-    `SELECT u.id, u.name, u.username, u.cedula, u.recovery_email, u.is_active, u.created_at, u.allowed_modules, r.name AS role_name,
+    `SELECT u.id, u.name, u.username, u.cedula, u.recovery_email, u.is_active, u.created_at, u.allowed_modules, u.ultimo_ingreso_at, r.name AS role_name,
             COALESCE(array_agg(ua.accionista_id) FILTER (WHERE ua.accionista_id IS NOT NULL), '{}') AS accionista_ids,
             COALESCE(
               json_agg(json_build_object('accionista_id', ua.accionista_id, 'modules', ua.allowed_modules))
@@ -256,6 +257,8 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
        allowed_modules = COALESCE($6, allowed_modules),
        cedula = COALESCE($7, cedula),
        recovery_email = CASE WHEN $9::boolean THEN $10::text ELSE recovery_email END,
+       -- Clave nueva = las sesiones abiertas (el celular perdido, otra PC) dejan de servir.
+       sesiones_desde = CASE WHEN $3::text IS NOT NULL THEN now() ELSE sesiones_desde END,
        updated_at = now()
      WHERE id = $8
      RETURNING id, name, username, cedula, recovery_email, is_active, allowed_modules`,
@@ -266,7 +269,22 @@ authRouter.put("/users/:id", requireAuth, requireAdmin, asyncRoute(async (req, r
   if (!result.rowCount) {
     throw new ApiError(404, "Usuario no encontrado");
   }
+  const quien = result.rows[0].name;
+  res.locals.auditResumen = [
+    body.password ? `Cambió la clave de ${quien}` : null,
+    body.is_active === false ? `Desactivó a ${quien}` : body.is_active === true ? `Activó a ${quien}` : null,
+    body.role ? `Puso a ${quien} como ${body.role}` : null
+  ].filter(Boolean).join(" · ") || `Actualizó los datos de ${quien}`;
   res.json(result.rows[0]);
+}));
+
+// Cerrar las sesiones abiertas de otro usuario (celular perdido, alguien que ya no trabaja). No cambia su clave.
+authRouter.post("/users/:id/cerrar-sesiones", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+  if ((req as AuthenticatedRequest).user?.id === req.params.id) throw new ApiError(400, "Para cerrar tu propia sesión usa «Salir».");
+  const r = await pool.query("UPDATE users SET sesiones_desde = now(), updated_at = now() WHERE id = $1 RETURNING name", [req.params.id]);
+  if (!r.rowCount) throw new ApiError(404, "Usuario no encontrado");
+  res.locals.auditResumen = `Cerró las sesiones de ${r.rows[0].name}`;
+  res.json({ ok: true });
 }));
 
 // ── Accionistas (solo administradores) ──────────────────────────────────────
@@ -352,21 +370,34 @@ authRouter.put("/users/:id/accionistas", requireAuth, requireAdmin, asyncRoute(a
     accionista_ids: z.array(z.string().uuid()).optional()
   }).parse(req.body);
 
-  const user = await pool.query("SELECT 1 FROM users WHERE id = $1", [req.params.id]);
+  const user = await pool.query("SELECT name FROM users WHERE id = $1", [req.params.id]);
   if (!user.rowCount) throw new ApiError(404, "Usuario no encontrado");
 
   const asignaciones = body.accionistas
     ?? (body.accionista_ids ?? []).map((id) => ({ accionista_id: id, modules: [] as string[] }));
 
-  await pool.query("DELETE FROM user_accionistas WHERE user_id = $1", [req.params.id]);
-  for (const a of asignaciones) {
-    await pool.query(
-      `INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (user_id, accionista_id) DO UPDATE SET allowed_modules = EXCLUDED.allowed_modules`,
-      [req.params.id, a.accionista_id, a.modules]
-    );
-  }
+  // Todo o nada: si fallaba a medias, el usuario se quedaba sin ningún acceso.
+  const cambios = await inTransaction(async (client) => {
+    const antes = (await client.query(
+      `SELECT a.name, ua.allowed_modules AS modules FROM user_accionistas ua JOIN accionistas a ON a.id = ua.accionista_id WHERE ua.user_id = $1`,
+      [req.params.id]
+    )).rows;
+    await client.query("DELETE FROM user_accionistas WHERE user_id = $1", [req.params.id]);
+    for (const a of asignaciones) {
+      await client.query(
+        `INSERT INTO user_accionistas (user_id, accionista_id, allowed_modules)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (user_id, accionista_id) DO UPDATE SET allowed_modules = EXCLUDED.allowed_modules`,
+        [req.params.id, a.accionista_id, a.modules]
+      );
+    }
+    const despues = (await client.query(
+      `SELECT a.name, ua.allowed_modules AS modules FROM user_accionistas ua JOIN accionistas a ON a.id = ua.accionista_id WHERE ua.user_id = $1`,
+      [req.params.id]
+    )).rows;
+    return resumenCambioPermisos(antes, despues);
+  });
+  res.locals.auditResumen = `Permisos de ${user.rows[0].name}: ${cambios || "sin cambios"}`;
   // OJO: responder JSON, no 204 vacío: el frontend siempre parsea res.json()
   // y un cuerpo vacío le lanzaba "Unexpected end of JSON input".
   res.json({ ok: true, asignados: asignaciones.length });
@@ -480,6 +511,16 @@ const LOGIN_MAX_FALLOS_USUARIO = 10;
 const fallosPorUsuario = new LimitadorVentana(LOGIN_MAX_FALLOS_USUARIO, LOGIN_WINDOW_MS);
 const claveUsuario = (u: string) => u.trim().toLowerCase();
 
+// Quién entró y quién falló la clave (solo usuarios que existen: lo escrito en un usuario inexistente puede ser una clave).
+function registrarIngreso(user: { id: string; name: string }, ip: string, entro: boolean): void {
+  if (entro) pool.query("UPDATE users SET ultimo_ingreso_at = now() WHERE id = $1", [user.id]).catch(() => undefined);
+  pool.query(
+    `INSERT INTO audit_logs (user_id, username, action, table_name, method, path, status_code, summary, new_data)
+     VALUES ($1, $2, $3, 'auth', 'POST', '/api/v1/auth/login', $4, $5, $6)`,
+    [user.id, user.name, entro ? "INGRESO" : "INGRESO_FALLIDO", entro ? 200 : 401, entro ? "Entró al sistema" : "Clave incorrecta al entrar", JSON.stringify({ ip })]
+  ).catch(() => undefined);
+}
+
 authRouter.post("/login", asyncRoute(async (req, res) => {
   await ensureUserColumns();
   const ip = req.ip ?? "desconocida";
@@ -516,6 +557,7 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
   if (!valid) {
     recordLoginFailure(ip);
     fallosPorUsuario.registrar(claveUsuario(body.username));
+    registrarIngreso(user, ip, false);
     throw new ApiError(401, "Usuario o clave incorrectos");
   }
   loginFailures.delete(ip);
@@ -565,6 +607,7 @@ authRouter.post("/login", asyncRoute(async (req, res) => {
     }
   }
 
+  registrarIngreso(user, ip, true);
   res.json({
     token: signToken(publicUser),
     user: publicUser,
@@ -621,6 +664,7 @@ authRouter.post("/login/verificar", asyncRoute(async (req, res) => {
       [user.id, hashToken(dispositivo), (body.descripcion ?? String(req.headers["user-agent"] ?? "")).slice(0, 200)]
     );
   }
+  registrarIngreso(user, ip, true);
   res.json({
     token: signToken(publicUser),
     user: publicUser,
@@ -655,10 +699,13 @@ authRouter.put("/me/password", requireAuth, asyncRoute(async (req, res) => {
   loginFailures.delete(ip);
   const passwordHash = await bcrypt.hash(body.password, 10);
   await inTransaction(async (client) => {
-    await client.query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1", [user.id, passwordHash]);
+    await client.query("UPDATE users SET password_hash = $2, sesiones_desde = now(), updated_at = now() WHERE id = $1", [user.id, passwordHash]);
     await client.query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
   });
-  res.json({ ok: true, message: "Clave cambiada." });
+  res.locals.auditResumen = "Cambió su propia clave";
+  // Las demás sesiones de este usuario se cierran; esta sigue con un token nuevo.
+  const { iat: _iat, exp: _exp, ...sinFechas } = user as typeof user & { iat?: number; exp?: number };
+  res.json({ ok: true, message: "Clave cambiada.", token: signToken(sinFechas) });
 }));
 
 // ── Recuperación de clave por correo ────────────────────────────────────────
@@ -785,7 +832,7 @@ authRouter.post("/reset-password", asyncRoute(async (req, res) => {
       [token.id]
     );
     if (!usado.rowCount) throw new ApiError(400, MENSAJE_CODIGO_INVALIDO);
-    await client.query("UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1", [user.id, passwordHash]);
+    await client.query("UPDATE users SET password_hash = $2, sesiones_desde = now(), updated_at = now() WHERE id = $1", [user.id, passwordHash]);
     await client.query("UPDATE password_reset_tokens SET used_at = now() WHERE user_id = $1 AND used_at IS NULL", [user.id]);
   });
   limiteFallosCodigo.limpiar(ip);

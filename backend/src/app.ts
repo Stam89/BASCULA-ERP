@@ -9,7 +9,7 @@ import { errorHandler, notFound } from "./http/error-handler.js";
 import { medioPagoMiddleware } from "./http/medio-pago.js";
 import { routes } from "./routes/index.js";
 import { basculaSyncRouter } from "./routes/modules/bascula-sync.js";
-import { verifyToken } from "./auth/jwt.js";
+import { sesionVigente } from "./auth/require-auth.js";
 import { verifyUploadSignature } from "./auth/upload-sign.js";
 import { env } from "./config/env.js";
 import { origenPermitido } from "./services/acceso-seguro.js";
@@ -55,12 +55,12 @@ app.use("/api", (_req, res, next) => {
 // un <img src> pueda mostrarlos, como URL FIRMADA de corta duración
 // (?exp=...&sig=..., ver auth/upload-sign.ts). Ya NO se acepta el JWT por
 // query param: quedaba grabado en los logs y abría la sesión completa.
-app.use("/uploads", (req, res, next) => {
+app.use("/uploads", async (req, res, next) => {
   const header = req.headers.authorization;
   const fromHeader = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
   try {
     if (fromHeader) {
-      verifyToken(fromHeader);
+      await sesionVigente(fromHeader);
       next();
       return;
     }
