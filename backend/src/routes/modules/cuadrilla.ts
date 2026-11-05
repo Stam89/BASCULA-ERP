@@ -5,7 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
@@ -974,6 +974,54 @@ cuadrillaRouter.post("/entries", asyncRoute(async (req, res) => {
       marcaId: body.marca_saco_recuperado, destino: body.destino_saco
     });
     return { ...result.rows[0], ...(saco ?? {}) };
+  });
+  res.status(201).json(out);
+}));
+
+// 👷 Desde la hoja de Caja (pedido del dueño 2026-11-04): trabajo de cuadrilla que se paga en el momento. Nace el registro
+// y se paga SOLO ese, en una transacción (lo demás pendiente de esa cuadrilla no se toca). Origen CAJA: si se anula el
+// pago, el registro se va con él. La tarifa puede ser otra que la del catálogo (incentivo): queda anotada.
+cuadrillaRouter.post("/pago-directo", asyncRoute(async (req, res) => {
+  const body = z.object({
+    cash_register_id: z.string().uuid(),
+    activity_id: z.string().uuid(),
+    worker_name: z.string().trim().min(2).max(120).default("CUADRILLA"),
+    quantity: z.number().positive().max(10_000_000),
+    monto: z.number().positive().max(10_000_000).transform(round2),
+    description: z.string().trim().max(400).optional(),
+    // Día del pago, si no es hoy (la hoja de Caja). El trabajo queda en ese mismo día.
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+  }).parse(req.body);
+  await exigirMatrizCuadrilla(req);
+  const auth = req as AuthenticatedRequest;
+  const socioId = await reqCuadrillaSocioId(req);
+  const activity = await getEffectiveActivityById(pool, body.activity_id, socioId, false);
+  if (!activity) throw new ApiError(404, "Actividad no encontrada");
+  const tarifa = Math.round((body.monto / body.quantity) * 10000) / 10000;
+  const tarifaCatalogo = Number(activity.unit_rate);
+  const notas = [body.description, Math.abs(tarifa - tarifaCatalogo) > 0.00005 ? `Tarifa pagada $${tarifa} (catálogo $${tarifaCatalogo})` : ""].filter(Boolean).join(" · ") || null;
+  const out = await inTransaction(async (client) => {
+    await exigirCajaAbiertaDelAccionista(client, body.cash_register_id, auth.accionistaId);
+    const fechaMov = await fechaValidaDeCaja(client, body.cash_register_id, body.fecha);
+    await avisarSobregiro(client, body.cash_register_id, body.monto, req);
+    const entrada = (await client.query(
+      `INSERT INTO cuadrilla_entries
+         (work_date, activity_id, activity_name, worker_name, quantity, unit_rate, subtotal, notes, created_by, origen, paid_at, cash_register_id)
+       VALUES (COALESCE($1::date, (now() AT TIME ZONE 'America/Guayaquil')::date), $2, $3, $4, $5, $6, $7, $8, $9, 'CAJA', now(), $10)
+       RETURNING id`,
+      [fechaMov, activity.id, activity.name, body.worker_name.toUpperCase(), body.quantity, tarifa, body.monto, notas, auth.user?.id ?? null, body.cash_register_id]
+    )).rows[0];
+    const mov = (await client.query(
+      `INSERT INTO cash_movements (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by)
+       VALUES ($1, 'EXPENSE', 'PAGO_MANO_OBRA', 'cuadrilla_entries', $2, $3, $4, $5) RETURNING id`,
+      [body.cash_register_id, entrada.id, body.monto,
+       `Pago cuadrilla ${body.worker_name.toUpperCase()}: ${activity.name} ${body.quantity} × $${tarifa}`.slice(0, 500), auth.user?.id ?? null]
+    )).rows[0];
+    if (fechaMov) {
+      await fecharMovimientosDeCaja(client, body.cash_register_id, fechaMov);
+      await client.query("UPDATE cuadrilla_entries SET paid_at = (SELECT created_at FROM cash_movements WHERE id = $2) WHERE id = $1", [entrada.id, mov.id]);
+    }
+    return { entry_id: entrada.id, cash_movement_id: mov.id, actividad: activity.name, total: body.monto, tarifa };
   });
   res.status(201).json(out);
 }));

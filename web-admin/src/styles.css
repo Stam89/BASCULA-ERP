@@ -6915,3 +6915,19 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
   .cjr-dias, .cjr-movs { font-size: 12px; }
   .cjr-dias th, .cjr-dias td, .cjr-movs th, .cjr-movs td { padding: 4px 5px; }
 }
+
+/* 🧭 Hoja de Caja: lo que se guarda en cola, lo que se pide debajo de la fila y «¿Cómo se pagó?» (2026-11-04). */
+.cjh-tabla tr.cjh-cola td { background: #f8fafc !important; color: #64748b; font-style: italic; }
+.cjh-tabla tr.cjh-cola.is-error td { background: #fef2f2 !important; color: #991b1b; font-style: normal; }
+.cjh-tabla tr.cjh-extra td { background: #fffbeb !important; padding: 6px 8px; }
+.cjh-extra__fila { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.cjh-extra__fila label { display: flex; align-items: center; gap: 4px; margin: 0; flex: 0 1 150px; min-width: 0; }
+.cjh-extra__fila label.is-ancho { flex: 1 1 260px; }
+.cjh-extra__fila label > span { font-size: 11px; font-weight: 700; color: #64748b; white-space: nowrap; }
+.cjh-extra__fila .cjh-combo { flex: 1; min-width: 0; }
+.cjh-extra__fila input { padding: 4px 6px; font-size: 12px; min-width: 0; width: 100%; }
+.cjh-extra__nota { font-size: 12px; color: #92400e; }
+.cjh-opcion { padding: 3px 10px; font-size: 12px; border-radius: 999px; border: 1px solid #cbd5e1; background: #fff; color: #475569; cursor: pointer; }
+.cjh-opcion.is-on { border-color: #0f766e; color: #0f766e; background: #f0fdfa; font-weight: 700; }
+.cjh-pagos li { cursor: pointer; }
+@media (max-width: 700px) { .cjh-tabla tr.cjh-extra td { grid-column: 1 / -1; } }

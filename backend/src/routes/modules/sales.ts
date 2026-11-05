@@ -6,7 +6,7 @@ import { lockInventoryStock } from "../../db/inventory-lock.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
@@ -96,6 +96,8 @@ const retailSaleInputSchema = z.object({
   mode: z.enum(["DOLARES", "LIBRA", "QQ"]),
   input_amount: z.number().positive(),
   medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+  // Día de la venta, si no es hoy (la hoja de Caja).
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   // «¿De quién es el arroz?»: la caja (casi siempre la Matriz) vende arroz de OTRO socio. La venta y el inventario son
   // de ese socio; el dinero entra a esta caja (COBRO_POR_SOCIO) y esta caja queda debiéndoselo (cobro_por_socio).
   dueno_id: z.string().uuid().optional(),
@@ -455,6 +457,21 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
     throw new ApiError(400, "«Decidir después» no se carga a la cuenta de la persona: para eso elige de quién es el arroz.");
   }
   const result = await inTransaction(async (client) => {
+    const fechaVenta = await fechaValidaDeCaja(client, body.cash_register_id, body.fecha);
+    const hecha = await ventaDetalleSegunPago(client);
+    // Otro día: el dinero, la venta y su salida de inventario quedan en ese día.
+    if (fechaVenta) {
+      await fecharMovimientosDeCaja(client, body.cash_register_id, fechaVenta);
+      const dia = "($2::date + (now() AT TIME ZONE 'America/Guayaquil')::time) AT TIME ZONE 'America/Guayaquil'";
+      await client.query(`UPDATE sales SET created_at = ${dia} WHERE id = $1 AND created_at = now()`, [hecha.id, fechaVenta]);
+      await client.query(`UPDATE inventory_movements SET created_at = ${dia} WHERE reference_type = 'sales' AND reference_id = $1 AND created_at = now()`, [hecha.id, fechaVenta]);
+      await client.query(`UPDATE ventas_detalle_por_asignar SET created_at = ${dia} WHERE cash_register_id = $1 AND created_at = now()`, [body.cash_register_id, fechaVenta]);
+    }
+    return hecha;
+  });
+  res.status(201).json(result);
+
+  async function ventaDetalleSegunPago(client: PoolClient) {
     if (body.por_asignar) return await ventaDetallePorAsignar(client, req as AuthenticatedRequest, body, lineas, aCredito);
     if (body.a_cuenta) return await ventaDetalleACuenta(client, req as AuthenticatedRequest, body, dueno, lineas);
     if (aCredito) return await ventaDetalleFiada(client, req as AuthenticatedRequest, body, dueno, lineas);
@@ -511,8 +528,7 @@ salesRouter.post("/retail", asyncRoute(async (req, res) => {
       items: itemsDe(lineas)
     });
     return { ...venta, customer_id: cliente.id, customer_name: cliente.full_name };
-  });
-  res.status(201).json(result);
+  }
 }));
 
 async function crearVentaInterna(

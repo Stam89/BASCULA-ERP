@@ -3,7 +3,8 @@ import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
-import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "../../services/caja.js";
+import { avisarSobregiro, exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja, medioParaCaja } from "../../services/caja.js";
+import { registrarPagoConBanco } from "../../services/pagado-con-banco.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 export const advancesRouter = Router();
@@ -17,6 +18,10 @@ const advanceSchema = z.object({
   concept: z.string().min(2),
   apply_to_payables: z.boolean().default(false),
   medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional(),
+  // 💳 Se le transfirió: no sale de la gaveta (la hoja de Caja).
+  pagado_con_banco: z.boolean().optional(),
+  // Día del movimiento, si no es hoy (la hoja de Caja).
+  fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   created_by: z.string().uuid().optional()
 });
 
@@ -40,10 +45,12 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
   const data = advanceSchema.parse(req.body);
   const result = await inTransaction(async (client) => {
     let tipoCaja: string | null = null;
+    let fechaMov: string | null = null;
     if (data.cash_register_id) {
       const caja = await exigirCajaAbiertaDelAccionista(client, data.cash_register_id, accionistaId);
       tipoCaja = caja.tipo;
-      await avisarSobregiro(client, data.cash_register_id, data.amount, req);
+      fechaMov = await fechaValidaDeCaja(client, data.cash_register_id, data.fecha);
+      if (!data.pagado_con_banco) await avisarSobregiro(client, data.cash_register_id, data.amount, req);
     }
     // Anticipo (y, si se pide, aplicado de una vez contra lo que se le debe): services/anticipo.ts.
     const { advance } = await registrarAnticipo(client, {
@@ -52,13 +59,21 @@ advancesRouter.post("/", asyncRoute(async (req, res) => {
     });
 
     if (data.cash_register_id) {
-      await client.query(
+      const userId = (req as AuthenticatedRequest).user?.id ?? null;
+      const mov = (await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, created_by, medio)
-         VALUES ($1, 'EXPENSE', 'ANTICIPO_AGRICULTOR', 'farmer_advances', $2, $3, $4, $5, $6)`,
-        [data.cash_register_id, advance.id, data.amount, data.concept, data.created_by,
+         VALUES ($1, 'EXPENSE', 'ANTICIPO_AGRICULTOR', 'farmer_advances', $2, $3, $4, $5, $6) RETURNING id`,
+        [data.cash_register_id, advance.id, data.amount, data.concept, data.created_by ?? userId,
          medioParaCaja(tipoCaja ?? "EFECTIVO", data.medio_pago)]
-      );
+      )).rows[0];
+      if (data.pagado_con_banco) {
+        await registrarPagoConBanco(client, { cajaId: data.cash_register_id, gastoId: mov.id, monto: data.amount, concepto: data.concept, userId });
+      }
+      if (fechaMov) {
+        await fecharMovimientosDeCaja(client, data.cash_register_id, fechaMov);
+        await client.query("UPDATE farmer_advances SET issued_at = (SELECT created_at FROM cash_movements WHERE id = $2) WHERE id = $1", [advance.id, mov.id]);
+      }
     }
 
     return advance;

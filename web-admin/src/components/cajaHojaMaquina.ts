@@ -45,6 +45,6 @@ export function categoriaPorNombreCorto(txt: string): string | null {
 export function nombreCortoPorConcepto(txt: string): string | null {
   const t = limpio(txt);
   if (/\b(repar\w*|arregl\w*|mano de obra|rebobin\w*)\b/.test(t)) return "Reparación";
-  if (/\b(repuestos?|rodamientos?|bandas?|correas?|retenes|reten|chumaceras?)\b/.test(t)) return "Compra de repuesto";
+  if (/\b(repuestos?|rodamientos?|bandas?|correas?|retenes|reten|chumaceras?|guardafangos?|llantas?|neumaticos?|filtros?|baterias?|faros?|mangueras?|amortiguador(es)?|retrovisor(es)?)\b/.test(t)) return "Compra de repuesto";
   return null;
 }

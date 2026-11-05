@@ -55,6 +55,13 @@ export async function reabrirPagoNomina(
   }
 
   if (ref === "cuadrilla_entries") {
+    // Trabajo registrado y pagado desde la hoja de Caja: se va con su pago (no queda como pendiente).
+    if (m.reference_id) {
+      const quitado = await client.query(
+        "DELETE FROM cuadrilla_entries WHERE id = $1 AND origen = 'CAJA' RETURNING activity_name, worker_name", [m.reference_id]
+      );
+      if (quitado.rowCount) return `Nómina: se quitó el registro de ${quitado.rows[0].activity_name} de ${quitado.rows[0].worker_name}`;
+    }
     const filas = await client.query(
       `UPDATE cuadrilla_entries ce SET paid_at = NULL, cash_register_id = NULL
          FROM cash_movements cm

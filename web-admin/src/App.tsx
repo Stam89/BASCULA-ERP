@@ -5165,6 +5165,61 @@ export function App() {
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
     const d = f.destino;
+    // 🛒 Venta al detalle escrita en la hoja: «20 lb de 0,11». Sin dueño elegido queda por asignar.
+    if (f.venta && d?.tipo === "venta") {
+      const v = f.venta;
+      if (!finishedWarehouse?.id) throw new Error("No está configurada la bodega de producto terminado");
+      const porAsignar = d.id === "POR_ASIGNAR";
+      const r = await apiPost<{ customer_name: string }>("/sales/retail", {
+        cash_register_id: registerId, product_id: v.producto.id, warehouse_id: finishedWarehouse.id, quantity_qq: v.qq, total_amount: f.amount,
+        price_per_pound: v.producto.precioLibra > 0 ? v.producto.precioLibra : Math.max(0.0001, f.amount / v.libras), mode: v.modo, input_amount: v.cantidad,
+        medio: cajaEsMixta ? f.medio : dashboard.current_cash_register?.tipo === "BANCO" ? "BANCO" : "EFECTIVO", product_name: v.producto.label,
+        buyer: { full_name: v.cliente }, dueno_id: d.id && !porAsignar ? d.id : undefined, por_asignar: porAsignar || undefined, pagado: v.fiado ? 0 : undefined, fecha: f.fecha
+      });
+      if (porAsignar) setPorAsignarKey((k) => k + 1);
+      addToast(`🛒 ${r.customer_name}: ${money(f.amount)}${v.fiado ? " · fiado" : ""}${porAsignar ? " · por asignar" : ""}`, "success");
+      return;
+    }
+    // 👷 Trabajo de cuadrilla pagado en el momento.
+    if (f.cuadrilla) {
+      await apiPost("/cuadrilla/pago-directo", { cash_register_id: registerId, activity_id: f.cuadrilla.actividadId, worker_name: f.cuadrilla.quien,
+        quantity: f.cuadrilla.cantidad, monto: f.amount, description: f.description, fecha: f.fecha });
+      addToast(`👷 ${f.cuadrilla.quien}: ${f.cuadrilla.actividad} ${money(f.amount)}`, "success");
+      return;
+    }
+    // 🌾 Abono o anticipo al agricultor: paga primero lo que se le debe y lo demás queda de anticipo.
+    if (d?.tipo === "agricultor") {
+      const nombre = d.nombre ?? "";
+      const concepto = normalizarTexto(f.description).includes(normalizarTexto(nombre)) ? f.description : `${f.description} · ${nombre}`;
+      await apiPost("/advances", { farmer_id: d.id, amount: f.amount, concept: concepto, cash_register_id: registerId, apply_to_payables: true,
+        pagado_con_banco: f.banco || undefined, fecha: f.fecha, ...cuerpoMedio(f.medio) });
+      addToast(`🌾 ${money(f.amount)} a ${nombre}`, "success");
+      return;
+    }
+    // 📥 📤 Cobro y pago de cuentas de esa persona.
+    if (d?.tipo === "cobro" || d?.tipo === "pago") {
+      if (f.fecha) throw new Error("Los cobros y pagos de cuentas se registran con fecha de hoy.");
+      if (d.tipo === "cobro") await apiPost("/receivable/pay-group", { receivable_ids: d.cuentas, amount: f.amount, cash_register_id: registerId, concepto: f.description.slice(0, 200), ...cuerpoMedio(f.medio) });
+      else await apiPost("/cash/payables/pay-group", { payable_ids: d.cuentas, cash_register_id: registerId, amount: f.amount, ...cuerpoMedio(f.medio) });
+      addToast(`${d.tipo === "cobro" ? "📥 Cobro" : "📤 Pago"} de ${money(f.amount)} · ${d.nombre}`, "success");
+      return;
+    }
+    // 🚜 De Transporte y no salió de esta gaveta: queda como deuda de Transporte con quien lo pagó o con el proveedor.
+    if (d?.tipo === "transporte" && (f.credito || f.pagadoPor)) {
+      const acreedor = f.pagadoPor?.nombre ?? f.credito!.acreedor;
+      if (d.id && (f.category === "MANTENIMIENTO_EQUIPO" || f.category === "REPUESTOS" || f.category === CATEGORIA_MATERIALES)) {
+        await apiPost("/campo/mantenimientos/nota", { fecha: f.fecha, activo_id: d.id, tipo: "CORRECTIVO", proveedor: acreedor, modalidad_pago: "CREDITO",
+          observaciones: f.pagadoPor ? `Lo pagó ${acreedor} con su dinero` : undefined,
+          lineas: [{ cantidad: 1, descripcion: f.description, clase: f.category === "MANTENIMIENTO_EQUIPO" ? "MANO_OBRA" : "REPUESTO", valor: f.amount }] });
+      } else {
+        const cats = await apiGet<Array<{ id: string; nombre: string }>>("/campo/categorias-gasto");
+        const nombreCat = categoriaTransporteDe(f.category, f.description);
+        await apiPost("/campo/movimientos", { fecha: f.fecha, signo: "salida", monto: f.amount, concepto: f.description, categoria_id: cats.find((c) => c.nombre === nombreCat)?.id ?? null,
+          activo_id: d.id ?? null, proveedor: acreedor, modalidad_pago: "CREDITO" });
+      }
+      addToast(`🚜 ${money(f.amount)} en Transporte: queda debiendo a ${acreedor} (no sale de esta caja)`, "success");
+      return;
+    }
     // 🚜 Transporte (una máquina o general) y 👷 anticipo a un operador: el mismo flujo que «Salió dinero» › Transporte
     // (cruce con lo que la Matriz le debe a Transporte; el anticipo queda como vale del operador).
     if (f.movement === "EXPENSE" && d && (d.tipo === "transporte" || d.tipo === "anticipo")) {
@@ -5191,7 +5246,6 @@ export function App() {
       addToast(`${operador ? `👷 Anticipo a ${operador}` : "🚜 Gasto de Transporte"}: ${money(r.total)}${f.banco ? " (pagado con banco, no sale de la gaveta)" : ""}` +
         (r.descontado > 0 ? ` · se descontaron ${money(r.descontado)} de lo que se le debía a Transporte` : "") +
         (r.por_cobrar > 0 ? ` · Transporte te debe ${money(r.por_cobrar)}` : ""), "success");
-      await refreshCaja(registerId);
       return;
     }
     // 🔧 Reparación, repuesto o material de una máquina de la planta: sale de la caja y entra a su hoja de vida.
@@ -5202,7 +5256,6 @@ export function App() {
         pagado_con_banco: f.banco || undefined, fecha: f.fecha, ...cuerpoMedio(f.medio)
       });
       addToast(`🔧 ${money(f.amount)} en ${d.section}: quedó en su hoja de vida${f.banco ? " (pagado con banco, no sale de la gaveta)" : ""}`, "success");
-      await refreshCaja(registerId);
       return;
     }
     await apiPost(`/cash/${registerId}/movements`, {
@@ -5212,11 +5265,14 @@ export function App() {
       area: d?.tipo === "planta" ? d.area : undefined,
       // 🤝 Gasto de un socio que paga esta caja (se cruza con lo que la Matriz le debe).
       por_cuenta_de: f.movement === "EXPENSE" && d?.tipo === "socio" ? d.id : undefined,
-      pagado_con_banco: f.movement === "EXPENSE" && f.banco ? true : undefined
+      pagado_con_banco: f.movement === "EXPENSE" && f.banco ? true : undefined,
+      // ⏳ Fondo a rendir, 🤝 lo pagó un socio y 📝 a crédito.
+      es_fondo: f.responsable ? true : undefined, responsable: f.responsable,
+      pagado_por: f.pagadoPor?.id, modalidad_pago: f.credito ? "CREDITO" : undefined, proveedor_nombre: f.credito?.acreedor
     });
     addToast(`${f.movement === "INCOME" ? "Entrada" : "Salida"} de ${money(f.amount)} registrada` +
-      (d?.tipo === "socio" ? ` · gasto de ${d.valor.replace(/^🤝\s*/, "")}` : "") + (f.banco ? " · pagada con banco (no sale de la gaveta)" : ""), "success");
-    await refreshCaja(registerId);
+      (d?.tipo === "socio" ? ` · gasto de ${d.valor.replace(/^🤝\s*/, "")}` : "") + (f.banco ? " · pagada con banco (no sale de la gaveta)" : "") +
+      (f.responsable ? ` · ⏳ fondo de ${f.responsable}` : "") + (f.pagadoPor ? ` · lo pagó ${f.pagadoPor.nombre}` : "") + (f.credito ? ` · a crédito con ${f.credito.acreedor}` : ""), "success");
   }
   // Categoría del gasto en Transporte a partir de la categoría de esta caja (o del concepto).
   function categoriaTransporteDe(codigo: string, concepto: string): string {
@@ -5332,6 +5388,14 @@ export function App() {
       .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo })))).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, esMatrizActiva, authUser?.id]);
+  // 🧭 La hoja reconoce cobros, clientes y trabajos de cuadrilla: se leen al entrar a la Caja.
+  useEffect(() => {
+    if (activeTab !== "Caja" || !authUser) return;
+    refreshReceivables().catch(() => undefined);
+    apiGet<PersonaVentaDetalle[]>("/customers/directorio-venta-detalle").then(setPersonasVentaDetalle).catch(() => undefined);
+    if (esMatrizActiva) apiGet<CuadrillaActivity[]>("/cuadrilla/activities").then(setCuadActivities).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, esMatrizActiva, authUser?.id, activeAccionistaId]);
   // «¿De quién es este gasto?»: socios a los que la caja de la Matriz les puede pagar un gasto, y en qué categorías
   // (las que tienen flujo propio —mantenimiento, sacos, repuestos, activos, pagos enlazados— no).
   const sociosDelGasto = accionistas.filter((a) => a.tipo === "SOCIO" && a.id !== activeAccionistaId);
@@ -20590,8 +20654,30 @@ Motivo (obligatorio):`, ""));
                       // 🧭 «¿De quién?» solo en la caja de la Matriz: esta caja, Transporte (general o una máquina),
                       // anticipo a un operador de Transporte, o un gasto de un socio.
                       const puedeTransporte = isAdmin || (accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? []).includes("Transporte / Cosechadora");
+                      const debeAgricultor = new Map<string, number>();
+                      for (const p of cashPayables) if (p.farmer_id && !p.entre_socios) debeAgricultor.set(p.farmer_id, round2((debeAgricultor.get(p.farmer_id) ?? 0) + Number(p.balance)));
+                      const agricultoresHoja: HojaDestino[] = farmers.map((f) => {
+                        const debe = debeAgricultor.get(f.id) ?? 0;
+                        return { valor: `🌾 ${f.full_name}`, tipo: "agricultor", id: f.id, nombre: f.full_name,
+                          detalle: debe > 0.005 ? `se le debe ${money(debe)}: se paga primero y lo que pase queda de anticipo` : "no se le debe nada: queda de anticipo" };
+                      });
+                      const cobrosHoja: HojaDestino[] = groupReceivables(accountsReceivable).map((g) => {
+                        const items = g.items.filter((x) => Number(x.balance) > 0.005);
+                        const saldo = round2(items.reduce((t, x) => t + Number(x.balance), 0));
+                        return { valor: `📥 Cobro · ${g.nombre}`, tipo: "cobro" as const, nombre: g.nombre, cuentas: items.map((x) => x.id), saldo, detalle: `debe ${money(saldo)}` };
+                      }).filter((x) => (x.cuentas?.length ?? 0) > 0);
+                      const pagosHoja: HojaDestino[] = groupPayablesByAcreedor(cashPayables.filter((p) => !p.farmer_id && Number(p.balance) > 0.005)).map((g) => {
+                        const saldo = round2(g.items.reduce((t, x) => t + Number(x.balance), 0));
+                        return { valor: `📤 Pago · ${g.nombre}`, tipo: "pago" as const, nombre: g.nombre, cuentas: g.items.map((x) => x.id), saldo, detalle: `se le debe ${money(saldo)}` };
+                      });
+                      const fondoHoja: HojaDestino = { valor: "⏳ Fondo a rendir", tipo: "fondo", detalle: "sale de la caja y queda por liquidar" };
                       const destinosHoja: HojaDestino[] = esMatrizActiva ? [
                         { valor: matrizName || "Esta caja", tipo: "propio", detalle: "gasto de esta caja" },
+                        { valor: "🛒 Venta · decidir después", tipo: "venta", id: "POR_ASIGNAR", detalle: "se asigna cuando se sepa de quién es" },
+                        { valor: `🛒 Venta de ${matrizName || "esta caja"}`, tipo: "venta", id: "", nombre: matrizName, detalle: "sale de su inventario" },
+                        ...sociosDelGasto.map((s) => ({ valor: `🛒 Venta de ${s.name}`, tipo: "venta" as const, id: s.id, nombre: s.name, detalle: "sale de su inventario y se le debe" })),
+                        { valor: "👷 Cuadrilla", tipo: "cuadrilla", detalle: "trabajo que se paga ahora" },
+                        fondoHoja,
                         ...maquinasPlanta.map((m) => ({ valor: `🔧 ${m.area} · ${m.section}`, tipo: "planta" as const, id: m.id, area: m.area, section: m.section, detalle: "máquina de la planta" })),
                         ...(puedeTransporte ? [
                           { valor: "🚜 Transporte (general)", tipo: "transporte" as const, detalle: "sin máquina" },
@@ -20599,8 +20685,13 @@ Motivo (obligatorio):`, ""));
                             claves: [claveMaq(a.nombre), claveMaq(a.nombre.split(/\s+/)[0] ?? "")] })),
                           ...campoOperadores.map((o) => ({ valor: `👷 Anticipo · ${o}`, tipo: "anticipo" as const, detalle: "vale: se descuenta en su nómina", claves: [claveMaq(o)] }))
                         ] : []),
-                        ...sociosDelGasto.map((s) => ({ valor: `🤝 ${s.name}`, tipo: "socio" as const, id: s.id, detalle: "gasto del socio" }))
-                      ] : [];
+                        ...sociosDelGasto.map((s) => ({ valor: `🤝 ${s.name}`, tipo: "socio" as const, id: s.id, detalle: "gasto del socio" })),
+                        ...cobrosHoja, ...pagosHoja, ...agricultoresHoja
+                      ] : [
+                        { valor: accionistas.find((a) => a.id === activeAccionistaId)?.name || "Esta caja", tipo: "propio", detalle: "gasto de esta caja" },
+                        { valor: "🛒 Venta", tipo: "venta", id: "", detalle: "sale de su inventario" },
+                        fondoHoja, ...cobrosHoja, ...pagosHoja, ...agricultoresHoja
+                      ];
                       return (
                         <CajaHoja
                           movimientos={cashMovements}
@@ -20619,6 +20710,13 @@ Motivo (obligatorio):`, ""));
                           destinos={destinosHoja}
                           puedeBanco={esMatrizActiva && dashboard.current_cash_register?.tipo === "EFECTIVO"}
                           onGuardar={guardarFilaHoja}
+                          productos={productosVentaDetalle()}
+                          actividades={cuadActivities.filter((a) => a.is_active !== false).map((a) => ({ id: a.id, name: a.name, unit_rate: Number(a.unit_rate) }))}
+                          clientes={[...new Set(personasVentaDetalle.map((x) => x.full_name))]}
+                          descuentoQq={descuentoQqDefecto}
+                          socios={sociosDelGasto.map((a) => ({ id: a.id, name: a.name }))}
+                          onRefrescar={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); await refreshReceivables().catch(() => undefined); }}
+                          onError={(m) => addToast(m, "error")}
                           onFormularioCompleto={abrirFormularioDesdeHoja}
                           onAnular={(m) => reverseCashMovement(m as CashMovement)}
                           onAnularCredito={(c) => anularEgresoCredito(c as CajaCredito).catch((e) => addToast(e.message, "error"))}
