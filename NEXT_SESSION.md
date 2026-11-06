@@ -2,13 +2,21 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🧹 Selectora de la piladora y tarifa real al socio (2026-11-06)
+## Último cambio: 💵 Préstamo de Jacobo, se descuenta de a poco (2026-11-06)
+
+- Por Pagar › JACOBO MACIAS (con la Matriz activa): «¿Cuánto descontar esta vez?», sin regla fija (`PrestamoSelectora`, `services/prestamo-selectora.ts`, `/cash/payables/prestamo-selectora`, tabla `prestamo_descuentos`, migración 20261141). Solo CxP `selectora_servicio` de la Matriz; lo que deben los socios no entra. Del más viejo al más nuevo, en cuentas y en fondos.
+- Es un cruce: no mueve caja porque el dinero salió al entregar el préstamo (excepción a «saldar mueve caja»). Sin movimiento de caja, el rastro es `prestamo_descuentos`.
+- El préstamo son los fondos POR_LIQUIDAR de la Matriz cuyo `responsable` es igual al nombre en `external_providers`. Cubierto = LIQUIDADO; parcial sigue POR_LIQUIDAR y `fondos_por_liquidar.monto` resta lo descontado. Con descuentos vigentes el fondo no se liquida ni se anula a mano. Anular el descuento: solo administrador, en ese mismo bloque o en el de la selectora (Tarifario), que queda aunque la cuenta se haya pagado.
+- Categoría `PRESTAMO_TERCERO` (inactiva, no operativa): las 3 entregas a Jacobo pasaron a ella en la migración, así el Resultado no cuenta el préstamo como gasto. Un fondo nuevo a Jacobo registrado como gasto varios se descontaría igual, pero seguiría contando como gasto. El fondo de ROBERTO no se tocó.
+- Simulacro `prestamo_selectora`.
+
+## Cambio anterior: 🧹 Selectora de la piladora y tarifa real al socio (2026-11-06)
 
 - La selectora es de una persona externa que cobra por QQ de arroz blanco pilado (los QQ reales, sin el mínimo del cliente). Configuración › Tarifas a clientes › Tarifario de Servicios: `TarifaClientesSelectora` (`GET /pilado/servicio-config`, `PUT /pilado/tarifa-clientes`, `POST /pilado/selectora`, solo administrador). `selectora_tarifas` (una por fecha; $0 deja de cobrarla) y `selectora_cargos` (migración 20261140).
 - **Cobro al socio**: `cerrarProcesoProduccion` ahora usa el `tarifario_servicio` PILADO (antes `labor_rates.pilado_precio_qq`, fijo en $3.75 y sin pantalla: lo del tarifario no llegaba a la cuenta). La tarifa se lee a la fecha del pilado. `labor_rates` queda de respaldo si el socio no tiene tarifa.
 - **Al finalizar**: socio = CxC/CxP con la Matriz por (tarifa − selectora) y CxP del socio al dueño de la selectora (`reference_type` `selectora_servicio`). Cliente o arroz propio = el cliente paga todo y la CxP queda a la Matriz. `pilado_services.total` y `service_amount` son lo que le queda a la Matriz; `tarifa_pilada_aplicada` conserva la tarifa completa (costo del socio en Gana).
 - Pago: `PAGO_SELECCION`, sin espejo. Costo: socio en `servicios_recibidos` al nacer la deuda; Matriz en el rubro «Selectora» del Resultado mensual (`egresos` suma la CxP del mes, el pago no cuenta). Anular producción cancela la cuenta y frena si tiene abonos.
-- El servicio manual `POST /pilado/services` no genera selectora. El préstamo a JACOBO MACIAS (fondos en la caja de CEYRO) aún no se descuenta de lo que se le debe.
+- El servicio manual `POST /pilado/services` no genera selectora. 
 - Simulacro `selectora`. `servicio_pilada_minimo`, `fecha_pilado` y `produccion` D4 fallan por los datos de la copia (sin servicios a clientes, fecha fija anterior al arranque, stock negativo real).
 
 ## Cambio anterior: 🕒 Secado ya hecho, solo administrador (2026-11-05)

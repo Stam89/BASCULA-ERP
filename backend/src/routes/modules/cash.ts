@@ -20,6 +20,8 @@ import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { anularPagoConBanco, registrarPagoConBanco, REF_PAGADO_CON_BANCO } from "../../services/pagado-con-banco.js";
 import { revertirMovimientoDePrestamo } from "./prestamos.js";
+import { getMatrizId } from "../../services/matriz.js";
+import { anularDescuentoPrestamo, consultarPrestamo, descontarPrestamo, exigirFondoSinDescuentos } from "../../services/prestamo-selectora.js";
 import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
@@ -393,8 +395,10 @@ cashRouter.get("/registers/:id/summary", asyncRoute(async (req, res) => {
   const expense = Number(totals.rows[0].total_expense);
   const saldos = await saldosDeCaja(pool, String(req.params.id));
   const fondos = await pool.query(
-    `SELECT count(*)::int AS n, COALESCE(sum(amount), 0)::float AS monto FROM cash_movements
-      WHERE cash_register_id = $1 AND es_fondo AND fondo_estado = 'POR_LIQUIDAR' AND reversed_at IS NULL AND reversal_of IS NULL`,
+    `SELECT count(*)::int AS n,
+            COALESCE(sum(m.amount - COALESCE((SELECT SUM(d.monto) FROM prestamo_descuentos d WHERE d.fondo_id = m.id AND d.anulado_at IS NULL), 0)), 0)::float AS monto
+       FROM cash_movements m
+      WHERE m.cash_register_id = $1 AND m.es_fondo AND m.fondo_estado = 'POR_LIQUIDAR' AND m.reversed_at IS NULL AND m.reversal_of IS NULL`,
     [req.params.id]
   );
 
@@ -883,6 +887,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     //  · Anular SOLO el vuelto/faltante devuelve el fondo a «Por Liquidar».
     const ajustesAnulados: string[] = [];
     if (m.es_fondo) {
+      await exigirFondoSinDescuentos(client, m.id);
       const ajustes = await client.query(
         `SELECT * FROM cash_movements
           WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL
@@ -1405,6 +1410,7 @@ cashRouter.post("/movements/:id/liquidar", asyncRoute(async (req, res) => {
     if (!orig.es_fondo) throw new ApiError(409, "Ese movimiento no es un fondo a rendir cuentas.");
     if (orig.reversed_at || orig.reversal_of) throw new ApiError(409, "Ese movimiento está anulado: no se puede registrar su vuelto.");
     if (orig.fondo_estado === "LIQUIDADO") throw new ApiError(409, "Ese fondo ya fue liquidado.");
+    await exigirFondoSinDescuentos(client, orig.id);
 
     await assertCajaDelAccionista(client, body.cash_register_id, accionistaId);
 
@@ -1618,7 +1624,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
                 THEN concat('Pago por compra de arroz a ', COALESCE(lf.full_name, f.full_name, 'agricultor'))
               ELSE NULLIF(ap.description, '')
             END AS detalle_humano,
-            l.liquidation_number, l.batch_id
+            l.liquidation_number, l.batch_id, sel.provider_id AS selectora_provider_id
      FROM accounts_payable ap
      LEFT JOIN farmers f ON f.id = ap.farmer_id
      LEFT JOIN suppliers ap_sup ON ap_sup.id = ap.supplier_id
@@ -1777,6 +1783,29 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
   res.setHeader("Content-Disposition", `attachment; filename="cierre-caja-${openedDate}.xlsx"`);
   await wb.xlsx.write(res);
+}));
+
+// ── 💵 Préstamo al dueño de la selectora: se descuenta de a poco de lo que la Matriz le debe ──────────────────────────
+cashRouter.get("/payables/prestamo-selectora", asyncRoute(async (req, res) => {
+  const q = z.object({ provider_id: z.string().uuid() }).parse(req.query);
+  const matrizId = await getMatrizId();
+  if ((req as AuthenticatedRequest).accionistaId !== matrizId) { res.json(null); return; }
+  res.json(await consultarPrestamo(pool, matrizId, q.provider_id));
+}));
+
+cashRouter.post("/payables/prestamo-selectora/descontar", asyncRoute(async (req, res) => {
+  const body = z.object({ payable_ids: z.array(z.string().uuid()).min(1), monto: z.number().positive() }).parse(req.body);
+  const r = req as AuthenticatedRequest;
+  const matrizId = await getMatrizId();
+  if (r.accionistaId !== matrizId) throw new ApiError(409, "El préstamo es de la Matriz: se descuenta solo de lo que ella debe.");
+  res.status(201).json(await inTransaction((client) => descontarPrestamo(client, {
+    matrizId, payableIds: body.payable_ids, monto: body.monto, userId: r.user?.id ?? null
+  })));
+}));
+
+cashRouter.post("/payables/prestamo-selectora/:lote/anular", requireAdmin, asyncRoute(async (req, res) => {
+  const lote = z.string().uuid().parse(req.params.lote);
+  res.json(await inTransaction((client) => anularDescuentoPrestamo(client, lote, (req as AuthenticatedRequest).user?.id ?? null)));
 }));
 
 // ── Pagar cuenta por pagar ───────────────────────────────────────────────────

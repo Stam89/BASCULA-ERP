@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, apiPut } from "../api";
+import { PrestamoSelectora } from "./PrestamoSelectora";
 
 // 🌾 Tarifa del servicio de pilada a clientes externos y 🧹 selectora de la piladora (pedido del dueño 2026-11-06).
 // La tarifa de clientes es la misma de Parámetros de planta. La selectora es de una persona externa que cobra por QQ:
@@ -130,6 +131,10 @@ export function TarifaClientesSelectora({ puedeEditar, hoy, matriz, avisar, conf
           <p className="muted" style={{ margin: "6px 0 0" }}>
             Por pagar: {config.pendiente.map((x) => `${x.accionista} ${dolares(x.saldo)} a ${x.proveedor}`).join(" · ")}
           </p>
+        )}
+        {config.selectora && (
+          <PrestamoSelectora providerId={config.selectora.provider_id} payableIds={[]} saldoCuentas={0} puedeEditar={false}
+            esAdmin={puedeEditar} avisar={avisar} confirmar={confirmar} onCambio={cargar} />
         )}
         {config.historial.length > 1 && (
           <details style={{ marginTop: 6 }}>

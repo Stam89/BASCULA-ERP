@@ -4,6 +4,7 @@ import type { ReglaCaja } from "./components/cajaHojaLeer";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SecadoPasadoModal } from "./components/SecadoPasadoModal";
 import { TarifaClientesSelectora } from "./components/TarifaClientesSelectora";
+import { PrestamoSelectora } from "./components/PrestamoSelectora";
 import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
 import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
@@ -1197,6 +1198,7 @@ type CashSummary = {
 };
 
 type AccountPayable = {
+  selectora_provider_id?: string | null;
   id: string;
   farmer_id: string;
   farmer_name: string;
@@ -23951,9 +23953,19 @@ Motivo (obligatorio):`, ""));
 
             {detalleGrupo && (
               <CuentaDetalleModal
+                key={String(detalleGrupo.items.reduce((s, p) => s + Number(p.balance), 0))}
                 nombre={detalleGrupo.nombre}
                 rows={payableRows(detalleGrupo.items)}
                 color="pagar"
+                extra={(() => {
+                  const sel = detalleGrupo.items.filter((p) => p.reference_type === "selectora_servicio" && p.selectora_provider_id && Number(p.balance) > 0);
+                  return sel.length > 0 ? (
+                    <PrestamoSelectora providerId={String(sel[0].selectora_provider_id)} payableIds={sel.map((p) => p.id)}
+                      saldoCuentas={round2(sel.reduce((s, p) => s + Number(p.balance), 0))}
+                      puedeEditar={canEdit("Por Pagar") || canEdit("Caja")} esAdmin={canAnular}
+                      avisar={addToast} confirmar={confirmar} onCambio={refreshPayables} />
+                  ) : undefined;
+                })()}
                 disabled={!dashboard.current_cash_register && !pagoHechoPor}
                 disabledMsg="Abre una caja para poder pagar (o elige abajo quién pagó)."
                 onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); }}
@@ -30272,6 +30284,8 @@ function CuentaDetalleModal(props: {
   onImprimir: () => void;
   /** Abre el informe del servicio (p. ej. pilado) de una fila que lo tenga. */
   onVerInforme?: (informeId: string) => void;
+  /** Bloque propio de esta cuenta, debajo del estado de cuenta. */
+  extra?: React.ReactNode;
   /** Caja MIXTA: el cobro/pago pregunta si fue en efectivo o por el banco. */
   medio?: { value: "EFECTIVO" | "BANCO"; onChange: (m: "EFECTIVO" | "BANCO") => void };
   /** El medio todavía no se elige: se muestra sin marcar y los botones de cobro esperan a que se elija. */
@@ -30327,6 +30341,7 @@ function CuentaDetalleModal(props: {
             <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={4}>SALDO TOTAL</td><td className="num" style={{ color: barColor }}>{money(saldoTotal)}</td></tr></tfoot>
           </table>
         </div>
+        {props.extra}
 
         {props.recibidoPor && props.recibidoPor.opciones.length > 0 && (() => {
           const rp = props.recibidoPor;

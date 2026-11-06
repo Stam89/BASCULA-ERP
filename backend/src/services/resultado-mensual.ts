@@ -148,6 +148,8 @@ export const CATEGORIAS_NO_OPERATIVAS = [
   // Gasto de un SOCIO pagado con la caja de la Matriz: es del socio (sale en sus gastos con categoria_por_cuenta).
   "GASTO_POR_SOCIO",
   "PAGO_SERVICIO_PILADO", "PAGO_SERVICIO_MAQUILA", "PAGO_SELECCION", "REVERSA_COMPRA",
+  // Préstamo a un tercero: es dinero por recuperar, no gasto.
+  "PRESTAMO_TERCERO",
   // Devolución del dinero de una venta anulada (no es gasto: deshace un ingreso; la venta ya no cuenta).
   "DEVOLUCION_VENTA",
   // Pago de una deuda cargada como saldo inicial (es de antes del arranque).

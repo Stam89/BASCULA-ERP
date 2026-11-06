@@ -57,6 +57,7 @@ export const WIPE_TABLES = [
   "cuadrilla_advances",
   "pilado_services",
   "selectora_cargos",
+  "prestamo_descuentos",
   "milling_drafts",
   "motor_fuel_records",
   "lot_transfers",
