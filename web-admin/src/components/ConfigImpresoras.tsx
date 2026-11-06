@@ -3,13 +3,13 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../api";
 import {
-  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_ORIENTACION, NOMBRE_PAPEL, PAPELES, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora,
-  paginaDePrueba, usaOrientacion, type AjusteDocumento, type AjusteImpresora, type Orientacion, type Papel
+  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_ORIENTACION, NOMBRE_PAPEL, PAPELES, ajusteDe, esRollo, guardarAjusteImpresora, leerAjusteImpresora,
+  paginaDePrueba, usaOrientacion, verAntesDeImprimir, type AjusteDocumento, type AjusteImpresora, type Orientacion, type Papel
 } from "../impresion";
 
 const GRUPOS = [...new Set(DOCUMENTOS.map((d) => d.grupo))];
 const AL_REGISTRAR: Record<NonNullable<AjusteDocumento["alRegistrar"]>, string> = {
-  IMPRIMIR: "✅ Imprimir sin preguntar", PREGUNTAR: "❓ Preguntar antes de imprimir", NO: "🚫 No imprimir"
+  VISTA: "👁️ Ver antes de imprimir", IMPRIMIR: "✅ Imprimir sin preguntar", PREGUNTAR: "❓ Preguntar antes de imprimir", NO: "🚫 No imprimir"
 };
 /** El valor que comparten todos, o "" si son distintos: el recuadro del grupo muestra lo que de verdad está elegido. */
 const comun = (valores: string[]) => (valores.every((v) => v === valores[0]) ? valores[0] : "");
@@ -141,18 +141,14 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                           )}
                           <select aria-label="Al imprimir" value={aj.alRegistrar ?? "IMPRIMIR"}
                             onChange={(e) => cambiarDoc(d.id, { alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] })}>
-                            <option value="IMPRIMIR">✅ Imprimir sin preguntar</option>
-                            <option value="PREGUNTAR">❓ Preguntar antes de imprimir</option>
-                            <option value="NO">🚫 No imprimir</option>
+                            {Object.entries(AL_REGISTRAR).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
                           </select>
                           <label className="impConf__copias">Copias
                             <select value={aj.copias} onChange={(e) => cambiarDoc(d.id, { copias: Number(e.target.value) })}>
                               {[1, 2, 3].map((n) => <option key={n} value={n}>{n}</option>)}
                             </select>
                           </label>
-                          <button type="button" className="btnGhost" onClick={() => {
-                            if (!imprimirDocumento(paginaDePrueba(d.id, negocio), d.id, true)) avisar("No se pudo abrir la impresión: permite ventanas emergentes.", "error");
-                          }}>🧪 Prueba</button>
+                          <button type="button" className="btnGhost" onClick={() => { verAntesDeImprimir(paginaDePrueba(d.id, negocio), d.id); }}>🧪 Prueba</button>
                         </div>
                       </div>
                     );

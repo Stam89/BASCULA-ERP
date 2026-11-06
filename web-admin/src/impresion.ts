@@ -27,7 +27,7 @@ export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
 /** `impresora`: nombre en Windows de la PC del servidor (solo con salida DIRECTA). */
 /** Qué hacer cuando un documento se manda a imprimir (al registrar o con su botón): imprimir directo, preguntar antes
  *  o no imprimir. Igual para todos los documentos (pedido del dueño 2026-10-27). */
-export type AlRegistrar = "IMPRIMIR" | "PREGUNTAR" | "NO";
+export type AlRegistrar = "IMPRIMIR" | "VISTA" | "PREGUNTAR" | "NO";
 /** Orientación de la hoja (pedido del dueño 2026-11-06). Los rollos y el papel cuadrado no la usan. */
 export type Orientacion = "VERTICAL" | "HORIZONTAL";
 export const NOMBRE_ORIENTACION: Record<Orientacion, string> = { VERTICAL: "↕️ Vertical", HORIZONTAL: "↔️ Horizontal" };
@@ -127,7 +127,7 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
     salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : guardado?.salida === "DIRECTA" && guardado.impresora ? "DIRECTA" : "VENTANA",
     copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1))),
     impresora: guardado?.salida === "DIRECTA" ? guardado.impresora : undefined,
-    alRegistrar: guardado?.alRegistrar === "PREGUNTAR" || guardado?.alRegistrar === "NO" ? guardado.alRegistrar : "IMPRIMIR",
+    alRegistrar: guardado?.alRegistrar === "VISTA" || guardado?.alRegistrar === "PREGUNTAR" || guardado?.alRegistrar === "NO" ? guardado.alRegistrar : "IMPRIMIR",
     orientacion: guardado?.orientacion === "HORIZONTAL" ? "HORIZONTAL" : "VERTICAL"
   };
 }
@@ -290,6 +290,7 @@ export function imprimirDocumento(html: string, id: DocumentoId | string, forzar
     avisar(`«${titulo}» no se imprimió: en 🖨️ Impresoras está en «no imprimir».`, "warn");
     return true;
   }
+  if (d.alRegistrar === "VISTA") return verAntesDeImprimir(html, id);
   if (!forzar && d.alRegistrar === "PREGUNTAR") {
     confirmar({ titulo: "🖨️ ¿Imprimir?", mensaje: `¿Imprimir «${titulo}»?`, confirmar: "Sí, imprimir" })
       .then((si) => { if (si) imprimirYa(html, id); })
@@ -297,6 +298,75 @@ export function imprimirDocumento(html: string, id: DocumentoId | string, forzar
     return true;
   }
   return imprimirYa(html, id);
+}
+
+/** 👁️ Vista previa (pedido del dueño 2026-11-06): el documento en su tamaño de papel; solo sale si se confirma. */
+export function verAntesDeImprimir(html: string, id: DocumentoId | string): boolean {
+  const a = leerAjusteImpresora();
+  const d = ajusteDe(id, a);
+  const titulo = DOCUMENTOS.find((x) => x.id === id)?.titulo ?? "Documento";
+  const rollo = esRollo(d.papel);
+  const medida = rollo ? null : MEDIDA_MM[d.papel as Exclude<Papel, "58" | "80">];
+  const [ancho, alto] = !medida ? [Number(d.papel), 0] : d.orientacion === "HORIZONTAL" ? [medida[1], medida[0]] : medida;
+  const margen = rollo ? (a.margen === "minimo" ? 2 : 5) : medida![0] <= 160 ? (a.margen === "minimo" ? 3 : 6) : (a.margen === "minimo" ? 8 : 14);
+  const destino = d.salida === "DIRECTA" && d.impresora ? d.impresora : d.salida === "RAWBT" ? "Térmica Bluetooth" : "ventana de imprimir";
+  const papel = NOMBRE_PAPEL[d.papel] + (usaOrientacion(d.papel) && d.orientacion === "HORIZONTAL" ? " horizontal" : "");
+
+  const capa = document.createElement("div");
+  capa.className = "modalOverlay";
+  capa.style.zIndex = "100000";
+  const tarjeta = document.createElement("div");
+  tarjeta.className = "modalCard";
+  tarjeta.setAttribute("role", "dialog");
+  tarjeta.setAttribute("aria-label", "Vista previa");
+  tarjeta.style.cssText = "width:min(980px,100%);max-width:980px;max-height:94vh;display:flex;flex-direction:column;gap:10px";
+  const cab = document.createElement("div");
+  const h = document.createElement("h3");
+  h.style.margin = "0";
+  h.textContent = `👁️ Vista previa · ${titulo}`;
+  const dato = document.createElement("small");
+  dato.className = "muted";
+  dato.textContent = `${papel} · ${d.copias} ${d.copias === 1 ? "copia" : "copias"} · sale por ${destino}`;
+  cab.append(h, dato);
+  // Fondo gris con la hoja encima; sandbox sin scripts: mirar no imprime.
+  const mesa = document.createElement("div");
+  mesa.style.cssText = "flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:14px;display:flex;justify-content:center;align-items:flex-start";
+  const hoja = document.createElement("div");
+  hoja.style.cssText = `flex:none;box-sizing:border-box;background:#fff;box-shadow:0 2px 10px rgba(15,23,42,.25);width:${ancho}mm;padding:${margen}mm;${alto ? `min-height:${alto}mm;` : ""}`;
+  const marco = document.createElement("iframe");
+  marco.setAttribute("sandbox", "allow-same-origin");
+  marco.title = "Vista previa";
+  marco.style.cssText = `display:block;width:100%;border:0;height:${alto ? alto - margen * 2 : 400}mm`;
+  marco.srcdoc = ajustarHtml(html, d.papel, a, d.orientacion);
+  // Un documento más largo que la hoja se ve completo: seguirá en otra página al imprimir.
+  marco.onload = () => {
+    const alturaDoc = marco.contentDocument?.documentElement.scrollHeight ?? 0;
+    if (alturaDoc > marco.clientHeight) marco.style.height = `${alturaDoc}px`;
+  };
+  hoja.append(marco);
+  mesa.append(hoja);
+  const botones = document.createElement("div");
+  botones.className = "buttonRow";
+  const imprimir = document.createElement("button");
+  imprimir.type = "button";
+  imprimir.className = "primary";
+  imprimir.textContent = "🖨️ Imprimir";
+  const cancelar = document.createElement("button");
+  cancelar.type = "button";
+  cancelar.textContent = "Cancelar";
+  botones.append(imprimir, cancelar);
+  tarjeta.append(cab, mesa, botones);
+  capa.append(tarjeta);
+
+  const cerrar = () => { document.removeEventListener("keydown", tecla, true); capa.remove(); };
+  const tecla = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); cerrar(); } };
+  document.addEventListener("keydown", tecla, true);
+  cancelar.onclick = cerrar;
+  capa.onclick = (e) => { if (e.target === capa) cerrar(); };
+  imprimir.onclick = () => { cerrar(); imprimirYa(html, id); };
+  document.body.append(capa);
+  imprimir.focus();
+  return true;
 }
 
 function imprimirYa(html: string, id: DocumentoId | string): boolean {

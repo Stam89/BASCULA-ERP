@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🖨️ Orientación por documento (2026-11-06)
+## Último cambio: 👁️ Vista previa antes de imprimir (2026-11-06)
+
+- `verAntesDeImprimir` (impresion.ts): capa con el documento en su tamaño de papel, en un iframe sin scripts; imprime solo con «🖨️ Imprimir». Es la opción VISTA de «Al imprimir», por documento o por grupo; también aplica a reimpresiones (`forzar`). El predeterminado sigue siendo IMPRIMIR. 🧪 Prueba siempre pasa por la vista previa: antes mandaba directo a la impresora.
+
+## Cambio anterior: 🖨️ Orientación por documento (2026-11-06)
 
 - `AjusteDocumento.orientacion` (VERTICAL por defecto; se guarda en cada equipo). `ajustarHtml` voltea el `@page`; vale para la ventana y para la impresión directa (el PDF sale horizontal y SumatraPDF sigue en su modo). Rollos y 10×10 no la muestran. En `ConfigImpresoras`: un recuadro por documento y otro para todo el grupo.
 
