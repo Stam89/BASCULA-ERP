@@ -24,6 +24,7 @@ farmersRouter.get("/", asyncRoute(async (_req, res) => {
            (SELECT count(*)::int FROM fomentos fo WHERE fo.farmer_id = f.id) AS fomentos
     FROM farmers f
     LEFT JOIN farmer_advances fa ON fa.farmer_id = f.id
+    WHERE f.is_active IS NOT FALSE
     GROUP BY f.id
     ORDER BY f.full_name ASC
   `);
@@ -43,7 +44,8 @@ farmersRouter.get("/search", asyncRoute(async (req, res) => {
     `SELECT f.id, f.full_name, f.identification, f.phone,
             (SELECT count(*)::int FROM fomentos fo WHERE fo.farmer_id = f.id) AS fomentos
        FROM farmers f
-      WHERE ${nombreNormalSql("f.full_name")} LIKE '%' || ${nombreNormalSql("$1::text")} || '%' OR f.identification ILIKE '%' || $1 || '%'
+      WHERE f.is_active IS NOT FALSE
+        AND (${nombreNormalSql("f.full_name")} LIKE '%' || ${nombreNormalSql("$1::text")} || '%' OR f.identification ILIKE '%' || $1 || '%')
       ORDER BY f.full_name ASC
       LIMIT 10`,
     [query]

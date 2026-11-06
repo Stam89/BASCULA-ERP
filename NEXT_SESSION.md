@@ -7,6 +7,8 @@ Actualizado: 2026-11-06
 - Báscula › Todos › «↩️ Regresar a Báscula» (`POST /tickets/:id/regresar`, solo administrador, con motivo; `services/regresar-ticket.ts`): un ticket ingresado por error vuelve a pendiente. Borra el `weighing_tickets` (con estado CANCELLED habría que filtrarlo en 46 consultas), deja la entrada de cáscara y le suma una reversa `ticket_regresado` en el kárdex, y borra su flete interno por cobrar.
 - Se frena con lote (incluye «Solo pilado», que nace con lote), secadora, pilada, liquidación vigente, ticket liquidado, o flete cobrado o ya pagado al operador. Una liquidación anulada pierde el enlace al ingreso.
 - Simulacro `regresar_ticket`.
+- El directorio (`GET /farmers` y `/farmers/search`) ya no muestra agricultores inactivos. No hay pantalla ni ruta para desactivar ni para unir fichas.
+- Datos 06/11: cuentas por pagar de octubre de STALYN como saldo inicial al 03/11, 60 filas por $87,104.43 (7 son deuda con el socio ROVINSON, $5,078.57). JHONNY ORTEGA es la misma persona que JONNY ORTEGA: sus tickets #449 y #478 pasaron a JONNY con alias y la ficha quedó inactiva.
 
 ## Último cambio: 💵 Préstamo de Jacobo, se descuenta de a poco (2026-11-06)
 
