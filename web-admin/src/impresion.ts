@@ -28,7 +28,10 @@ export type Salida = "VENTANA" | "RAWBT" | "DIRECTA";
 /** Qué hacer cuando un documento se manda a imprimir (al registrar o con su botón): imprimir directo, preguntar antes
  *  o no imprimir. Igual para todos los documentos (pedido del dueño 2026-10-27). */
 export type AlRegistrar = "IMPRIMIR" | "PREGUNTAR" | "NO";
-export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string; alRegistrar?: AlRegistrar };
+/** Orientación de la hoja (pedido del dueño 2026-11-06). Los rollos y el papel cuadrado no la usan. */
+export type Orientacion = "VERTICAL" | "HORIZONTAL";
+export const NOMBRE_ORIENTACION: Record<Orientacion, string> = { VERTICAL: "↕️ Vertical", HORIZONTAL: "↔️ Horizontal" };
+export type AjusteDocumento = { papel: Papel; salida: Salida; copias: number; impresora?: string; alRegistrar?: AlRegistrar; orientacion?: Orientacion };
 
 export type DocumentoImprimible = { id: string; titulo: string; grupo: string; papel: Papel; papeles: Papel[] };
 /** Todas las medidas, iguales para todos los documentos (pedido del dueño 2026-10-27). */
@@ -112,6 +115,7 @@ export function guardarAjusteImpresora(a: AjusteImpresora): void {
 }
 
 export const esRollo = (p: Papel) => p === "58" || p === "80";
+export const usaOrientacion = (p: Papel) => !esRollo(p) && p !== "10x10";
 
 /** Ajuste de un documento en este equipo (o el de fábrica). */
 export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora()): AjusteDocumento {
@@ -123,7 +127,8 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
     salida: guardado?.salida === "RAWBT" && esRollo(papel) ? "RAWBT" : guardado?.salida === "DIRECTA" && guardado.impresora ? "DIRECTA" : "VENTANA",
     copias: Math.max(1, Math.min(5, Math.round(guardado?.copias || 1))),
     impresora: guardado?.salida === "DIRECTA" ? guardado.impresora : undefined,
-    alRegistrar: guardado?.alRegistrar === "PREGUNTAR" || guardado?.alRegistrar === "NO" ? guardado.alRegistrar : "IMPRIMIR"
+    alRegistrar: guardado?.alRegistrar === "PREGUNTAR" || guardado?.alRegistrar === "NO" ? guardado.alRegistrar : "IMPRIMIR",
+    orientacion: guardado?.orientacion === "HORIZONTAL" ? "HORIZONTAL" : "VERTICAL"
   };
 }
 
@@ -133,7 +138,7 @@ const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };
 export const COLUMNAS: Record<"58" | "80", number> = { "58": 32, "80": 48 };
 
 /** Ajusta el HTML del documento al papel y la letra elegidos (sin tocar cómo se arma cada documento). */
-export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora): string {
+export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora, orientacion: Orientacion = "VERTICAL"): string {
   // (papeles fijos: el contenido ocupa el ancho útil del papel; los chicos con letra algo menor)
   // Algunos documentos traían su propio «imprimir al abrir»: ahora imprime este módulo (si no, saldrían dos veces).
   const sinAuto = html.replace(/<script>\s*window\.onload\s*=\s*function\s*\(\)\s*\{\s*window\.print\(\)\s*\}\s*<\/script>/gi, "");
@@ -146,7 +151,8 @@ export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora): str
        .tk,.sheet{width:${ancho}mm!important;max-width:${ancho}mm!important}
        table{width:100%!important}${papel === "58" ? "body{font-size:11px}th,td{padding:3px 1px!important}" : ""}`;
   } else {
-    const [ancho, alto] = MEDIDA_MM[papel as Exclude<Papel, "58" | "80">];
+    const medida = MEDIDA_MM[papel as Exclude<Papel, "58" | "80">];
+    const [ancho, alto] = orientacion === "HORIZONTAL" ? [medida[1], medida[0]] : medida;
     const chico = ancho <= 160;
     const margen = a.margen === "minimo" ? (chico ? 3 : 8) : (chico ? 6 : 14);
     const util = ancho - margen * 2;
@@ -297,7 +303,7 @@ function imprimirYa(html: string, id: DocumentoId | string): boolean {
   const a = leerAjusteImpresora();
   const d = ajusteDe(id, a);
   if (d.salida === "DIRECTA" && d.impresora) {
-    const listo = ajustarHtml(html, d.papel, a);
+    const listo = ajustarHtml(html, d.papel, a, d.orientacion);
     const titulo = DOCUMENTOS.find((x) => x.id === id)?.titulo ?? "Documento";
     avisar(`🖨️ Enviando «${titulo}» a ${d.impresora}…`, "success");
     apiPost<{ ok: boolean; desconectada?: boolean }>("/impresion/imprimir", { impresora: d.impresora, html: listo, copias: d.copias, titulo })
@@ -314,7 +320,7 @@ function imprimirYa(html: string, id: DocumentoId | string): boolean {
     enviarARawBT(Array.from({ length: d.copias }, () => texto).join("\n"));
     return true;
   }
-  return imprimirEnNavegador(ajustarHtml(html, d.papel, a), d.copias, a.directo);
+  return imprimirEnNavegador(ajustarHtml(html, d.papel, a, d.orientacion), d.copias, a.directo);
 }
 
 /**
@@ -343,7 +349,7 @@ export function paginaDePrueba(id: string, negocio: string): string {
   const doc = DOCUMENTOS.find((x) => x.id === id);
   const a = leerAjusteImpresora();
   const ahora = new Date().toLocaleString("es-EC", { hour12: false });
-  const papelTxt = NOMBRE_PAPEL[d.papel];
+  const papelTxt = NOMBRE_PAPEL[d.papel] + (usaOrientacion(d.papel) && d.orientacion === "HORIZONTAL" ? " horizontal" : "");
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Prueba de impresora</title><style>
     *{box-sizing:border-box} body{font-family:Arial,Helvetica,sans-serif;font-size:13px;color:#111;margin:0}
     .tk{width:72mm;margin:0 auto} h1{font-size:16px;text-align:center;margin:0} .sub{text-align:center;font-weight:700;margin:2px 0 6px}

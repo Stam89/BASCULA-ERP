@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import { apiGet } from "../api";
 import {
-  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_PAPEL, PAPELES, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora, paginaDePrueba,
-  type AjusteDocumento, type AjusteImpresora, type Papel
+  AJUSTE_DEFECTO, DOCUMENTOS, NOMBRE_ORIENTACION, NOMBRE_PAPEL, PAPELES, ajusteDe, esRollo, guardarAjusteImpresora, imprimirDocumento, leerAjusteImpresora,
+  paginaDePrueba, usaOrientacion, type AjusteDocumento, type AjusteImpresora, type Orientacion, type Papel
 } from "../impresion";
 
 const GRUPOS = [...new Set(DOCUMENTOS.map((d) => d.grupo))];
@@ -68,13 +68,17 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
           const ajustes = docs.map((d) => ajusteDe(d.id, a));
           const papelGrupo = comun(ajustes.map((x) => x.papel));
           const alGrupo = comun(ajustes.map((x) => x.alRegistrar ?? "IMPRIMIR"));
+          const orientacionGrupo = comun(ajustes.map((x) => x.orientacion ?? "VERTICAL"));
           const salidaGrupo = comun(ajustes.map(valorSalida));
           const salidaAparte = salidaGrupo && salidaGrupo !== "VENTANA" && !directas.some((i) => `DIRECTA:${i.nombre}` === salidaGrupo);
           return (
             <section key={g} className={`impConf__grupo ${open ? "is-open" : ""}`}>
               <button type="button" className="impConf__grupoCab" aria-expanded={open} onClick={() => setAbierto(open ? "" : g)}>
                 <b>{g}</b>
-                <small>{docs.map((d) => `${d.titulo.split(" (")[0]}: ${NOMBRE_PAPEL[ajusteDe(d.id, a).papel]}`).join(" · ")}</small>
+                <small>{docs.map((d) => {
+                  const aj = ajusteDe(d.id, a);
+                  return `${d.titulo.split(" (")[0]}: ${NOMBRE_PAPEL[aj.papel]}${usaOrientacion(aj.papel) && aj.orientacion === "HORIZONTAL" ? " horizontal" : ""}`;
+                }).join(" · ")}</small>
                 <span aria-hidden="true">{open ? "▾" : "▸"}</span>
               </button>
               {open && (
@@ -86,6 +90,11 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                         onChange={(e) => { if (e.target.value) aplicarATodos({ papel: e.target.value as Papel }, g, NOMBRE_PAPEL[e.target.value as Papel]); }}>
                         {!papelGrupo && <option value="">📄 Papeles distintos: elige uno para todos</option>}
                         {PAPELES.map((p) => <option key={p} value={p}>📄 Todos en {NOMBRE_PAPEL[p]}</option>)}
+                      </select>
+                      <select aria-label="Toda la orientación" value={orientacionGrupo}
+                        onChange={(e) => { const v = e.target.value as Orientacion; if (v) aplicarATodos({ orientacion: v }, g, NOMBRE_ORIENTACION[v]); }}>
+                        {!orientacionGrupo && <option value="">Orientación distinta: elige una para todos</option>}
+                        {(Object.keys(NOMBRE_ORIENTACION) as Orientacion[]).map((o) => <option key={o} value={o}>{NOMBRE_ORIENTACION[o]} (todos)</option>)}
                       </select>
                       <select aria-label="Todos al imprimir" value={alGrupo}
                         onChange={(e) => {
@@ -115,6 +124,11 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                           <select aria-label="Papel" value={aj.papel} onChange={(e) => cambiarDoc(d.id, { papel: e.target.value as Papel })}>
                             {PAPELES.map((p) => <option key={p} value={p}>📄 {NOMBRE_PAPEL[p]}</option>)}
                           </select>
+                          {usaOrientacion(aj.papel) && (
+                            <select aria-label="Orientación" value={aj.orientacion ?? "VERTICAL"} onChange={(e) => cambiarDoc(d.id, { orientacion: e.target.value as Orientacion })}>
+                              {(Object.keys(NOMBRE_ORIENTACION) as Orientacion[]).map((o) => <option key={o} value={o}>{NOMBRE_ORIENTACION[o]}</option>)}
+                            </select>
+                          )}
                           {(esRollo(aj.papel) || directas.length > 0 || aj.salida === "DIRECTA") && (
                             <select aria-label="Sale por" value={valorSalida(aj)} onChange={(e) => cambiarDoc(d.id, leerSalida(e.target.value))}>
                               <option value="VENTANA">🖨️ Ventana de imprimir (eliges la impresora)</option>

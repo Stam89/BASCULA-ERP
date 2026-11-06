@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🖨️ Impresoras: los recuadros de grupo muestran lo elegido (2026-11-06)
+## Último cambio: 🖨️ Orientación por documento (2026-11-06)
+
+- `AjusteDocumento.orientacion` (VERTICAL por defecto; se guarda en cada equipo). `ajustarHtml` voltea el `@page`; vale para la ventana y para la impresión directa (el PDF sale horizontal y SumatraPDF sigue en su modo). Rollos y 10×10 no la muestran. En `ConfigImpresoras`: un recuadro por documento y otro para todo el grupo.
+
+## Cambio anterior: 🖨️ Impresoras: los recuadros de grupo muestran lo elegido (2026-11-06)
 
 - `ConfigImpresoras`: «Todos al papel», «al imprimir» y «a la impresora» volvían al texto inicial aunque el cambio sí se aplicaba, y parecía que no dejaba. Ahora muestran el valor común del grupo (o «distintos») y avisan. Se revisaron los 24 documentos: todos están enlazados con su ajuste. Se guarda en cada equipo (localStorage).
 
