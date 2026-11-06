@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🏦 Caja con saldo en banco pasa a mixta (2026-11-06)
+## Último cambio: 🖨️ Impresoras: los recuadros de grupo muestran lo elegido (2026-11-06)
+
+- `ConfigImpresoras`: «Todos al papel», «al imprimir» y «a la impresora» volvían al texto inicial aunque el cambio sí se aplicaba, y parecía que no dejaba. Ahora muestran el valor común del grupo (o «distintos») y avisan. Se revisaron los 24 documentos: todos están enlazados con su ajuste. Se guarda en cada equipo (localStorage).
+
+## Cambio anterior: 🏦 Caja con saldo en banco pasa a mixta (2026-11-06)
 
 - `PUT /cash/registers/:id/opening-balance`: si la caja es de EFECTIVO y se le pone banco (o al revés) queda MIXTO y sus movimientos sin medio conservan el de antes. Antes guardaba el saldo y seguía sin separar gaveta y banco.
 - `previous-balance` trae `tipo_anterior` y la pantalla de abrir caja propone ese tipo.

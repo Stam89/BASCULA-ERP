@@ -8,6 +8,11 @@ import {
 } from "../impresion";
 
 const GRUPOS = [...new Set(DOCUMENTOS.map((d) => d.grupo))];
+const AL_REGISTRAR: Record<NonNullable<AjusteDocumento["alRegistrar"]>, string> = {
+  IMPRIMIR: "✅ Imprimir sin preguntar", PREGUNTAR: "❓ Preguntar antes de imprimir", NO: "🚫 No imprimir"
+};
+/** El valor que comparten todos, o "" si son distintos: el recuadro del grupo muestra lo que de verdad está elegido. */
+const comun = (valores: string[]) => (valores.every((v) => v === valores[0]) ? valores[0] : "");
 
 export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar: (m: string, t?: "success" | "error" | "warn") => void }) {
   const [a, setA] = useState<AjusteImpresora>(() => leerAjusteImpresora());
@@ -26,7 +31,7 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
     if (!esRollo(sig.papel) && sig.salida === "RAWBT") sig.salida = "VENTANA";
     guardar({ ...a, docs: { ...a.docs, [id]: sig } });
   };
-  const aplicarATodos = (p: Partial<AjusteDocumento>, grupo: string) => {
+  const aplicarATodos = (p: Partial<AjusteDocumento>, grupo: string, elegido: string) => {
     const docs = { ...a.docs };
     for (const d of DOCUMENTOS.filter((x) => x.grupo === grupo)) {
       const sig = { ...ajusteDe(d.id, a), ...p };
@@ -35,6 +40,7 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
       docs[d.id] = sig;
     }
     guardar({ ...a, docs });
+    avisar(`${grupo}: todos en ${elegido}`, "success");
   };
   const esAndroid = typeof navigator !== "undefined" && /android/i.test(navigator.userAgent);
   const usaRawbt = DOCUMENTOS.some((d) => ajusteDe(d.id, a).salida === "RAWBT");
@@ -59,6 +65,11 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
         {GRUPOS.map((g) => {
           const docs = DOCUMENTOS.filter((d) => d.grupo === g);
           const open = abierto === g;
+          const ajustes = docs.map((d) => ajusteDe(d.id, a));
+          const papelGrupo = comun(ajustes.map((x) => x.papel));
+          const alGrupo = comun(ajustes.map((x) => x.alRegistrar ?? "IMPRIMIR"));
+          const salidaGrupo = comun(ajustes.map(valorSalida));
+          const salidaAparte = salidaGrupo && salidaGrupo !== "VENTANA" && !directas.some((i) => `DIRECTA:${i.nombre}` === salidaGrupo);
           return (
             <section key={g} className={`impConf__grupo ${open ? "is-open" : ""}`}>
               <button type="button" className="impConf__grupoCab" aria-expanded={open} onClick={() => setAbierto(open ? "" : g)}>
@@ -71,21 +82,26 @@ export function ConfigImpresoras({ negocio, avisar }: { negocio: string; avisar:
                   {docs.length > 1 && (
                     <div className="impConf__todos">
                       <small>Todos los de este grupo:</small>
-                      <select aria-label="Todos al papel" value="" onChange={(e) => { if (e.target.value) aplicarATodos({ papel: e.target.value as Papel }, g); }}>
-                        <option value="">📄 Todos al papel…</option>
-                        {PAPELES.map((p) => <option key={p} value={p}>{NOMBRE_PAPEL[p]}</option>)}
+                      <select aria-label="Todos al papel" value={papelGrupo}
+                        onChange={(e) => { if (e.target.value) aplicarATodos({ papel: e.target.value as Papel }, g, NOMBRE_PAPEL[e.target.value as Papel]); }}>
+                        {!papelGrupo && <option value="">📄 Papeles distintos: elige uno para todos</option>}
+                        {PAPELES.map((p) => <option key={p} value={p}>📄 Todos en {NOMBRE_PAPEL[p]}</option>)}
                       </select>
-                      <select aria-label="Todos al imprimir" value="" onChange={(e) => { if (e.target.value) aplicarATodos({ alRegistrar: e.target.value as AjusteDocumento["alRegistrar"] }, g); }}>
-                        <option value="">Todos al imprimir…</option>
-                        <option value="IMPRIMIR">✅ Imprimir sin preguntar</option>
-                        <option value="PREGUNTAR">❓ Preguntar antes de imprimir</option>
-                        <option value="NO">🚫 No imprimir</option>
+                      <select aria-label="Todos al imprimir" value={alGrupo}
+                        onChange={(e) => {
+                          const v = e.target.value as NonNullable<AjusteDocumento["alRegistrar"]>;
+                          if (v) aplicarATodos({ alRegistrar: v }, g, AL_REGISTRAR[v]);
+                        }}>
+                        {!alGrupo && <option value="">Distinto en cada uno: elige uno para todos</option>}
+                        {Object.entries(AL_REGISTRAR).map(([v, t]) => <option key={v} value={v}>{t}</option>)}
                       </select>
                       {directas.length > 0 && (
-                        <select aria-label="Todos a la impresora" value="" onChange={(e) => { if (e.target.value) aplicarATodos(leerSalida(e.target.value), g); }}>
-                          <option value="">Todos a…</option>
-                          <option value="VENTANA">🖨️ Ventana de imprimir</option>
-                          {directas.map((i) => <option key={i.nombre} value={`DIRECTA:${i.nombre}`}>🏢 {i.nombre}</option>)}
+                        <select aria-label="Todos a la impresora" value={salidaGrupo}
+                          onChange={(e) => { const v = e.target.value; if (v) aplicarATodos(leerSalida(v), g, v === "VENTANA" ? "la ventana de imprimir" : v.slice(8)); }}>
+                          {!salidaGrupo && <option value="">Salen por lugares distintos: elige uno para todos</option>}
+                          <option value="VENTANA">🖨️ Todos a la ventana de imprimir</option>
+                          {directas.map((i) => <option key={i.nombre} value={`DIRECTA:${i.nombre}`}>🏢 Todos a {i.nombre}</option>)}
+                          {salidaAparte && <option value={salidaGrupo}>{salidaGrupo === "RAWBT" ? "📲 Térmica Bluetooth (RawBT)" : `🏢 ${salidaGrupo.slice(8)} (no disponible ahora)`}</option>}
                         </select>
                       )}
                     </div>
