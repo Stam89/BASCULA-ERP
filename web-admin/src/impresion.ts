@@ -330,9 +330,9 @@ export function verAntesDeImprimir(html: string, id: DocumentoId | string): bool
   cab.append(h, dato);
   // Fondo gris con la hoja encima; sandbox sin scripts: mirar no imprime.
   const mesa = document.createElement("div");
-  mesa.style.cssText = "flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:14px;display:flex;justify-content:center;align-items:flex-start";
+  mesa.style.cssText = "flex:1;min-height:0;overflow:auto;background:#e2e8f0;border-radius:10px;padding:14px";
   const hoja = document.createElement("div");
-  hoja.style.cssText = `flex:none;box-sizing:border-box;background:#fff;box-shadow:0 2px 10px rgba(15,23,42,.25);width:${ancho}mm;padding:${margen}mm;${alto ? `min-height:${alto}mm;` : ""}`;
+  hoja.style.cssText = `box-sizing:border-box;margin:0 auto;background:#fff;box-shadow:0 2px 10px rgba(15,23,42,.25);width:${ancho}mm;padding:${margen}mm;${alto ? `min-height:${alto}mm;` : ""}`;
   const marco = document.createElement("iframe");
   marco.setAttribute("sandbox", "allow-same-origin");
   marco.title = "Vista previa";
@@ -365,6 +365,9 @@ export function verAntesDeImprimir(html: string, id: DocumentoId | string): bool
   capa.onclick = (e) => { if (e.target === capa) cerrar(); };
   imprimir.onclick = () => { cerrar(); imprimirYa(html, id); };
   document.body.append(capa);
+  // En pantallas angostas la hoja se achica para verse entera.
+  const cabe = mesa.clientWidth - 28;
+  if (hoja.offsetWidth > cabe) hoja.style.setProperty("zoom", String(cabe / hoja.offsetWidth));
   imprimir.focus();
   return true;
 }
@@ -431,7 +434,7 @@ export function paginaDePrueba(id: string, negocio: string): string {
     <h1>${negocio.replace(/</g, "&lt;")}</h1>
     <div class="sub">PRUEBA · ${(doc?.titulo ?? id).replace(/</g, "&lt;")}</div>
     <div class="row"><span>Papel</span><span>${papelTxt}</span></div>
-    <div class="row"><span>Sale por</span><span>${d.salida === "RAWBT" ? "Térmica Bluetooth (RawBT)" : a.directo ? "Directo (kiosko)" : "Ventana de imprimir"}</span></div>
+    <div class="row"><span>Sale por</span><span>${d.salida === "DIRECTA" && d.impresora ? d.impresora.replace(/</g, "&lt;") : d.salida === "RAWBT" ? "Térmica Bluetooth (RawBT)" : a.directo ? "Directo (kiosko)" : "Ventana de imprimir"}</span></div>
     <div class="row"><span>Copias</span><span>${d.copias}</span></div>
     <div class="row"><span>Fecha</span><span>${ahora}</span></div>
     <hr>
