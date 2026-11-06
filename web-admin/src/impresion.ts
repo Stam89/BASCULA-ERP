@@ -153,7 +153,7 @@ export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora, orie
   } else {
     const medida = MEDIDA_MM[papel as Exclude<Papel, "58" | "80">];
     const [ancho, alto] = orientacion === "HORIZONTAL" ? [medida[1], medida[0]] : medida;
-    const chico = ancho <= 160;
+    const chico = medida[0] <= 160;
     const margen = a.margen === "minimo" ? (chico ? 3 : 8) : (chico ? 6 : 14);
     const util = ancho - margen * 2;
     css = `@page{size:${ancho}mm ${alto}mm;margin:${margen}mm}` + (chico
