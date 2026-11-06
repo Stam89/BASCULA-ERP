@@ -863,6 +863,50 @@ processFlowRouter.post("/drying/motor/:motor/finalizar-sin-combustible", asyncRo
   res.status(201).json(result);
 }));
 
+// 🕒 SECADO YA HECHO (pedido del dueño 2026-11-05, solo administrador): un secado que quedó sin registrar y ya terminó,
+// aunque el túnel hoy esté ocupado con otro. Conserva sus fechas (no hereda las de la corrida en curso), genera la
+// cuadrilla y el jornal del secador con sus días, y omite el combustible: queda en su propio registro pendiente, que se
+// completa después o se deja así. No toca la corrida que está en marcha.
+processFlowRouter.post("/drying/secado-pasado", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    entry_ids: z.array(z.string().uuid()).min(1),
+    tunnel_number: z.number().int().min(1).max(3),
+    rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+    filled_at: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    dry_start_at: z.string().datetime(),
+    dry_end_at: z.string().datetime(),
+    operator_name: z.string().trim().min(2),
+    notes: z.string().optional()
+  }).parse(req.body);
+  const inicio = new Date(body.dry_start_at), fin = new Date(body.dry_end_at);
+  if (fin <= inicio) throw new ApiError(400, "La hora final debe ser después de la hora de inicio.");
+  if (fin > new Date()) throw new ApiError(400, "Este botón es para secados ya terminados: la hora final no puede ser futura.");
+  const createdBy = (req as AuthenticatedRequest).user?.id;
+  const result = await inTransaction(async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71_001, body.tunnel_number]);
+    // Un túnel no seca dos cosas a la vez: las horas no pueden cruzarse con otro secado de ese túnel.
+    const cruce = await client.query(
+      `SELECT l.lot_code FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id
+        WHERE d.tunnel_number = $1 AND d.dry_start_at IS NOT NULL AND d.dry_start_at < $3::timestamptz
+          AND COALESCE(d.dry_end_at, 'infinity'::timestamptz) > $2::timestamptz LIMIT 1`,
+      [body.tunnel_number, body.dry_start_at, body.dry_end_at]
+    );
+    if (cruce.rowCount) throw new ApiError(409, `Esas horas se cruzan con el lote ${cruce.rows[0].lot_code} en el túnel ${body.tunnel_number}.`);
+    const reporte = await createDryingReport(client, dryingBodySchema.parse({
+      ...body, finalize: true, dry_method: "TUNEL", dryer_name: `Secadora ${body.tunnel_number}`, created_by: createdBy
+    }), { skipTunnelOccupancyCheck: true, skipCorrida: true });
+    const id = String((reporte as { id: unknown }).id);
+    const d = (await client.query("SELECT motor_number, total_quintals FROM drying_tunnel_reports WHERE id = $1", [id])).rows[0];
+    const rec = (await client.query(
+      "INSERT INTO motor_fuel_records (motor_number, total_quintals, created_by, pendiente) VALUES ($1, $2, $3, true) RETURNING id",
+      [d.motor_number, d.total_quintals, createdBy ?? null]
+    )).rows[0];
+    await client.query("UPDATE drying_tunnel_reports SET motor_fuel_id = $2 WHERE id = $1", [id, rec.id]);
+    return { ...(reporte as object), motor_fuel_id: rec.id };
+  });
+  res.status(201).json(result);
+}));
+
 // Corridas finalizadas que esperan su combustible (para avisar y completarlo).
 processFlowRouter.get("/drying/combustible-pendiente", asyncRoute(async (_req, res) => {
   const r = await pool.query(
@@ -2055,7 +2099,7 @@ export async function sumarTicketsASecado(client: PoolClient, dryingId: string, 
 async function createDryingReport(
   client: PoolClient,
   input: z.infer<typeof dryingBodySchema>,
-  options: { skipTunnelOccupancyCheck?: boolean } = {}
+  options: { skipTunnelOccupancyCheck?: boolean; skipCorrida?: boolean } = {}
 ) {
   if (input.finalize && (!input.dry_start_at || !input.dry_end_at)) {
     throw new ApiError(400, "Para finalizar el secado debes indicar la hora de inicio y la hora final.");
@@ -2109,7 +2153,7 @@ async function createDryingReport(
   // HEREDA obligatoriamente su fecha de llenado y hora de inicio. Así toda la
   // tanda camina con la misma fecha aunque al digitar se ponga otra por error
   // (evita el túnel con 1-sep y el otro con 2-sep). Los tickets no se tocan.
-  if (!esTendal) {
+  if (!esTendal && !options.skipCorrida) {
   const motorNumber = motorDeSecadora(input.dryer_name);
   const corrida = await client.query(
     `SELECT filled_at, dry_start_at FROM drying_tunnel_reports

@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-04
 
-## Último cambio: 💾 Guardar Proceso con lotes de Desde Stock (2026-11-05)
+## Último cambio: 🕒 Secado ya hecho, solo administrador (2026-11-05)
+
+- Secadoras › «🕒 Secado ya hecho (omitir combustible)» (`SecadoPasadoModal`, `POST /process-flow/drying/secado-pasado`, `requireAdmin`): registra un secado terminado aunque el túnel hoy esté ocupado. Conserva sus fechas (`skipCorrida`, no hereda la corrida en marcha), genera cuadrilla y jornal del secador, y su combustible va en un `motor_fuel_records` propio pendiente. Rechaza horas cruzadas con otro secado del túnel. Simulacro `secado_pasado`.
+
+## Cambio anterior: 💾 Guardar Proceso con lotes de Desde Stock (2026-11-05)
 
 - `milling_drafts.lot_id` (migración 20261139): un borrador es de un túnel o de un lote sin secado (saldo inicial, solo pilada). La clave en `/processing-batches/drafts/:id` y `reference_id` de inventario y nómina es el id del lote. Solo un lote a la vez.
 - `dry-in-storage` trae `has_draft`: el lote sale del selector y se retoma con Continuar en Procesos guardados.

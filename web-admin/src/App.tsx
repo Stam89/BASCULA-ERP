@@ -2,6 +2,7 @@ import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/
 import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
 import type { ReglaCaja } from "./components/cajaHojaLeer";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { SecadoPasadoModal } from "./components/SecadoPasadoModal";
 import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
 import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
@@ -2616,6 +2617,7 @@ export function App() {
   const [secadorGuardiaDesde, setSecadorGuardiaDesde] = useState(() => semanaOperativaKey());
   const [secadorGuardiaBusy, setSecadorGuardiaBusy] = useState(false);
   const [secadorasVista, setSecadorasVista] = useState<"operacion" | "guardia">("operacion");
+  const [secadoPasadoAbierto, setSecadoPasadoAbierto] = useState(false);
   useEffect(() => {
     // Si la aplicación queda abierta del domingo al lunes, inicia la nueva
     // semana sin conservar en pantalla al responsable de la semana anterior.
@@ -15796,6 +15798,19 @@ Motivo (obligatorio):`, ""));
                 </button>}
               </nav>
             </div>
+            {secadorasVista === "operacion" && isAdmin && (
+              <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
+                <button type="button" onClick={() => setSecadoPasadoAbierto(true)}>🕒 Secado ya hecho (omitir combustible)</button>
+              </div>
+            )}
+            {secadoPasadoAbierto && (
+              <SecadoPasadoModal
+                entradas={availableDryingLots}
+                secador={secadorSemana}
+                onCerrar={() => setSecadoPasadoAbierto(false)}
+                onGuardado={(msg) => { setSecadoPasadoAbierto(false); addToast(msg, "success"); refresh().catch(() => undefined); loadMotorActive().catch(() => undefined); }}
+              />
+            )}
             {secadorasVista === "operacion" && combustiblePendiente.length > 0 && (
               <div className="alertBox" style={{ gridColumn: "1 / -1", background: "#fff7ed", border: "1px solid #fdba74", color: "#9a3412", display: "grid", gap: 8 }}>
                 <strong>⛽ Combustible pendiente ({combustiblePendiente.length})</strong>
