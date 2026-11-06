@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 👁️ Vista previa antes de imprimir (2026-11-06)
+## Último cambio: 🖨️ Impresión directa cortada: el driver debe saber el papel (2026-11-06)
+
+- SumatraPDF `noscale` imprime sobre el papel predeterminado del driver (A4 en las Epson): un PDF de 15×21 queda corrido y se corta en la hoja real. `ajustesSumatra` manda `paper=` para A4, Carta y 10,5×15 (A6). La L3150 no trae 15×21 ni A5: ese tamaño debe quedar como predeterminado personalizado en Windows, lo hace el dueño (150 × 210 mm). Se comprueba con `Get-PrintConfiguration`/`PrinterSettings`.
+
+## Cambio anterior: 👁️ Vista previa antes de imprimir (2026-11-06)
 
 - `verAntesDeImprimir` (impresion.ts): capa con el documento en su tamaño de papel, en un iframe sin scripts; imprime solo con «🖨️ Imprimir». Es la opción VISTA de «Al imprimir», por documento o por grupo; también aplica a reimpresiones (`forzar`). El predeterminado sigue siendo IMPRIMIR. 🧪 Prueba siempre pasa por la vista previa: antes mandaba directo a la impresora.
 
