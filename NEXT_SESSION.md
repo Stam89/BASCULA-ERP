@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🖨️ Impresión directa cortada: el driver debe saber el papel (2026-11-06)
+## Último cambio: 🖨️ 15×21 con diseño de A4 (2026-11-06)
+
+- `ajustarHtml`: el papel 15×21 ya no ajusta el documento a la hoja chica: lo arma como A4 y lo reduce (`html{zoom}` 150/210, margen 10 mm = 14 mm de A4). Letra más chica, a pedido del dueño. Los otros papeles chicos siguen igual.
+
+## Cambio anterior: 🖨️ Impresión directa cortada: el driver debe saber el papel (2026-11-06)
 
 - SumatraPDF `noscale` imprime sobre el papel predeterminado del driver (A4 en las Epson): un PDF de 15×21 queda corrido y se corta en la hoja real. `ajustesSumatra` manda `paper=` para A4, Carta y 10,5×15 (A6). La L3150 no trae 15×21 ni A5: ese tamaño debe quedar como predeterminado personalizado en Windows, lo hace el dueño (150 × 210 mm). El dueño ya lo guardó (DEVMODE: `dmPaperSize` 256, 150 × 210 mm; `Get-PrintConfiguration` sigue diciendo A4 y no sirve para esto). Sumatra recibe siempre `portrait` o `landscape`: el predeterminado quedó en horizontal.
 

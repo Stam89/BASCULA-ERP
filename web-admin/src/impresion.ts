@@ -135,6 +135,14 @@ export function ajusteDe(id: string, a: AjusteImpresora = leerAjusteImpresora())
 
 
 const ANCHO_MM: Record<"58" | "80", number> = { "58": 48, "80": 72 };
+/** La hoja de 15×21 lleva el diseño de A4 reducido (pedido del dueño 2026-11-06): 150 mm ÷ 210 mm. */
+const REDUCCION_A4 = 150 / 210;
+const margenHoja = (papel: Papel, a: AjusteImpresora): number => {
+  const minimo = a.margen === "minimo";
+  if (esRollo(papel)) return minimo ? 2 : 5;
+  if (papel === "15x21") return minimo ? 6 : 10;
+  return MEDIDA_MM[papel as Exclude<Papel, "58" | "80">][0] <= 160 ? (minimo ? 3 : 6) : (minimo ? 8 : 14);
+};
 export const COLUMNAS: Record<"58" | "80", number> = { "58": 32, "80": 48 };
 
 /** Ajusta el HTML del documento al papel y la letra elegidos (sin tocar cómo se arma cada documento). */
@@ -144,7 +152,7 @@ export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora, orie
   const sinAuto = html.replace(/<script>\s*window\.onload\s*=\s*function\s*\(\)\s*\{\s*window\.print\(\)\s*\}\s*<\/script>/gi, "");
   let css: string;
   if (esRollo(papel)) {
-    const margen = a.margen === "minimo" ? 2 : 5;
+    const margen = margenHoja(papel, a);
     const ancho = ANCHO_MM[papel as "58" | "80"];
     css = `@page{size:${papel}mm auto;margin:${margen}mm}
        html,body{width:${ancho}mm!important;max-width:${ancho}mm!important;margin:0 auto!important}
@@ -153,10 +161,12 @@ export function ajustarHtml(html: string, papel: Papel, a: AjusteImpresora, orie
   } else {
     const medida = MEDIDA_MM[papel as Exclude<Papel, "58" | "80">];
     const [ancho, alto] = orientacion === "HORIZONTAL" ? [medida[1], medida[0]] : medida;
-    const chico = medida[0] <= 160;
-    const margen = a.margen === "minimo" ? (chico ? 3 : 8) : (chico ? 6 : 14);
+    const chico = medida[0] <= 160 && papel !== "15x21";
+    const margen = margenHoja(papel, a);
     const util = ancho - margen * 2;
-    css = `@page{size:${ancho}mm ${alto}mm;margin:${margen}mm}` + (chico
+    css = `@page{size:${ancho}mm ${alto}mm;margin:${margen}mm}` + (papel === "15x21"
+      ? `html{zoom:${REDUCCION_A4.toFixed(4)}}.tk,.sheet{width:auto!important;max-width:100%!important}table{width:100%!important}img{max-width:100%}`
+      : chico
       ? `html,body{max-width:${util}mm!important;margin:0 auto!important}
          .tk,.sheet{width:auto!important;max-width:${util}mm!important}
          table{width:100%!important} img{max-width:100%}
@@ -308,7 +318,7 @@ export function verAntesDeImprimir(html: string, id: DocumentoId | string): bool
   const rollo = esRollo(d.papel);
   const medida = rollo ? null : MEDIDA_MM[d.papel as Exclude<Papel, "58" | "80">];
   const [ancho, alto] = !medida ? [Number(d.papel), 0] : d.orientacion === "HORIZONTAL" ? [medida[1], medida[0]] : medida;
-  const margen = rollo ? (a.margen === "minimo" ? 2 : 5) : medida![0] <= 160 ? (a.margen === "minimo" ? 3 : 6) : (a.margen === "minimo" ? 8 : 14);
+  const margen = margenHoja(d.papel, a);
   const destino = d.salida === "DIRECTA" && d.impresora ? d.impresora : d.salida === "RAWBT" ? "Térmica Bluetooth" : "ventana de imprimir";
   const papel = NOMBRE_PAPEL[d.papel] + (usaOrientacion(d.papel) && d.orientacion === "HORIZONTAL" ? " horizontal" : "");
 
