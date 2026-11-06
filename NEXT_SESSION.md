@@ -2,7 +2,13 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: ↩️ Regresar un ticket a Báscula (2026-11-06)
+## Último cambio: 🏦 Caja con saldo en banco pasa a mixta (2026-11-06)
+
+- `PUT /cash/registers/:id/opening-balance`: si la caja es de EFECTIVO y se le pone banco (o al revés) queda MIXTO y sus movimientos sin medio conservan el de antes. Antes guardaba el saldo y seguía sin separar gaveta y banco.
+- `previous-balance` trae `tipo_anterior` y la pantalla de abrir caja propone ese tipo.
+- Datos: la caja abierta de STALYN pasó a MIXTO a pedido del dueño ($121.10 gaveta, $201.86 banco). Simulacro `caja_saldo_banco`.
+
+## Cambio anterior: ↩️ Regresar un ticket a Báscula (2026-11-06)
 
 - Báscula › Todos › «↩️ Regresar a Báscula» (`POST /tickets/:id/regresar`, solo administrador, con motivo; `services/regresar-ticket.ts`): un ticket ingresado por error vuelve a pendiente. Borra el `weighing_tickets` (con estado CANCELLED habría que filtrarlo en 46 consultas), deja la entrada de cáscara y le suma una reversa `ticket_regresado` en el kárdex, y borra su flete interno por cobrar.
 - Se frena con lote (incluye «Solo pilado», que nace con lote), secadora, pilada, liquidación vigente, ticket liquidado, o flete cobrado o ya pagado al operador. Una liquidación anulada pierde el enlace al ingreso.

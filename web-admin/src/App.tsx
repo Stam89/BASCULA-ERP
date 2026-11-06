@@ -11132,6 +11132,13 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     return dashboard.current_cash_register?.tipo === "MIXTO" ? { medio_pago: medio } : {};
   }
   const cajaEsMixta = dashboard.current_cash_register?.tipo === "MIXTO";
+  // La caja nueva propone el mismo tipo de la anterior: una mixta no vuelve sola a solo efectivo.
+  useEffect(() => {
+    if (activeTab !== "Caja" || dashboard.current_cash_register) return;
+    apiGet<{ tipo_anterior?: CashRegisterType }>("/cash/registers/previous-balance?tipo=MIXTO")
+      .then((d) => { if (d.tipo_anterior) setNewCajaTipo(d.tipo_anterior); })
+      .catch(() => undefined);
+  }, [activeTab, activeAccionistaId, dashboard.current_cash_register]);
   // La entrega de un fomento puede ir por transferencia también desde una caja de efectivo (ahí no sale de la gaveta).
   const cajaAdmiteTransferencia = cajaEsMixta || dashboard.current_cash_register?.tipo === "EFECTIVO";
   function fomentoPorTransferencia() { return cajaAdmiteTransferencia && medioOperacion === "BANCO"; }

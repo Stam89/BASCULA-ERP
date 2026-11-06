@@ -366,7 +366,7 @@ cashRouter.get("/registers/previous-balance", asyncRoute(async (req, res) => {
   const s = await saldosDeCaja(pool, last.id);
   res.json({
     final_balance: tipo === "EFECTIVO" ? s.efectivo : tipo === "BANCO" ? s.banco : s.total,
-    final_efectivo: s.efectivo, final_banco: s.banco, caja_anterior: last.id
+    final_efectivo: s.efectivo, final_banco: s.banco, caja_anterior: last.id, tipo_anterior: s.tipo
   });
 }));
 
@@ -604,17 +604,25 @@ cashRouter.put("/registers/:id/opening-balance", requireAdmin, asyncRoute(async 
 
   const openingTotal = round2(body.opening_balance_cash + body.opening_balance_bank);
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const result = await pool.query(
-    `UPDATE cash_registers
-     SET opening_balance = $2,
-         opening_balance_cash = $3,
-         opening_balance_bank = $4
-     WHERE id = $1 AND accionista_id = $5 AND status = 'OPEN'
-     RETURNING *`,
-    [req.params.id, openingTotal, body.opening_balance_cash, body.opening_balance_bank, accionistaId]
-  );
-  if (!result.rows[0]) throw new ApiError(400, "Caja no encontrada o ya está cerrada");
-  res.json(result.rows[0]);
+  const fila = await inTransaction(async (client) => {
+    const reg = (await client.query(
+      "SELECT tipo FROM cash_registers WHERE id = $1 AND accionista_id = $2 AND status = 'OPEN' FOR UPDATE", [req.params.id, accionistaId]
+    )).rows[0];
+    if (!reg) throw new ApiError(400, "Caja no encontrada o ya está cerrada");
+    // Saldo en los dos lados = caja mixta (pedido del dueño 2026-11-06): si no, la pantalla no separa gaveta y banco.
+    const pasaAMixta = (reg.tipo === "EFECTIVO" && body.opening_balance_bank > 0) || (reg.tipo === "BANCO" && body.opening_balance_cash > 0);
+    if (pasaAMixta) {
+      await client.query("UPDATE cash_movements SET medio = $2 WHERE cash_register_id = $1 AND medio IS NULL", [req.params.id, reg.tipo]);
+    }
+    return (await client.query(
+      `UPDATE cash_registers
+       SET opening_balance = $2, opening_balance_cash = $3, opening_balance_bank = $4, tipo = $5
+       WHERE id = $1
+       RETURNING *`,
+      [req.params.id, openingTotal, body.opening_balance_cash, body.opening_balance_bank, pasaAMixta ? "MIXTO" : reg.tipo]
+    )).rows[0];
+  });
+  res.json(fila);
 }));
 
 // ── Movimientos de una caja ──────────────────────────────────────────────────
