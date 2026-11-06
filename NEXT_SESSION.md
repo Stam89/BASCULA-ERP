@@ -4,7 +4,7 @@ Actualizado: 2026-11-04
 
 ## Último cambio: 🕒 Secado ya hecho, solo administrador (2026-11-05)
 
-- Secadoras › «🕒 Secado ya hecho (omitir combustible)» (`SecadoPasadoModal`, `POST /process-flow/drying/secado-pasado`, `requireAdmin`): registra un secado terminado aunque el túnel hoy esté ocupado. Conserva sus fechas (`skipCorrida`, no hereda la corrida en marcha), genera cuadrilla y jornal del secador, y su combustible va en un `motor_fuel_records` propio pendiente. Rechaza horas cruzadas con otro secado del túnel. Simulacro `secado_pasado`.
+- Secadoras › «🕒 Secado ya hecho (omitir combustible)» (`SecadoPasadoModal`, `POST /process-flow/drying/secado-pasado`, `requireAdmin`): registra un secado terminado aunque el túnel hoy esté ocupado. Conserva sus fechas (`skipCorrida`, no hereda la corrida en marcha), genera cuadrilla y jornal del secador, y su combustible se omite: `motor_fuel_records` propio en $0 con `pendiente = false`. En ⛽ Combustible pendiente, «🚫 Omitir» (`POST /drying/motor-fuel/:id/omitir`, solo administrador) hace lo mismo con cualquier corrida. Rechaza horas cruzadas con otro secado del túnel. Simulacro `secado_pasado`.
 
 ## Cambio anterior: 💾 Guardar Proceso con lotes de Desde Stock (2026-11-05)
 

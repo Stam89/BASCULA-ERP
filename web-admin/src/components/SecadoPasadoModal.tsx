@@ -2,7 +2,7 @@ import { useState } from "react";
 import { apiPost } from "../api";
 
 // 🕒 Secadoras › «Secado ya hecho» (solo administrador): un secado que terminó y no se registró a tiempo, aunque el túnel
-// hoy esté ocupado. Genera la cuadrilla y el jornal del secador con sus días; el combustible queda pendiente, aparte.
+// hoy esté ocupado. Genera la cuadrilla y el jornal del secador con sus días; el combustible se omite (queda en $0).
 
 type Entrada = { id: string; ticket_number: string; numero_bascula?: string | null; farmer_name?: string | null; quintals?: number | string | null };
 type Props = { entradas: Entrada[]; secador?: string; onCerrar: () => void; onGuardado: (mensaje: string) => void };
@@ -28,7 +28,7 @@ export function SecadoPasadoModal({ entradas, secador, onCerrar, onGuardado }: P
         entry_ids: elegidas, tunnel_number: tunel, rice_type: tipo, filled_at: llenado,
         dry_start_at: new Date(inicio).toISOString(), dry_end_at: new Date(fin).toISOString(), operator_name: nombre.trim()
       });
-      onGuardado(`Secado registrado en la Secadora ${tunel}: ${total.toFixed(2)} QQ. El combustible quedó pendiente.`);
+      onGuardado(`Secado registrado en la Secadora ${tunel}: ${total.toFixed(2)} QQ. Combustible omitido.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "No se pudo registrar");
       setGuardando(false);
@@ -39,7 +39,7 @@ export function SecadoPasadoModal({ entradas, secador, onCerrar, onGuardado }: P
     <div className="modalOverlay" onClick={onCerrar}>
       <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 620, width: "100%", display: "grid", gap: 10 }}>
         <h3 style={{ margin: 0 }}>🕒 Secado ya hecho</h3>
-        <small>Se genera el pago de la cuadrilla y del secador con estas fechas. El combustible se omite: sale en «Combustible pendiente» por si llega el informe.</small>
+        <small>Se genera el pago de la cuadrilla y del secador con estas fechas. El combustible se omite: queda en $0 y no aparece como pendiente.</small>
         <div style={{ maxHeight: 220, overflowY: "auto", display: "grid", gap: 4 }}>
           {entradas.length === 0 && <small>No hay ingresos libres. Primero ingresa los tickets desde Báscula.</small>}
           {entradas.map((e) => (

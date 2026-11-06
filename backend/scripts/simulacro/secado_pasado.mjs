@@ -1,5 +1,5 @@
 // 🕒 Secado ya hecho (pedido del dueño 2026-11-05): solo administrador, con el túnel ocupado por otro secado. Conserva sus
-// fechas, genera cuadrilla y secador, y su combustible queda aparte de la corrida en marcha. SOLO copia.
+// fechas, genera cuadrilla y secador, y su combustible se omite, aparte de la corrida en marcha. SOLO copia.
 import { montar, check, resumen } from "./sim_base.mjs";
 const S = await montar({ copiar: process.argv[2] !== "nocopia", liberarTuneles: false });
 const { api, q } = S;
@@ -10,7 +10,8 @@ try {
   const tks = await q("SELECT id FROM mobile_synced_tickets WHERE raw_payload->>'numeroTicket' IN ('000 499','000 502')");
   const ids = [];
   for (const t of tks) {
-    const r = await api("POST", `/tickets/${t.id}/create-lot`, { operation_type: "SECADO_PILADO" });
+    const ya = (await q("SELECT weighing_ticket_id id FROM mobile_synced_tickets WHERE id = $1", [t.id]))[0].id;
+    const r = ya ? { ok: true } : await api("POST", `/tickets/${t.id}/create-lot`, { operation_type: "SECADO_PILADO" });
     check(r.ok, "1. ingresar ticket como servicio", r.ok ? undefined : mostrar(r));
     ids.push((await q("SELECT weighing_ticket_id id FROM mobile_synced_tickets WHERE id = $1", [t.id]))[0].id);
   }
@@ -29,13 +30,25 @@ try {
   const despues = await jornal();
   check(Math.abs(despues - antes - 5) < 0.01, "7. el secador sube $5 ese día", { antes, despues });
   const f = (await q("SELECT pendiente, total_quintals::float qq FROM motor_fuel_records WHERE id = $1", [d.motor_fuel_id]))[0];
-  check(f.pendiente && Math.abs(f.qq - 143.3) < 0.01, "8. combustible pendiente aparte", f);
+  check(!f.pendiente && Math.abs(f.qq - 143.3) < 0.01, "8. combustible omitido y aparte", f);
+  const pend = await api("GET", "/process-flow/drying/combustible-pendiente");
+  check(!pend.data.some((x) => x.id === d.motor_fuel_id), "8b. no aparece como pendiente");
+  if (pend.data[0]) {
+    const o = await api("POST", `/process-flow/drying/motor-fuel/${pend.data[0].id}/omitir`, {});
+    check(o.ok, "8c. omitir una corrida pendiente", mostrar(o));
+    const p2 = await api("GET", "/process-flow/drying/combustible-pendiente");
+    check(!p2.data.some((x) => x.id === pend.data[0].id), "8d. ya no sale");
+    const o2 = await api("POST", `/process-flow/drying/motor-fuel/${pend.data[0].id}/omitir`, {});
+    check(o2.status === 409, "8e. no se omite dos veces", o2.status);
+  }
   const act = await api("GET", "/process-flow/drying/motor/2/active");
   check(act.data.length === 1 && act.data[0].id === t3.id, "9. la corrida en marcha queda sola", act.data.length);
   const t3b = (await q("SELECT status, dry_start_at FROM drying_tunnel_reports WHERE id = $1", [t3.id]))[0];
   check(t3b.status === "IN_PROGRESS" && +t3b.dry_start_at === +t3.dry_start_at, "10. el secado en curso no cambió");
   const reps = await api("GET", "/process-flow/drying/reports");
   check(reps.data.some((x) => x.id === d.id), "11. sale en los secados de Producción");
+  const re = await api("POST", `/process-flow/drying/${d.id}/reabrir`, { motivo: "prueba de simulacro" });
+  check(re.ok, "12. reabrir deshace el omitido", re.ok ? undefined : mostrar(re));
 } catch (e) { check(false, "detenido", String(e)); }
 const fallas = resumen();
 await S.cerrar?.();

@@ -11939,6 +11939,14 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     } finally { setSinCombustibleBusy(false); }
   }
 
+  // 🚫 Solo administrador: el combustible de esa corrida se queda en $0 y ya no sale como pendiente.
+  async function omitirCombustible(p: { id: string; motor_number: 1 | 2; total_quintals: number }) {
+    if (!(await confirmar(`¿Omitir el combustible del Motor ${p.motor_number} (${Number(p.total_quintals).enReal()} QQ)?\n\nEsa corrida queda con combustible en $0 y ya no aparece como pendiente.`))) return;
+    await apiPost(`/process-flow/drying/motor-fuel/${p.id}/omitir`, {});
+    addToast("Combustible omitido", "success");
+    await loadMotorActive();
+  }
+
   function abrirCompletarCombustible(p: { id: string; motor_number: 1 | 2 }) {
     setMotorActivo(p.motor_number);
     setGasForm({ bombona_inicio: "", bombona_fin: "", cilindro_cantidad: "", diesel_inicio: "", diesel_fin: "" });
@@ -15822,7 +15830,10 @@ Motivo (obligatorio):`, ""));
                       {p.fin ? ` · terminó ${new Date(p.fin).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}` : ""}
                       {p.lotes ? <small style={{ display: "block", color: "#7c2d12" }}>Lotes: {p.lotes}</small> : null}
                     </span>
-                    {canEdit("Secadoras") && <button type="button" className="primary" onClick={() => abrirCompletarCombustible(p)}>⛽ Registrar combustible</button>}
+                    <span style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                      {canEdit("Secadoras") && <button type="button" className="primary" onClick={() => abrirCompletarCombustible(p)}>⛽ Registrar combustible</button>}
+                      {isAdmin && <button type="button" onClick={() => { omitirCombustible(p).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo omitir", "error")); }}>🚫 Omitir</button>}
+                    </span>
                   </div>
                 ))}
               </div>

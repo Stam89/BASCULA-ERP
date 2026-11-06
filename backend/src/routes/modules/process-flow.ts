@@ -865,8 +865,8 @@ processFlowRouter.post("/drying/motor/:motor/finalizar-sin-combustible", asyncRo
 
 // 🕒 SECADO YA HECHO (pedido del dueño 2026-11-05, solo administrador): un secado que quedó sin registrar y ya terminó,
 // aunque el túnel hoy esté ocupado con otro. Conserva sus fechas (no hereda las de la corrida en curso), genera la
-// cuadrilla y el jornal del secador con sus días, y omite el combustible: queda en su propio registro pendiente, que se
-// completa después o se deja así. No toca la corrida que está en marcha.
+// cuadrilla y el jornal del secador con sus días, y omite el combustible: queda en su propio registro en $0, sin aviso de
+// pendiente. No toca la corrida que está en marcha. Con Reabrir se deshace.
 processFlowRouter.post("/drying/secado-pasado", requireAdmin, asyncRoute(async (req, res) => {
   const body = z.object({
     entry_ids: z.array(z.string().uuid()).min(1),
@@ -898,13 +898,20 @@ processFlowRouter.post("/drying/secado-pasado", requireAdmin, asyncRoute(async (
     const id = String((reporte as { id: unknown }).id);
     const d = (await client.query("SELECT motor_number, total_quintals FROM drying_tunnel_reports WHERE id = $1", [id])).rows[0];
     const rec = (await client.query(
-      "INSERT INTO motor_fuel_records (motor_number, total_quintals, created_by, pendiente) VALUES ($1, $2, $3, true) RETURNING id",
+      "INSERT INTO motor_fuel_records (motor_number, total_quintals, created_by, pendiente) VALUES ($1, $2, $3, false) RETURNING id",
       [d.motor_number, d.total_quintals, createdBy ?? null]
     )).rows[0];
     await client.query("UPDATE drying_tunnel_reports SET motor_fuel_id = $2 WHERE id = $1", [id, rec.id]);
     return { ...(reporte as object), motor_fuel_id: rec.id };
   });
   res.status(201).json(result);
+}));
+
+// 🚫 OMITIR el combustible de una corrida (solo administrador): deja de salir como pendiente y se queda en $0.
+processFlowRouter.post("/drying/motor-fuel/:id/omitir", requireAdmin, asyncRoute(async (req, res) => {
+  const r = await pool.query("UPDATE motor_fuel_records SET pendiente = false WHERE id = $1 AND pendiente RETURNING id", [req.params.id]);
+  if (!r.rowCount) throw new ApiError(409, "Ese combustible ya no está pendiente.");
+  res.json({ ok: true });
 }));
 
 // Corridas finalizadas que esperan su combustible (para avisar y completarlo).
