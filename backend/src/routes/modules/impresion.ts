@@ -30,9 +30,10 @@ const VIRTUALES = /onenote|xps document writer|print to pdf|^fax$|anydesk/i;
 // tamaño queda corrido y se corta (pedido del dueño 2026-11-06). Estos papeles el driver los conoce por nombre. Los que no
 // (15×21, 10×10) salen en el predeterminado de la impresora: ahí debe estar el tamaño personalizado de la hoja que se usa.
 const PAPEL_DRIVER: Record<string, string> = { A4: "A4", CARTA: "letter", "10.5x15": "A6" };
-export function ajustesSumatra(copias: number, papel?: string): string {
+export function ajustesSumatra(copias: number, papel?: string, orientacion?: "VERTICAL" | "HORIZONTAL"): string {
   const nombre = papel ? PAPEL_DRIVER[papel] : undefined;
-  return `${copias}x,noscale${nombre ? `,paper=${nombre}` : ""}`;
+  // La orientación va siempre: no depende de cómo esté la impresora en Windows.
+  return `${copias}x,noscale,${orientacion === "HORIZONTAL" ? "landscape" : "portrait"}${nombre ? `,paper=${nombre}` : ""}`;
 }
 
 type Impresora = { nombre: string; predeterminada: boolean; desconectada: boolean };
@@ -66,7 +67,8 @@ impresionRouter.post("/imprimir", asyncRoute(async (req, res) => {
     html: z.string().min(20).max(1_900_000),
     copias: z.number().int().min(1).max(5).default(1),
     titulo: z.string().trim().max(120).optional(),
-    papel: z.string().trim().max(20).optional()
+    papel: z.string().trim().max(20).optional(),
+    orientacion: z.enum(["VERTICAL", "HORIZONTAL"]).optional()
   }).parse(req.body);
   const sumatra = primero(SUMATRA);
   const navegador = primero(NAVEGADORES);
@@ -91,7 +93,7 @@ impresionRouter.post("/imprimir", asyncRoute(async (req, res) => {
       `--user-data-dir=${path.join(dir, "perfil")}`, `--print-to-pdf=${pdf}`, `file:///${html.replace(/\\/g, "/")}`
     ], { windowsHide: true, timeout: 45_000 });
     if (!fs.existsSync(pdf) || fs.statSync(pdf).size < 200) throw new ApiError(500, "No se pudo preparar el documento para imprimir.");
-    await ejecutar(sumatra, ["-print-to", imp.nombre, "-print-settings", ajustesSumatra(body.copias, body.papel), "-silent", "-exit-when-done", pdf],
+    await ejecutar(sumatra, ["-print-to", imp.nombre, "-print-settings", ajustesSumatra(body.copias, body.papel, body.orientacion), "-silent", "-exit-when-done", pdf],
       { windowsHide: true, timeout: 90_000 });
     res.json({ ok: true, impresora: imp.nombre, desconectada: imp.desconectada });
   } finally {

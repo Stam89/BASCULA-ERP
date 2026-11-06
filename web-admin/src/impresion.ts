@@ -379,7 +379,8 @@ function imprimirYa(html: string, id: DocumentoId | string): boolean {
     const listo = ajustarHtml(html, d.papel, a, d.orientacion);
     const titulo = DOCUMENTOS.find((x) => x.id === id)?.titulo ?? "Documento";
     avisar(`🖨️ Enviando «${titulo}» a ${d.impresora}…`, "success");
-    apiPost<{ ok: boolean; desconectada?: boolean }>("/impresion/imprimir", { impresora: d.impresora, html: listo, copias: d.copias, titulo, papel: d.papel })
+    apiPost<{ ok: boolean; desconectada?: boolean }>("/impresion/imprimir", { impresora: d.impresora, html: listo, copias: d.copias, titulo, papel: d.papel,
+      orientacion: usaOrientacion(d.papel) ? d.orientacion : "VERTICAL" })
       .then((r) => avisar(r.desconectada ? `⚠️ ${d.impresora} figura desconectada: revisa que esté prendida (el trabajo quedó en su cola).` : `✓ «${titulo}» enviado a ${d.impresora}`, r.desconectada ? "warn" : "success"))
       .catch((e: unknown) => {
         // Sin servidor o sin impresora: se imprime por la ventana de siempre.
