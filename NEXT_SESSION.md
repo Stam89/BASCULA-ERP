@@ -2,6 +2,12 @@
 
 Actualizado: 2026-11-06
 
+## Último cambio: ↩️ Regresar un ticket a Báscula (2026-11-06)
+
+- Báscula › Todos › «↩️ Regresar a Báscula» (`POST /tickets/:id/regresar`, solo administrador, con motivo; `services/regresar-ticket.ts`): un ticket ingresado por error vuelve a pendiente. Borra el `weighing_tickets` (con estado CANCELLED habría que filtrarlo en 46 consultas), deja la entrada de cáscara y le suma una reversa `ticket_regresado` en el kárdex, y borra su flete interno por cobrar.
+- Se frena con lote (incluye «Solo pilado», que nace con lote), secadora, pilada, liquidación vigente, ticket liquidado, o flete cobrado o ya pagado al operador. Una liquidación anulada pierde el enlace al ingreso.
+- Simulacro `regresar_ticket`.
+
 ## Último cambio: 💵 Préstamo de Jacobo, se descuenta de a poco (2026-11-06)
 
 - Por Pagar › JACOBO MACIAS (con la Matriz activa): «¿Cuánto descontar esta vez?», sin regla fija (`PrestamoSelectora`, `services/prestamo-selectora.ts`, `/cash/payables/prestamo-selectora`, tabla `prestamo_descuentos`, migración 20261141). Solo CxP `selectora_servicio` de la Matriz; lo que deben los socios no entra. Del más viejo al más nuevo, en cuentas y en fondos.

@@ -13,6 +13,7 @@ import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { dispararFleteInternoBascula } from "../../services/campo-flete-bascula.js";
+import { regresarTicketABascula } from "../../services/regresar-ticket.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { env } from "../../config/env.js";
 import { basculaTicketStableKey, canonicalBasculaTicketNumber } from "../../utils/bascula-ticket-identity.js";
@@ -354,7 +355,7 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
   if (q.status === "pending") conditions.push(dentroDelCorteSql("t", "$1", "$2"));
   const result = await pool.query(
     `SELECT t.id, t.farmer_id, t.farmer_name, t.accionista_id, t.lot_id, t.weighing_ticket_id, t.en_espera,
-            t.quitado_at, t.quitado_motivo,
+            t.quitado_at, t.quitado_motivo, (wi.lot_id IS NOT NULL) AS ingreso_en_lote,
             NOT ${dentroDelCorteSql("t", "$1", "$2")} AS antes_del_corte,
             t.gross_weight, t.tare_weight, t.net_weight,
             t.qualification, t.quintals, t.price_per_quintal, t.net_payable, t.liquidated_at,
@@ -367,6 +368,7 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
             fv.full_name AS farmer_vinculado
      FROM mobile_synced_tickets t
      LEFT JOIN farmers fv ON fv.id = t.farmer_id
+     LEFT JOIN weighing_tickets wi ON wi.id = t.weighing_ticket_id
      WHERE ${conditions.join(" AND ")}
      ORDER BY NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint DESC NULLS LAST,
               t.mobile_updated_at DESC NULLS LAST
@@ -631,6 +633,15 @@ mobileTicketsRouter.post("/:id/restaurar", requireAuth, requireAdmin, resolveAcc
   );
   if (!r.rowCount) throw new ApiError(409, "Ese ticket no estaba quitado.");
   res.json({ ok: true });
+}));
+
+// ↩️ Regresar a Báscula un ticket ingresado por error: vuelve a pendiente y su cáscara sale del inventario.
+mobileTicketsRouter.post("/:id/regresar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+  const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
+  const user = (req as AuthenticatedRequest).user;
+  const r = await inTransaction((client) => regresarTicketABascula(client, { ticketId: String(req.params.id), motivo, userId: user?.id ?? null }));
+  res.locals.auditResumen = `Ticket #${r.numero ?? ""} regresado a Báscula: ${motivo}`;
+  res.json(r);
 }));
 
 /**

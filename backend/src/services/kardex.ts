@@ -15,6 +15,7 @@ export function nombreMovimiento(movement: string, referencia: string | null, ca
     case "saldo_inicial": return "Saldo inicial (arranque)";
     case "saldo_inicial_anulado": return "Saldo inicial corregido";
     case "manual_adjustment": return "Ajuste manual";
+    case "ticket_regresado": return "Ticket regresado a Báscula";
     case "lot_transfer": return "Transferencia de lote";
     case "selection_batch": return cantidad < 0 ? "Enviado a selección / envejecido" : "Regresó de selección / envejecido";
     case "selection_batch_reabierto": return "Selección reabierta";

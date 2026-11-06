@@ -354,6 +354,7 @@ type BasculaTicket = {
   /** Quitado de pendientes (se borró en la app de báscula, era de prueba…): no se borra, se puede restaurar. */
   quitado_at?: string | null;
   quitado_motivo?: string | null;
+  ingreso_en_lote?: boolean;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -8335,6 +8336,17 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       await refreshBasculaTickets();
     } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo quitar", "error"); }
   }
+  // ↩️ Ingresado por error: el ticket vuelve a pendiente y su cáscara sale del inventario. Solo administrador.
+  async function regresarTicketBascula(t: BasculaTicket) {
+    const motivo = (await pedirTexto(`Regresar el ticket #${t.numero ?? ""} de ${t.farmer_name ?? "—"} a Báscula.\nSe anula el ingreso, su cáscara sale del inventario y el ticket vuelve a quedar pendiente.\n\n¿Por qué?`, "Se ingresó por error"));
+    if (!motivo || motivo.trim().length < 3) return;
+    try {
+      await apiPost(`/tickets/${t.id}/regresar`, { motivo: motivo.trim() });
+      addToast(`Ticket #${t.numero ?? ""} regresado a Báscula`, "success");
+      await refreshBasculaTickets();
+      await refresh();
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo regresar", "error"); }
+  }
   async function restaurarTicketBascula(t: BasculaTicket) {
     try {
       await apiPost(`/tickets/${t.id}/restaurar`, {});
@@ -15622,6 +15634,10 @@ Motivo (obligatorio):`, ""));
                             {canAnular && !t.weighing_ticket_id && !liquidated && (
                               <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} title="Se borró en la app de báscula, era de prueba o está repetido: deja de ser pendiente (no se borra)"
                                 onClick={() => quitarTicketBascula(t)}>🗑️ Quitar</button>
+                            )}
+                            {canAnular && t.weighing_ticket_id && !t.ingreso_en_lote && !liquidated && (
+                              <button type="button" className="btnSecondary" title="Se ingresó por error: anula el ingreso y el ticket vuelve a pendiente"
+                                onClick={() => regresarTicketBascula(t)}>↩️ Regresar a Báscula</button>
                             )}
                             </>}
                           </td>
