@@ -87,6 +87,17 @@ export async function anularProcesoProduccion(
     throw new ApiError(409, "No se puede anular: la cuenta por pagar del socio por este servicio ya tiene pagos. Anúlalos primero en Por Pagar.");
   }
 
+  // Cuenta de la selectora: sin abonos.
+  const idsSelectora = (await client.query(
+    "SELECT payable_id FROM selectora_cargos WHERE processing_batch_id = $1 FOR UPDATE", [batchId]
+  )).rows.map((x: { payable_id: string }) => x.payable_id);
+  const pagosSelectora = idsSelectora.length ? (await client.query(
+    "SELECT amount::float AS a, balance::float AS b, status::text AS st FROM accounts_payable WHERE id = ANY($1::uuid[]) FOR UPDATE", [idsSelectora]
+  )).rows : [];
+  if (pagosSelectora.some((p: { a: number; b: number; st: string }) => p.st !== "CANCELLED" && p.b < p.a - 0.005)) {
+    throw new ApiError(409, "No se puede anular: la cuenta de la selectora por este proceso ya tiene pagos. Anúlalos primero en Por Pagar.");
+  }
+
   // 1c. Nómina del proceso: nada pagado.
   const nominaPagada = (await client.query(
     "SELECT worker_name FROM worker_payments WHERE reference_type = 'processing_batch' AND reference_id = $1 AND status = 'PAID' LIMIT 1", [batchId]
@@ -148,6 +159,8 @@ export async function anularProcesoProduccion(
   let cuentas = 0;
   if (idsCxc.length) cuentas += (await client.query("UPDATE accounts_receivable SET status = 'CANCELLED', balance = 0 WHERE id = ANY($1::uuid[]) AND status <> 'CANCELLED'", [idsCxc])).rowCount ?? 0;
   if (idsCxp.length) cuentas += (await client.query("UPDATE accounts_payable SET status = 'CANCELLED', balance = 0 WHERE id = ANY($1::uuid[]) AND status <> 'CANCELLED'", [idsCxp])).rowCount ?? 0;
+  if (idsSelectora.length) cuentas += (await client.query("UPDATE accounts_payable SET status = 'CANCELLED', balance = 0 WHERE id = ANY($1::uuid[]) AND status <> 'CANCELLED'", [idsSelectora])).rowCount ?? 0;
+  await client.query("DELETE FROM selectora_cargos WHERE processing_batch_id = $1", [batchId]);
   await client.query(
     `UPDATE maquila_orders SET status = 'CANCELLED'
       WHERE lot_id = ANY($1::uuid[]) AND service_type = 'PILADO_MAQUILA' AND status <> 'CANCELLED' AND created_at >= $2`,

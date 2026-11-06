@@ -229,6 +229,17 @@ export async function calcularResultadoMensual(db: Db, opts: { year: number; mon
     [ini, fin, opts.matrizId]
   )).rows as Array<{ id: string; fecha: string; monto: number; category: string; categoria_nombre: string | null; subcategoria: string | null; description: string | null; reference_type: string | null; maq_activo: string | null; area: string | null }>;
 
+  // 🧹 Lo de la selectora que quedó a la Matriz es costo del mes en que se piló, aunque se pague después: su pago
+  // (PAGO_SELECCION) no cuenta como gasto, así no se duplica.
+  egresos.push(...(await db.query(
+    `SELECT ap.id, to_char(ap.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha, ap.amount::float AS monto,
+            'SERVICIO_SELECTORA' AS category, 'Selectora' AS categoria_nombre, NULL AS subcategoria, ap.description,
+            ap.reference_type, NULL AS maq_activo, NULL AS area
+       FROM accounts_payable ap
+      WHERE ap.accionista_id = $3 AND ap.reference_type = 'selectora_servicio' AND ap.status <> 'CANCELLED' AND ${enMes("ap.created_at")}`,
+    [ini, fin, opts.matrizId]
+  )).rows as typeof egresos);
+
   const porRubro = new Map<string, { monto: number; detalle: Movimiento[] }>();
   const sinClasificar: Movimiento[] = [];
   const excluidos = new Map<string, number>();

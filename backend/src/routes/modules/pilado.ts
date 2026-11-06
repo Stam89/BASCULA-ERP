@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAdmin } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -8,8 +8,8 @@ import { ApiError } from "../../http/error-handler.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { espejarAbonoEnContraparte } from "../../services/cuentas-vinculadas.js";
 import { getMatriz, getMatrizId } from "../../services/matriz.js";
-import { fechaEc } from "../../utils/fechas.js";
-import { aplicarMinimoServicio, parametrosServicioPilada, type LineaServicio } from "../../services/servicio-pilada.js";
+import { fechaEc, hoyEc } from "../../utils/fechas.js";
+import { aplicarMinimoServicio, parametrosServicioPilada, selectoraVigente, type LineaServicio } from "../../services/servicio-pilada.js";
 
 export const piladoRouter = Router();
 
@@ -294,6 +294,58 @@ piladoRouter.post("/services/:id/settle", asyncRoute(async (req, res) => {
   });
 
   res.json(result);
+}));
+
+// ── 🌾 Tarifa a clientes externos y 🧹 selectora (Configuración › Tarifario de Servicios) ─────────────────────────────
+piladoRouter.get("/servicio-config", asyncRoute(async (_req, res) => {
+  const [ps, selectora, historial, pendiente] = await Promise.all([
+    parametrosServicioPilada(pool),
+    selectoraVigente(pool, hoyEc()),
+    pool.query(
+      `SELECT t.id, t.provider_id, pr.name AS proveedor, t.precio_por_qq::float AS precio_por_qq, t.fecha_vigencia::text AS fecha_vigencia
+         FROM selectora_tarifas t JOIN external_providers pr ON pr.id = t.provider_id
+        ORDER BY t.fecha_vigencia DESC LIMIT 12`
+    ),
+    pool.query(
+      `SELECT pr.name AS proveedor, a.name AS accionista, COALESCE(SUM(ap.balance), 0)::float AS saldo
+         FROM selectora_cargos c
+         JOIN accounts_payable ap ON ap.id = c.payable_id
+         JOIN external_providers pr ON pr.id = c.provider_id
+         JOIN accionistas a ON a.id = c.accionista_id
+        WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.balance > 0
+        GROUP BY pr.name, a.name ORDER BY pr.name, a.name`
+    )
+  ]);
+  res.json({ tarifa_clientes: ps.tarifa ?? 0, minimo_pct: ps.minimoPct, selectora, historial: historial.rows, pendiente: pendiente.rows });
+}));
+
+// La tarifa de clientes es una sola, la de la Matriz: no depende del accionista activo.
+piladoRouter.put("/tarifa-clientes", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({ precio_por_qq: z.number().positive().max(9999) }).parse(req.body);
+  const r = await pool.query(
+    "UPDATE app_settings SET tarifa_pilado_qq = $1, updated_at = now() WHERE socio_id IS NULL RETURNING tarifa_pilado_qq::float AS tarifa_clientes",
+    [body.precio_por_qq]
+  );
+  if (!r.rowCount) throw new ApiError(409, "Falta la configuración de la Matriz.");
+  res.json(r.rows[0]);
+}));
+
+// Una tarifa por fecha: guardar otra con la misma fecha la reemplaza. En $0 se deja de generar la cuenta desde esa fecha.
+piladoRouter.post("/selectora", requireAdmin, asyncRoute(async (req, res) => {
+  const body = z.object({
+    provider_id: z.string().uuid(),
+    precio_por_qq: z.number().nonnegative().max(9999),
+    fecha_vigencia: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+  }).parse(req.body);
+  const prov = await pool.query("SELECT 1 FROM external_providers WHERE id = $1 AND is_active = true", [body.provider_id]);
+  if (!prov.rowCount) throw new ApiError(404, "Esa persona no está en el catálogo.");
+  const r = await pool.query(
+    `INSERT INTO selectora_tarifas (provider_id, precio_por_qq, fecha_vigencia, created_by) VALUES ($1, $2, $3::date, $4)
+     ON CONFLICT (fecha_vigencia) DO UPDATE SET provider_id = EXCLUDED.provider_id, precio_por_qq = EXCLUDED.precio_por_qq
+     RETURNING id`,
+    [body.provider_id, body.precio_por_qq, body.fecha_vigencia, (req as AuthenticatedRequest).user?.id ?? null]
+  );
+  res.status(201).json(r.rows[0]);
 }));
 
 // ── Tarifario dinamico de servicios (F-B) ────────────────────────────────────

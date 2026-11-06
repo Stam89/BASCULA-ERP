@@ -3,6 +3,7 @@ import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
 import type { ReglaCaja } from "./components/cajaHojaLeer";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SecadoPasadoModal } from "./components/SecadoPasadoModal";
+import { TarifaClientesSelectora } from "./components/TarifaClientesSelectora";
 import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
 import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
@@ -1019,6 +1020,8 @@ type ProductionResult = {
     total: number;
     detalle: Array<{ presentacion: string; quintales: number; precio_total_qq: number; subtotal: number }>;
   };
+  // 🧹 Cuenta por pagar al dueño de la selectora que nació con este cierre.
+  selectora?: null | { proveedor: string; quintales: number; tarifa: number; total: number; paga: string };
   // Servicio de Pilada con sacos de la planta: sacos descontados + CxC al cliente.
   sacos_servicio?: null | {
     detalle: Array<{ tipo: string; sacos: number; precio: number; subtotal: number }>;
@@ -2277,7 +2280,7 @@ function conceptoPayable(p: AccountPayable): string {
   if (p.liquidation_number) return "Pago derivado de liquidación";
   const m: Record<string, string> = {
     pilado_service: "Servicio de pilado", service_charge: "Servicio (maquila)", packaging_charge: "Cargo por sacos",
-    lot_transfer: "Traspaso de lote", selection_batch: "Selección / envejecido"
+    lot_transfer: "Traspaso de lote", selection_batch: "Selección / envejecido", selectora_servicio: "Selectora"
   };
   return m[p.reference_type || ""] || "Cuenta por pagar";
 }
@@ -3192,7 +3195,7 @@ export function App() {
     { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas 3 tulas arrocillo guardiania tunel costo de secado tendal cuadrilla nomina mano de obra" },
     { sub: "tarifas", tarjeta: "🛎️ Secado como Servicio", claves: "secado servicio cliente cobro granel saco maquila cxc" },
     { sub: "planta", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
-    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes pilado secado flete seleccion envejecido precio por qq vigencia" },
+    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes externos agricultores pilado secado flete seleccion selectora envejecido precio por qq vigencia" },
     { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz cargo por bulto socio despacho" },
     { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
     { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo venta por qq quintal descuento centavo" },
@@ -13276,6 +13279,10 @@ Motivo (obligatorio):`, ""));
         (s.es_accionista ? ` · queda como Por Pagar de ${s.cliente}` : ` · a ${s.cliente} (cliente externo)`),
         "success"
       );
+    }
+    if (production.selectora) {
+      const sel = production.selectora;
+      addToast(`Selectora: ${money(sel.total)} por ${sel.quintales} QQ · queda como Por Pagar de ${sel.paga} a ${sel.proveedor}`, "success");
     }
     if (production.sacos_servicio && production.sacos_servicio.detalle.length) {
       const ss = production.sacos_servicio;
@@ -27879,6 +27886,19 @@ Motivo (obligatorio):`, ""));
                 <div className="formPanel">
                   <details className="cfgCard">
                     <summary>{cfgSum("🧾", "Tarifario de Servicios", "Precios por QQ a socios y clientes: pilado, secado, flete…")}</summary>
+                  <TarifaClientesSelectora
+                    puedeEditar={isAdmin}
+                    hoy={nominaToday}
+                    matriz={matrizName}
+                    avisar={addToast}
+                    confirmar={confirmar}
+                    confirmarCambios={confirmarCambiosCfg}
+                    onTarifaClientes={(tarifa) => {
+                      if (esSocioActivoCfg) return;
+                      setSettingsForm((f) => ({ ...f, tarifa_pilado_qq: tarifa }));
+                      setAppSettings((a) => ({ ...a, tarifa_pilado_qq: tarifa }));
+                    }}
+                  />
                   <p className="muted">Precio por QQ por <strong>socio o cliente</strong> y servicio, con fecha de vigencia. El monto es libre: asigna la tarifa negociada con cada quien.</p>
 
                   {/* Formulario en tarjeta: cuadrícula armónica con iconos */}

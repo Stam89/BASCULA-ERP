@@ -1541,7 +1541,7 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
   if (t && ["lot_transfer", "campo_servicio", "fomento_cruce", "retencion_matriz", "packaging_charge", "service_charge",
     "saldo_inicial_socio", "compra_producto_socio", "cobro_por_socio", "pago_por_socio"].includes(t)) return "PAGO_ENTRE_SOCIOS";
   // Selección/envejecido y sus fletes con carro externo (ida o regreso): ya son costo al nacer la deuda.
-  if (t === "selection_batch" || t === "flete_envejecido_tercero") return "PAGO_SELECCION";
+  if (t === "selection_batch" || t === "selectora_servicio" || t === "flete_envejecido_tercero") return "PAGO_SELECCION";
   if (t === "purchase") return "PAGO_PROVEEDOR";
   // Gasto a crédito: el egreso lleva la categoría del gasto original (el Resultado mensual lo cuenta en su rubro).
   if (t === "gasto_credito") return ap.categoria || "PAGO_PROVEEDOR";
@@ -1577,6 +1577,7 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
               mpc_prov.name,
               lt_from.name,
               sp.name,
+              sel_prov.name,
               -- Crédito a favor por compra (formato "<NOMBRE> - Crédito a favor…"):
               -- se expone el nombre del beneficiario LIMPIO, no la descripción larga.
               CASE WHEN ap.reference_type = 'credito_producto'
@@ -1627,6 +1628,8 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      LEFT JOIN campo_activos ca ON ca.id = cs.activo_id
      LEFT JOIN selection_batches sb ON sb.id = ap.reference_id AND ap.reference_type = 'selection_batch'
      LEFT JOIN external_providers sp ON sp.id = sb.provider_id
+     LEFT JOIN selectora_cargos sel ON sel.payable_id = ap.id
+     LEFT JOIN external_providers sel_prov ON sel_prov.id = sel.provider_id
      LEFT JOIN pilado_services ps ON ps.payable_id = ap.id
      LEFT JOIN accionistas ps_prov ON ps_prov.id = ps.provider_accionista_id
      LEFT JOIN matriz_service_charges msc ON msc.payable_id = ap.id

@@ -1,8 +1,17 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-04
+Actualizado: 2026-11-06
 
-## Último cambio: 🕒 Secado ya hecho, solo administrador (2026-11-05)
+## Último cambio: 🧹 Selectora de la piladora y tarifa real al socio (2026-11-06)
+
+- La selectora es de una persona externa que cobra por QQ de arroz blanco pilado (los QQ reales, sin el mínimo del cliente). Configuración › Tarifas a clientes › Tarifario de Servicios: `TarifaClientesSelectora` (`GET /pilado/servicio-config`, `PUT /pilado/tarifa-clientes`, `POST /pilado/selectora`, solo administrador). `selectora_tarifas` (una por fecha; $0 deja de cobrarla) y `selectora_cargos` (migración 20261140).
+- **Cobro al socio**: `cerrarProcesoProduccion` ahora usa el `tarifario_servicio` PILADO (antes `labor_rates.pilado_precio_qq`, fijo en $3.75 y sin pantalla: lo del tarifario no llegaba a la cuenta). La tarifa se lee a la fecha del pilado. `labor_rates` queda de respaldo si el socio no tiene tarifa.
+- **Al finalizar**: socio = CxC/CxP con la Matriz por (tarifa − selectora) y CxP del socio al dueño de la selectora (`reference_type` `selectora_servicio`). Cliente o arroz propio = el cliente paga todo y la CxP queda a la Matriz. `pilado_services.total` y `service_amount` son lo que le queda a la Matriz; `tarifa_pilada_aplicada` conserva la tarifa completa (costo del socio en Gana).
+- Pago: `PAGO_SELECCION`, sin espejo. Costo: socio en `servicios_recibidos` al nacer la deuda; Matriz en el rubro «Selectora» del Resultado mensual (`egresos` suma la CxP del mes, el pago no cuenta). Anular producción cancela la cuenta y frena si tiene abonos.
+- El servicio manual `POST /pilado/services` no genera selectora. El préstamo a JACOBO MACIAS (fondos en la caja de CEYRO) aún no se descuenta de lo que se le debe.
+- Simulacro `selectora`. `servicio_pilada_minimo`, `fecha_pilado` y `produccion` D4 fallan por los datos de la copia (sin servicios a clientes, fecha fija anterior al arranque, stock negativo real).
+
+## Cambio anterior: 🕒 Secado ya hecho, solo administrador (2026-11-05)
 
 - Secadoras › «🕒 Secado ya hecho (omitir combustible)» (`SecadoPasadoModal`, `POST /process-flow/drying/secado-pasado`, `requireAdmin`): registra un secado terminado aunque el túnel hoy esté ocupado. Conserva sus fechas (`skipCorrida`, no hereda la corrida en marcha), genera cuadrilla y jornal del secador, y su combustible se omite: `motor_fuel_records` propio en $0 con `pendiente = false`. En ⛽ Combustible pendiente, «🚫 Omitir» (`POST /drying/motor-fuel/:id/omitir`, solo administrador) hace lo mismo con cualquier corrida. Rechaza horas cruzadas con otro secado del túnel. Simulacro `secado_pasado`.
 

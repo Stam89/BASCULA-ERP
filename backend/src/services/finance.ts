@@ -343,7 +343,7 @@ export async function getEstadoResultados(
        FROM accounts_payable p
        LEFT JOIN campo_servicios cs ON p.reference_type = 'campo_servicio' AND cs.id = p.reference_id
       WHERE p.accionista_id = $1 AND p.status <> 'CANCELLED' AND p.created_at::date BETWEEN $2 AND $3
-        AND (p.reference_type IN ('pilado_service', 'service_charge', 'packaging_charge', 'selection_batch', 'flete_envejecido_tercero')
+        AND (p.reference_type IN ('pilado_service', 'service_charge', 'packaging_charge', 'selection_batch', 'selectora_servicio', 'flete_envejecido_tercero')
              OR (p.reference_type = 'campo_servicio' AND cs.origen_tipo IN ('venta_flete', 'envejecido_flete', 'envejecido_regreso')))`,
     rango
   );

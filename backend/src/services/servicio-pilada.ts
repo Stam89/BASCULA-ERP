@@ -20,6 +20,31 @@ export async function parametrosServicioPilada(db: Db): Promise<{ tarifa: number
   return { tarifa, minimoPct: r?.pct != null ? Number(r.pct) : 7 };
 }
 
+/** Tarifa PILADO vigente del socio en una fecha (Configuración › Tarifario de Servicios). Ya incluye el secado. */
+export async function tarifaPiladoSocio(db: Db, socioId: string, fecha: string): Promise<number | null> {
+  const r = (await db.query(
+    `SELECT precio_por_qq::float AS precio FROM tarifario_servicio
+      WHERE socio_id = $1 AND servicio = 'PILADO' AND is_active = true AND fecha_vigencia <= $2::date
+      ORDER BY fecha_vigencia DESC, created_at DESC LIMIT 1`,
+    [socioId, fecha]
+  )).rows[0];
+  return r ? Number(r.precio) : null;
+}
+
+export type SelectoraVigente = { provider_id: string; proveedor: string; tarifa: number; desde: string };
+
+/** 🧹 Tarifa de la selectora vigente en una fecha. null = no hay o está en $0: no se genera nada. */
+export async function selectoraVigente(db: Db, fecha: string): Promise<SelectoraVigente | null> {
+  const r = (await db.query(
+    `SELECT t.provider_id, pr.name AS proveedor, t.precio_por_qq::float AS tarifa, t.fecha_vigencia::text AS desde
+       FROM selectora_tarifas t JOIN external_providers pr ON pr.id = t.provider_id
+      WHERE t.fecha_vigencia <= $1::date
+      ORDER BY t.fecha_vigencia DESC LIMIT 1`,
+    [fecha]
+  )).rows[0];
+  return r && Number(r.tarifa) > 0 ? (r as unknown as SelectoraVigente) : null;
+}
+
 /** QQ mínimos a cobrar: (kg ÷ 100) + pct %. */
 export function qqMinimoServicio(kgEntrada: number, pct: number): number {
   return round2((Number(kgEntrada) / 100) * (1 + Number(pct) / 100));

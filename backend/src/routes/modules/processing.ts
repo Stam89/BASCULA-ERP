@@ -1,7 +1,7 @@
 import { Router } from "express";
 import type { PoolClient } from "pg";
 import { z } from "zod";
-import { aplicarMinimoServicio, parametrosServicioPilada } from "../../services/servicio-pilada.js";
+import { aplicarMinimoServicio, parametrosServicioPilada, selectoraVigente, tarifaPiladoSocio } from "../../services/servicio-pilada.js";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -20,6 +20,7 @@ import { KG_PER_QUINTAL, kilogramsToQuintals } from "../../utils/production-unit
 import { REF_BORRADOR_CASCARA, sincronizarCascaraBorrador, sincronizarInventarioBorrador, tunelesDelBorrador } from "../../services/borrador-pilado-inventario.js";
 import { fechaPiladoValida, fecharProcesoEn } from "../../services/fecha-pilado.js";
 import { leerCorteArranque } from "../../utils/corte-mes.js";
+import { hoyEc } from "../../utils/fechas.js";
 
 export const processingRouter = Router();
 
@@ -770,20 +771,31 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       (body.white_rice_presentations ?? []).map((p) => ({ presentation: p.presentation, quantity: p.quantity })),
       processedQq
     );
+    // Tarifa PILADO del socio dueño del lote (Configuración › Tarifario de Servicios): es la que se le cobra.
+    const fechaCierre = fechaPilado ?? hoyEc();
+    const tarifaSocio = accionistaId ? await tarifaPiladoSocio(client, accionistaId, fechaCierre) : null;
     // ⚖️ Pilada a un CLIENTE (maquila): tarifa de Configuración › Parámetros de planta y cobro mínimo por rendimiento
-    // ((kg de cáscara ÷ 100) + %). A los socios se les cobra como siempre.
+    // ((kg de cáscara ÷ 100) + %).
     let notaMinimo = "";
     if (isMaquila) {
       const ps = await parametrosServicioPilada(client);
       const aj = aplicarMinimoServicio(servicio.detalle, { base: ps.tarifa ?? servicio.precio_base_qq, kgEntrada: inputPaddyKg, minimoPct: ps.minimoPct });
       servicio = { ...servicio, ...aj };
       if (aj.aplico_minimo) notaMinimo = ` · mínimo por rendimiento: salieron ${aj.qq_reales} QQ, se cobran ${aj.qq_minimo} QQ`;
+    } else if (esDeOtroAccionista && tarifaSocio !== null) {
+      servicio = { ...servicio, ...aplicarMinimoServicio(servicio.detalle, { base: tarifaSocio, kgEntrada: 0, minimoPct: 0 }) };
     }
-    const serviceRate = servicio.tarifa_promedio_qq;
-    const piladoAmount = cobraServicio ? servicio.total : 0;
+    // 🧹 SELECTORA (pedido del dueño 2026-11-06): su dueño cobra por QQ de arroz pilado. Al socio se le resta de lo que le
+    // cobra la Matriz y queda debiéndole a esa persona. Con arroz de un cliente o propio, la cuenta queda a la Matriz.
+    const selectora = await selectoraVigente(client, fechaCierre);
+    const qqSelectora = round2(processedQq);
+    const montoSelectora = selectora ? round2(qqSelectora * selectora.tarifa) : 0;
+    const descuentoSelectora = esDeOtroAccionista ? Math.min(montoSelectora, servicio.total) : 0;
+    const piladoAmount = cobraServicio ? round2(servicio.total - descuentoSelectora) : 0;
+    const serviceRate = descuentoSelectora > 0 && servicio.quintales > 0 ? round2(piladoAmount / servicio.quintales) : servicio.tarifa_promedio_qq;
     // ── REGLA DE NEGOCIO 'Servicio Completo' (SECADO_PILADO) ──
-    // La tarifa de PILADO ($3.75/QQ) YA INCLUYE todo el proceso de secado. NO se
-    // cobra un rubro separado de secado ($1.50/QQ): eso duplicaba el cobro. El
+    // La tarifa de PILADO YA INCLUYE todo el proceso de secado. NO se
+    // cobra un rubro separado de secado: eso duplicaba el cobro. El
     // único adicional válido es el recargo por sacos < 100 lb (arroba / 10 lb),
     // que ya viene sumado dentro de `piladoAmount` (calcularServicioPilado).
     const esServicioCompleto = String(batch.lot_operation_type ?? "") === "SECADO_PILADO";
@@ -812,13 +824,16 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       const desglose = servicio.detalle
         .map((d) => `${d.quintales} QQ en ${d.presentacion} a $${d.precio_total_qq}/QQ = $${d.subtotal}`)
         .join(" · ");
-      // 'Servicio Completo': tarifa unificada $3.75/QQ (incluye secado) + adicional
-      // por sacos < 100 lb si aplica. Otros (Solo Pilada, socio): desglose normal.
+      // 'Servicio Completo': tarifa unificada (incluye secado) + adicional por
+      // sacos < 100 lb si aplica. Otros (Solo Pilada, socio): desglose normal.
       const montoBase = round2(servicio.quintales * servicio.precio_base_qq);
       const adic = servicio.adicional_sacos;
+      const notaSelectora = descuentoSelectora > 0
+        ? ` · menos selectora de ${selectora?.proveedor}: ${qqSelectora} QQ × $${selectora?.tarifa} = $${descuentoSelectora} · queda $${serviceAmount}`
+        : "";
       const desc = esServicioCompleto
-        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}${notaMinimo}`
-        : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}${notaMinimo}`;
+        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}${notaMinimo}${notaSelectora}`
+        : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}${notaMinimo}${notaSelectora}`;
 
       const receivable = await client.query(
         `INSERT INTO accounts_receivable
@@ -848,10 +863,34 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
          RETURNING id`,
         [matrizId, esDeOtroAccionista ? accionistaId : null, esDeOtroAccionista ? null : clienteNombre,
          body.lot_id, processingBatchId, servicio.quintales, serviceRate, serviceAmount, receivableId, payableId,
-         JSON.stringify(servicio.detalle), body.created_by ?? null]
+         JSON.stringify(descuentoSelectora > 0
+           ? [...servicio.detalle, { presentacion: `selectora (se paga a ${selectora?.proveedor})`, quintales: qqSelectora, precio_base_qq: 0, recargo_qq: 0, concepto_recargo: "selectora", precio_total_qq: -Number(selectora?.tarifa), subtotal: -descuentoSelectora }]
+           : servicio.detalle),
+         body.created_by ?? null]
       );
       await client.query("UPDATE accounts_receivable SET reference_id = $2 WHERE id = $1", [receivableId, svc.rows[0].id]);
       if (payableId) await client.query("UPDATE accounts_payable SET reference_id = $2 WHERE id = $1", [payableId, svc.rows[0].id]);
+    }
+
+    // 🧹 Cuenta por pagar al dueño de la selectora: del socio dueño del arroz o, si no, de la Matriz.
+    let cargoSelectora: { proveedor: string; quintales: number; tarifa: number; total: number; paga: string } | null = null;
+    if (selectora && montoSelectora > 0) {
+      const paga = esDeOtroAccionista ? String(accionistaId) : matrizId;
+      const ap = await client.query(
+        `INSERT INTO accounts_payable (accionista_id, farmer_id, reference_type, reference_id, description, amount, balance)
+         VALUES ($1, NULL, 'selectora_servicio', $2, $3, $4, $4)
+         RETURNING id`,
+        [paga, processingBatchId, `Selectora · ${selectora.proveedor} · Lote ${lotCode}: ${qqSelectora} QQ × $${selectora.tarifa}/QQ`, montoSelectora]
+      );
+      await client.query(
+        `INSERT INTO selectora_cargos (processing_batch_id, lot_id, provider_id, accionista_id, quintales, tarifa_qq, total, payable_id, fecha)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::date)`,
+        [processingBatchId, body.lot_id, selectora.provider_id, paga, qqSelectora, selectora.tarifa, montoSelectora, ap.rows[0].id, fechaCierre]
+      );
+      cargoSelectora = {
+        proveedor: selectora.proveedor, quintales: qqSelectora, tarifa: selectora.tarifa, total: montoSelectora,
+        paga: esDeOtroAccionista ? socioNombre : "la Matriz"
+      };
     }
 
     // ── Sacos de la planta en un SERVICIO DE PILADA ──
@@ -888,13 +927,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     // INMUTABILIDAD HISTÓRICA: se congela la tarifa PILADO vigente del socio dueño
     // del lote al momento de finalizar. Los lotes anteriores no cambian si luego
     // se edita la tarifa en Configuración.
-    const tarifaPiladaRow = await client.query(
-      `SELECT precio_por_qq FROM tarifario_servicio
-        WHERE socio_id = $1 AND servicio = 'PILADO' AND is_active = true AND fecha_vigencia <= CURRENT_DATE
-        ORDER BY fecha_vigencia DESC, created_at DESC LIMIT 1`,
-      [accionistaId]
-    );
-    const tarifaPiladaAplicada = tarifaPiladaRow.rows[0]?.precio_por_qq ?? null;
+    const tarifaPiladaAplicada = tarifaSocio;
     const yieldResult = await client.query(
         `INSERT INTO production_yields
        (processing_batch_id, lot_id, ownership, input_paddy_kg,
@@ -1124,6 +1157,7 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       sacos_matriz: sacosMatriz,
       sacos_servicio: sacosServicio,
       servicio_pilado: servicioPilado,
+      selectora: cargoSelectora,
       maquila: isMaquila
         ? {
           maquilaOrderId,
