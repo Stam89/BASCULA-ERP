@@ -4073,6 +4073,8 @@ export function App() {
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
   // Cola de Despachos en lista (pedido del dueño 2026-11-07): cliente + fecha de retiro; al tocar se abre la tarjeta.
   const [colaAbierto, setColaAbierto] = useState<string | null>(null);
+  // «Ir a Despachar» desde el modal de saldos abre la tarjeta de ese pedido.
+  useEffect(() => { if (focusOrderId) setColaAbierto(focusOrderId); }, [focusOrderId]);
   // ── Guías de Remisión (formato legal EC). Tabla propia guias_remision. ──
   const emptyGuiaForm = () => ({
     fecha_emision: hoyLocal(),
@@ -19265,7 +19267,7 @@ Motivo (obligatorio):`, ""));
                     const operable = puedeOperarPedido(o);
                     const listoParaPreparar = faltanteTerminadoQq <= 0.001;
                     const enfocado = focusOrderId === o.id;
-                    const abierto = enfocado || colaAbierto === o.id;
+                    const abierto = colaAbierto === o.id;
                     const retiro = (() => {
                       if (!o.delivery_date) return { txt: "Sin fecha de retiro", cls: "" };
                       const f = new Date(o.delivery_date.slice(0, 10) + "T12:00:00");
@@ -19280,13 +19282,16 @@ Motivo (obligatorio):`, ""));
                     return (
                     <div key={o.id} className={`colaItem ${abierto ? "is-abierto" : ""}`}>
                     <button type="button" className="colaFila" aria-expanded={abierto}
-                      onClick={() => { setFocusOrderId(null); setColaAbierto(abierto ? null : o.id); }}>
+                      onClick={() => setColaAbierto(o.id)}>
                       <span className={`colaFila-punto ${listo ? "is-listo" : ""}`} title={listo ? "Listo para cargar" : "Pendiente por cargar"} />
                       <span className="colaFila-cliente">{o.customer_name}</span>
                       <span className={`colaFila-fecha ${retiro.cls}`}>📅 {retiro.txt}</span>
-                      <span className="colaFila-flecha">{abierto ? "▲" : "▼"}</span>
+                      <span className="colaFila-flecha">›</span>
                     </button>
                     {abierto && (
+                    <div className="modalOverlay" onClick={() => setColaAbierto(null)}>
+                    <div className="colaModal" onClick={(e) => e.stopPropagation()}>
+                    <button type="button" className="colaModal-cerrar" onClick={() => setColaAbierto(null)} aria-label="Cerrar">✕</button>
                     <article
                       ref={(el) => { if (el && enfocado) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setTimeout(() => setFocusOrderId((cur) => cur === o.id ? null : cur), 2500); } }}
                       style={{ border: enfocado ? "2px solid #2563eb" : "1px solid var(--c-border)", boxShadow: enfocado ? "0 0 0 4px rgba(37,99,235,0.15)" : undefined, borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
@@ -19460,7 +19465,7 @@ Motivo (obligatorio):`, ""));
                             <option value="CREDIT">📋 Crédito</option>
                           </select>
                           )}
-                          <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => despacharPedido(o).catch((e) => addToast(e.message, "error"))}>
+                          <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => { setColaAbierto(null); despacharPedido(o).catch((e) => addToast(e.message, "error")); }}>
                             {o.ya_cobrado ? "🚚 Entregar saldo" : "🚚 Despachar y entregar"}
                           </button>
                         </div>
@@ -19474,12 +19479,14 @@ Motivo (obligatorio):`, ""));
                         {listo && canAnular && (
                           <button type="button" style={{ flex: 1 }} onClick={() => prepararPedido(o, false).catch((e) => addToast(e.message, "error"))} title="Volver a Pendiente por cargar">↩ Revertir</button>
                         )}
-                        <button type="button" style={{ flex: 1 }} onClick={() => editarPedido(o).catch((e) => addToast(e.message, "error"))}>✎ Editar</button>
-                        {canAnular && <button type="button" style={{ flex: 1 }} onClick={() => cancelarPedido(o).catch((e) => addToast(e.message, "error"))}>✕ Cancelar</button>}
+                        <button type="button" style={{ flex: 1 }} onClick={() => { setColaAbierto(null); editarPedido(o).catch((e) => addToast(e.message, "error")); }}>✎ Editar</button>
+                        {canAnular && <button type="button" style={{ flex: 1 }} onClick={() => { setColaAbierto(null); cancelarPedido(o).catch((e) => addToast(e.message, "error")); }}>✕ Cancelar</button>}
                       </div>}
-                      <button type="button" className="btnSecondary" onClick={() => setPedidoCompartir({ data: pedidoCompartirDeOrden(o) })}
+                      <button type="button" className="btnSecondary" onClick={() => { setColaAbierto(null); setPedidoCompartir({ data: pedidoCompartirDeOrden(o) }); }}
                         title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
                     </article>
+                    </div>
+                    </div>
                     )}
                     </div>
                     );

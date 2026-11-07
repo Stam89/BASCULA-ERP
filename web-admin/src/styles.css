@@ -4587,8 +4587,11 @@ textarea::placeholder {
 /* Cola de Despachos en lista: una fila por pedido; al tocarla se abre su tarjeta debajo. */
 .colaLista { display: grid; gap: 8px; margin-top: 8px; }
 .colaItem { border: 1px solid var(--c-border); border-radius: 12px; overflow: hidden; background: var(--c-surface, #fff); }
-.colaItem.is-abierto { border-color: #93c5fd; box-shadow: 0 2px 10px rgba(37, 99, 235, 0.10); }
-.colaItem > article { border: none !important; border-radius: 0 !important; border-top: 1px solid var(--c-border) !important; box-shadow: none !important; }
+.colaItem.is-abierto { border-color: #93c5fd; }
+/* La tarjeta del pedido se abre en un modal encima de la lista. */
+.colaModal { position: relative; width: 100%; max-width: 460px; max-height: 92vh; overflow-y: auto; border-radius: 14px; background: var(--c-surface); box-shadow: var(--shadow-md); animation: contentIn 0.18s ease; }
+.colaModal > article { background: var(--c-surface); padding-top: 22px !important; }
+.colaModal-cerrar { position: absolute; top: 8px; right: 8px; z-index: 1; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(0, 0, 0, 0.06); font-size: 16px; cursor: pointer; }
 .colaFila { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; padding: 14px 14px; min-height: 56px; cursor: pointer; }
 .colaFila:hover { background: rgba(0, 0, 0, 0.03); }
 .colaFila:focus-visible { outline: 2px solid #2563eb; outline-offset: -2px; }
@@ -4598,7 +4601,7 @@ textarea::placeholder {
 .colaFila-fecha { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: #475569; white-space: nowrap; }
 .colaFila-fecha.is-hoy { color: #1d4ed8; }
 .colaFila-fecha.is-atrasado { color: #b91c1c; }
-.colaFila-flecha { flex: 0 0 auto; font-size: 11px; color: #94a3b8; }
+.colaFila-flecha { flex: 0 0 auto; font-size: 22px; line-height: 1; color: #94a3b8; }
 @media (max-width: 480px) {
   .colaFila { flex-wrap: wrap; row-gap: 2px; }
   .colaFila-cliente { flex-basis: calc(100% - 50px); }
