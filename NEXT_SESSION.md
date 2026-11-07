@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🖨️ 15×21 con diseño de A4 (2026-11-06)
+## Último cambio: 🚚 Cola de Despachos en lista (2026-11-07)
+
+- Ventas › Cola de Despachos: cada pedido es una fila (punto verde/amarillo, cliente, fecha de retiro con Hoy/Mañana/atrasado). Al tocarla se abre debajo la tarjeta de siempre (`colaAbierto`); «Ir a Despachar» desde el modal la abre sola (`focusOrderId`). Estilos `.colaLista/.colaFila` en styles.css; en celular la fecha baja a la segunda línea.
+
+## Cambio anterior: 🖨️ 15×21 con diseño de A4 (2026-11-06)
 
 - `ajustarHtml`: el papel 15×21 ya no ajusta el documento a la hoja chica: lo arma como A4 y lo reduce (`html{zoom}` 150/210, margen 10 mm = 14 mm de A4). Letra más chica, a pedido del dueño. Los otros papeles chicos siguen igual.
 

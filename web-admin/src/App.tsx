@@ -4071,6 +4071,8 @@ export function App() {
   const [pendientesModalOpen, setPendientesModalOpen] = useState(false);
   // Pedido a enfocar/resaltar al pulsar "⚡ Ir a Despachar" desde el modal.
   const [focusOrderId, setFocusOrderId] = useState<string | null>(null);
+  // Cola de Despachos en lista (pedido del dueño 2026-11-07): cliente + fecha de retiro; al tocar se abre la tarjeta.
+  const [colaAbierto, setColaAbierto] = useState<string | null>(null);
   // ── Guías de Remisión (formato legal EC). Tabla propia guias_remision. ──
   const emptyGuiaForm = () => ({
     fecha_emision: hoyLocal(),
@@ -19208,7 +19210,7 @@ Motivo (obligatorio):`, ""));
                     <div style={{ fontSize: 13, marginTop: 4 }}>Los pedidos que se tomen en «🛒 Nuevo Pedido» aparecerán aquí para despacharlos.</div>
                   </div>
                 ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))", gap: 14, marginTop: 8 }}>
+                <div className="colaLista">
                   {colaPendientes
                     .slice()
                     .sort((a, b) => {
@@ -19263,8 +19265,29 @@ Motivo (obligatorio):`, ""));
                     const operable = puedeOperarPedido(o);
                     const listoParaPreparar = faltanteTerminadoQq <= 0.001;
                     const enfocado = focusOrderId === o.id;
+                    const abierto = enfocado || colaAbierto === o.id;
+                    const retiro = (() => {
+                      if (!o.delivery_date) return { txt: "Sin fecha de retiro", cls: "" };
+                      const f = new Date(o.delivery_date.slice(0, 10) + "T12:00:00");
+                      const hoy = new Date(); hoy.setHours(12, 0, 0, 0);
+                      const dias = Math.round((f.getTime() - hoy.getTime()) / 86400000);
+                      const fecha = f.toLocaleDateString("es-EC", { weekday: "short", day: "2-digit", month: "2-digit" });
+                      if (dias < 0) return { txt: `${fecha} · atrasado`, cls: "is-atrasado" };
+                      if (dias === 0) return { txt: `Hoy · ${fecha}`, cls: "is-hoy" };
+                      if (dias === 1) return { txt: `Mañana · ${fecha}`, cls: "" };
+                      return { txt: fecha, cls: "" };
+                    })();
                     return (
-                    <article key={o.id}
+                    <div key={o.id} className={`colaItem ${abierto ? "is-abierto" : ""}`}>
+                    <button type="button" className="colaFila" aria-expanded={abierto}
+                      onClick={() => { setFocusOrderId(null); setColaAbierto(abierto ? null : o.id); }}>
+                      <span className={`colaFila-punto ${listo ? "is-listo" : ""}`} title={listo ? "Listo para cargar" : "Pendiente por cargar"} />
+                      <span className="colaFila-cliente">{o.customer_name}</span>
+                      <span className={`colaFila-fecha ${retiro.cls}`}>📅 {retiro.txt}</span>
+                      <span className="colaFila-flecha">{abierto ? "▲" : "▼"}</span>
+                    </button>
+                    {abierto && (
+                    <article
                       ref={(el) => { if (el && enfocado) { el.scrollIntoView({ behavior: "smooth", block: "center" }); setTimeout(() => setFocusOrderId((cur) => cur === o.id ? null : cur), 2500); } }}
                       style={{ border: enfocado ? "2px solid #2563eb" : "1px solid var(--c-border)", boxShadow: enfocado ? "0 0 0 4px rgba(37,99,235,0.15)" : undefined, borderTop: `5px solid ${listo ? "var(--c-success, #16a34a)" : "var(--c-warning)"}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 10 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -19457,6 +19480,8 @@ Motivo (obligatorio):`, ""));
                       <button type="button" className="btnSecondary" onClick={() => setPedidoCompartir({ data: pedidoCompartirDeOrden(o) })}
                         title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
                     </article>
+                    )}
+                    </div>
                     );
                   })}
                 </div>
