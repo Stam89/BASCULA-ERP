@@ -4590,7 +4590,7 @@ textarea::placeholder {
 .colaItem.is-abierto { border-color: #93c5fd; }
 /* La tarjeta del pedido se abre en un modal encima de la lista. */
 .colaModal { position: relative; width: 100%; max-width: 460px; max-height: 92vh; overflow-y: auto; border-radius: 14px; background: var(--c-surface); box-shadow: var(--shadow-md); animation: contentIn 0.18s ease; }
-.colaModal > article { background: var(--c-surface); padding-top: 22px !important; }
+.colaModal > article { background: var(--c-surface); padding-top: 50px !important; }
 .colaModal-cerrar { position: absolute; top: 8px; right: 8px; z-index: 1; width: 36px; height: 36px; border-radius: 50%; border: none; background: rgba(0, 0, 0, 0.06); font-size: 16px; cursor: pointer; }
 .colaFila { all: unset; box-sizing: border-box; width: 100%; display: flex; align-items: center; gap: 10px; padding: 14px 14px; min-height: 56px; cursor: pointer; }
 .colaFila:hover { background: rgba(0, 0, 0, 0.03); }
