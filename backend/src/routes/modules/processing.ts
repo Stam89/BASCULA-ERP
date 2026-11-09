@@ -347,6 +347,21 @@ const whiteRiceOutputSchema = productionOutputSchema.extend({
   unit: productionUnitSchema.default("QQ")
 });
 
+// 🔁 Lo abonado al cobro de «Solo secado» de los lotes de esta pilada que pasaron a servicio completo ya secos
+// (POST /process-flow/lots/:id/servicio-completo deja ese cobro en lo abonado). Se descuenta del cobro de la pilada.
+async function creditoSecadoDelLote(client: PoolClient, lotId: string, batchId: string): Promise<number> {
+  const r = await client.query(
+    `SELECT COALESCE(SUM(a.amount), 0)::float AS credito
+       FROM accounts_receivable a
+       JOIN lots l ON l.id = a.reference_id
+      WHERE a.reference_type = 'secado_service' AND a.status <> 'CANCELLED'
+        AND upper(COALESCE(l.operation_type, '')) = 'SECADO_PILADO'
+        AND a.reference_id IN (SELECT $1::uuid UNION SELECT lot_id FROM processing_batch_drying_lots WHERE processing_batch_id = $2)`,
+    [lotId, batchId]
+  );
+  return Math.round(Number(r.rows[0]?.credito ?? 0) * 100) / 100;
+}
+
 const finishProductionSchema = z.object({
   lot_id: z.string().uuid(),
   drying_report_id: z.string().uuid().optional(),
@@ -801,7 +816,10 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
     const esServicioCompleto = String(batch.lot_operation_type ?? "") === "SECADO_PILADO";
     const secadoAmount = 0; // se elimina el rubro de secado en Servicio Completo
     const secadoRate = 0;
-    const serviceAmount = round2(piladoAmount);
+    // 🔁 Lote que era «Solo secado» y pasó a servicio completo ya secado: lo que el cliente abonó al cobro del secado
+    // se le descuenta aquí (el resto de ese cobro se anuló al pasarlo). Así no paga el secado dos veces.
+    const creditoSecado = cobraServicio && esServicioCompleto ? await creditoSecadoDelLote(client, String(body.lot_id), processingBatchId) : 0;
+    const serviceAmount = round2(Math.max(0, piladoAmount - creditoSecado));
     let maquilaOrderId: string | null = null;
     let receivableId: string | null = null;
     let clienteNombre = "";
@@ -831,8 +849,9 @@ export async function cerrarProcesoProduccion(processingBatchId: string, body: F
       const notaSelectora = descuentoSelectora > 0
         ? ` · menos selectora de ${selectora?.proveedor}: ${qqSelectora} QQ × $${selectora?.tarifa} = $${descuentoSelectora} · queda $${serviceAmount}`
         : "";
+      const notaCreditoSecado = creditoSecado > 0.005 ? ` · menos lo abonado al secado: $${creditoSecado.toFixed(2)} · queda $${serviceAmount.toFixed(2)}` : "";
       const desc = esServicioCompleto
-        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}${notaMinimo}${notaSelectora}`
+        ? `Servicio Completo (Secado + Pilado) a ${clienteNombre}: ${servicio.quintales} QQ × $${servicio.precio_base_qq}/QQ = $${montoBase}${adic > 0.005 ? ` (+ Adicional Sacos <100lb: $${adic})` : ""}${notaMinimo}${notaSelectora}${notaCreditoSecado}`
         : `Pilado a ${clienteNombre}: ${servicio.quintales} QQ — ${desglose}${notaMinimo}${notaSelectora}`;
 
       const receivable = await client.query(

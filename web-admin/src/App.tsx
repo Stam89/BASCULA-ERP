@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { SecadoPasadoModal } from "./components/SecadoPasadoModal";
 import { TarifaClientesSelectora } from "./components/TarifaClientesSelectora";
 import { PrestamoSelectora } from "./components/PrestamoSelectora";
+import { SoloSecadoAServicioCompleto } from "./components/SoloSecadoAServicioCompleto";
 import { apiFetch, apiOk, apiGet, apiGetSRI, leerAvisoDeSesion, apiGetBasculaStatus, apiPatch, apiPost, apiPut, checkHealth, getActiveAccionistaId, setActiveAccionistaId, SIN_CONEXION } from "./api";
 import { useTablasEnTarjetasErp } from "./campo/tablasMovil";
 import { useRecargaAlCambiarDia } from "./recargaDiaNuevo";
@@ -17905,6 +17906,9 @@ Motivo (obligatorio):`, ""));
                     };
                     return (
                       <>
+                        {isAdmin && (
+                          <SoloSecadoAServicioCompleto avisar={(m, t) => addToast(m, t ?? "success")} confirmar={confirmar} onCambio={refresh} />
+                        )}
                         <div>
                           <span style={{ display: "block", marginBottom: 6, fontWeight: 600 }}>Secadoras finalizadas <span className="muted" style={{ fontWeight: 400 }}>(una, o varias si el arroz se mezcló)</span></span>
                           <button type="button" className="btnSecondary" aria-expanded={prodPickerOpen} onClick={() => setProdPickerOpen((v) => !v)}

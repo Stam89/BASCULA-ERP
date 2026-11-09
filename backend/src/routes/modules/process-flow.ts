@@ -648,6 +648,97 @@ processFlowRouter.patch("/lots/:lotId/service-type", asyncRoute(async (req, res)
   res.json(out);
 }));
 
+// 🔁 «Pasar a servicio completo» (pedido del dueño 2026-11-09): el cliente pidió SOLO SECADO, el secado ya se
+// finalizó (y ya se le cobró) y después decide que también se le pile. Desde la secadora en proceso basta el selector
+// de arriba; aquí va el caso ya secado:
+//   · El cobro del secado se anula si no tiene abonos. Si ya abonó, el cobro queda en lo abonado (pagado) y ese valor
+//     se le descuenta al cobrar la pilada (ver «creditoSecadoDelLote» en processing.ts): no se le cobra dos veces.
+//   · El lote pasa a SECADO_PILADO (servicio completo) y aparece en Producción para pilarlo.
+// Solo el administrador. Se bloquea si el lote ya se piló o no tiene un secado finalizado.
+processFlowRouter.get("/solo-secado/convertibles", asyncRoute(async (_req, res) => {
+  const r = await pool.query(
+    `SELECT l.id AS lot_id, l.lot_code, f.full_name AS farmer_name,
+            d.id AS drying_report_id, d.tunnel_number, d.dryer_name, d.dry_method,
+            d.total_quintals::float AS quintales, d.dry_end_at,
+            COALESCE(ar.monto, 0)::float AS cobro_secado, COALESCE(ar.abonado, 0)::float AS abonado
+       FROM lots l
+       LEFT JOIN farmers f ON f.id = l.farmer_id
+       JOIN LATERAL (
+         SELECT d.* FROM drying_tunnel_reports d
+          WHERE d.status = 'COMPLETED' AND COALESCE(d.apartado_arianos, false) = false
+            AND (d.lot_id = l.id OR EXISTS (SELECT 1 FROM drying_tunnel_report_lots x WHERE x.drying_report_id = d.id AND x.lot_id = l.id))
+          ORDER BY d.created_at DESC LIMIT 1
+       ) d ON true
+       LEFT JOIN LATERAL (
+         SELECT SUM(a.amount) AS monto, SUM(a.amount - a.balance) AS abonado FROM accounts_receivable a
+          WHERE a.reference_type = 'secado_service' AND a.reference_id = l.id AND a.status <> 'CANCELLED'
+       ) ar ON true
+      WHERE upper(COALESCE(l.operation_type, '')) = 'SECADO'
+        AND l.status NOT IN ('PROCESSED', 'LIQUIDATED', 'CLOSED', 'CANCELLED')
+        AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.lot_id = l.id AND b.status <> 'CANCELLED')
+      ORDER BY d.dry_end_at DESC NULLS LAST
+      LIMIT 200`
+  );
+  res.json(r.rows);
+}));
+
+processFlowRouter.post("/lots/:lotId/servicio-completo", requireAdmin, asyncRoute(async (req, res) => {
+  const lotId = String(req.params.lotId);
+  const user = (req as AuthenticatedRequest).user;
+  const out = await inTransaction(async (client) => {
+    const lot = (await client.query("SELECT id, lot_code, operation_type, status FROM lots WHERE id = $1 FOR UPDATE", [lotId])).rows[0];
+    if (!lot) throw new ApiError(404, "Lote no encontrado");
+    if (String(lot.operation_type ?? "").toUpperCase() !== "SECADO") {
+      throw new ApiError(409, `El lote ${lot.lot_code} no es de «Solo secado»: no hay nada que cambiar.`);
+    }
+    const pilado = await client.query("SELECT 1 FROM processing_batches WHERE lot_id = $1 AND status <> 'CANCELLED' LIMIT 1", [lotId]);
+    if (pilado.rowCount || ["PROCESSED", "LIQUIDATED", "CLOSED", "CANCELLED"].includes(String(lot.status))) {
+      throw new ApiError(409, `El lote ${lot.lot_code} ya entró a Producción: no se puede cambiar el servicio.`);
+    }
+    const seco = await client.query(
+      `SELECT 1 FROM drying_tunnel_reports d
+        WHERE d.status = 'COMPLETED'
+          AND (d.lot_id = $1 OR EXISTS (SELECT 1 FROM drying_tunnel_report_lots x WHERE x.drying_report_id = d.id AND x.lot_id = $1))
+        LIMIT 1`, [lotId]);
+    if (!seco.rowCount) {
+      throw new ApiError(409, `El lote ${lot.lot_code} todavía no termina de secarse: cámbialo con el tipo de servicio en la tarjeta de la secadora.`);
+    }
+
+    const fecha = new Date().toLocaleString("es-EC", { timeZone: "America/Guayaquil", day: "2-digit", month: "2-digit", year: "numeric" });
+    const quien = user?.name ?? user?.username ?? "admin";
+    const cobros = (await client.query(
+      `SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable
+        WHERE reference_type = 'secado_service' AND reference_id = $1 AND status <> 'CANCELLED' FOR UPDATE`, [lotId]
+    )).rows as Array<{ id: string; amount: number; balance: number }>;
+    let anulado = 0;
+    let abonado = 0;
+    for (const c of cobros) {
+      const pagado = Math.round((c.amount - c.balance) * 100) / 100;
+      if (pagado < 0.005) {
+        // Sin abonos: el cobro del secado desaparece (al pilar se cobra el servicio completo, que ya incluye el secado).
+        await client.query("DELETE FROM accounts_receivable WHERE id = $1", [c.id]);
+        anulado += c.amount;
+      } else {
+        // Con abonos: queda en lo abonado (saldado) y ese valor se descuenta del cobro de la pilada.
+        await client.query(
+          `UPDATE accounts_receivable
+              SET amount = $2, balance = 0, status = 'PAID',
+                  description = left(description || $3, 1000)
+            WHERE id = $1`,
+          [c.id, pagado, ` · [Pasó a servicio completo el ${fecha} (${quien}): queda en lo abonado, $${pagado.toFixed(2)}, que se descuenta del cobro de la pilada]`]
+        );
+        anulado += c.balance;
+        abonado += pagado;
+      }
+    }
+
+    await client.query("UPDATE lots SET operation_type = 'SECADO_PILADO', is_maquila = true, ownership = 'MAQUILA' WHERE id = $1", [lotId]);
+    await client.query("UPDATE weighing_tickets SET operation_type = 'SECADO_PILADO', is_maquila = true WHERE lot_id = $1", [lotId]);
+    return { lot_code: lot.lot_code, operation_type: "SECADO_PILADO", cobro_anulado: Math.round(anulado * 100) / 100, abonado: Math.round(abonado * 100) / 100 };
+  });
+  res.json(out);
+}));
+
 // Registra el combustible del MOTOR (los medidores son del motor) y reparte el
 // costo entre sus secados activos según los quintales de cada uno. Así cada
 // lote —y cada accionista— paga exactamente su parte.
