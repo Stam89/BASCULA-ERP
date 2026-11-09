@@ -2,6 +2,7 @@ import { leerCuadros, type CuadroMosaico, type HojaMosaico } from "./components/
 import { CLASE_DE_CATEGORIA } from "./components/cajaHojaMaquina";
 import type { ReglaCaja } from "./components/cajaHojaLeer";
 import React, { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { SecadoPasadoModal } from "./components/SecadoPasadoModal";
 import { TarifaClientesSelectora } from "./components/TarifaClientesSelectora";
 import { PrestamoSelectora } from "./components/PrestamoSelectora";
@@ -19289,7 +19290,7 @@ Motivo (obligatorio):`, ""));
                       <span className="colaFila-flecha">›</span>
                     </button>
                     {abierto && (
-                    <div className="modalOverlay" onClick={() => setColaAbierto(null)}>
+                    createPortal(<div className="modalOverlay" onClick={() => setColaAbierto(null)}>
                     <div className="colaModal" onClick={(e) => e.stopPropagation()}>
                     <button type="button" className="colaModal-cerrar" onClick={() => setColaAbierto(null)} aria-label="Cerrar">✕</button>
                     <article
@@ -19486,7 +19487,7 @@ Motivo (obligatorio):`, ""));
                         title="Enviar al cliente su pedido con el total a pagar">📤 Compartir con el cliente</button>
                     </article>
                     </div>
-                    </div>
+                    </div>, document.body)
                     )}
                     </div>
                     );
