@@ -2,7 +2,11 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🧹 Selección: puede volver más de lo enviado (2026-11-09)
+## Último cambio: 🧾 Selección › Historial: productos en un modal (2026-11-09)
+
+- La columna «Productos resultantes» muestra un botón resumen (N productos · 📍 QQ allá); al tocarlo abre un modal (portal a body, `selProductosId`) con Producto / QQ / Quedó allá y total. Estilos `.selProdBtn`.
+
+## Cambio anterior: 🧹 Selección: puede volver más de lo enviado (2026-11-09)
 
 - Reporte/recepción de selección ya no se frena si lo recibido supera lo enviado (front `submitFinishBatch` y back `POST /selection/batches/:id/finish`): se guarda y la merma queda negativa. En pantalla el aviso pasó de ⛔ rojo a ⚠ amarillo. Pedido del dueño.
 

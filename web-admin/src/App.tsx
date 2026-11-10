@@ -3772,6 +3772,8 @@ export function App() {
   const [selectionRatesForm, setSelectionRatesForm] = useState({ seleccion_rate: "", envejecimiento_rate: "" });
   // Personas externas: se editan en un modal desde Selección.
   const [personasModalOpen, setPersonasModalOpen] = useState(false);
+  // Historial de Selección: los productos resultantes de un lote se ven en un modal al tocar su resumen (pedido del dueño 2026-11-09).
+  const [selProductosId, setSelProductosId] = useState<string | null>(null);
 
   const [appSettings, setAppSettings] = useState<AppSettings>(defaultAppSettings);
   const [settingsForm, setSettingsForm] = useState<AppSettings>(defaultAppSettings);
@@ -24704,7 +24706,14 @@ Motivo (obligatorio):`, ""));
                           <td>{b.provider_name}</td>
                           <td>{b.status === "COMPLETED" ? <span className="chip ok">Completado</span> : <span className="chip warn">Cancelado</span>}</td>
                           <td>{Number(b.input_qq).enReal()}</td>
-                          <td>{b.outputs.length > 0 ? b.outputs.map((o, i) => <span key={i} className="chip" style={{ marginRight: 4 }}>{o.product_name}: {Number(o.quantity).enReal()} QQ{Number(o.qty_alla ?? 0) > 0 ? ` (📍 ${Number(o.qty_alla).enReal()} quedaron allá)` : ""}</span>) : "—"}</td>
+                          <td>{b.outputs.length > 0 ? (() => {
+                            const alla = b.outputs.reduce((s, o) => s + Number(o.qty_alla ?? 0), 0);
+                            return (
+                              <button type="button" className="selProdBtn" onClick={() => setSelProductosId(b.id)} title="Ver los productos que regresaron">
+                                🧾 {b.outputs.length} producto{b.outputs.length === 1 ? "" : "s"}{alla > 0.0005 ? <span className="selProdBtn-alla"> · 📍 {alla.enReal()} QQ allá</span> : null} <span aria-hidden>›</span>
+                              </button>
+                            );
+                          })() : "—"}</td>
                           <td>{Number(b.output_qq).enReal()}</td>
                           <td>{Number(b.merma_qq).enReal()}</td>
                           <td><strong>{money(Number(b.total_cost))}</strong>{b.flete_tipo && Number(b.flete_monto) > 0 && <div className="muted" style={{ fontSize: 11 }}>+ flete {money(Number(b.flete_monto))} · {b.flete_tipo === "propia" ? (b.flete_activo_nombre ?? "Transp. y Cosech.") : (b.flete_prestador ?? "externo")}</div>}</td>
@@ -24725,6 +24734,50 @@ Motivo (obligatorio):`, ""));
               <p className="muted" style={{ marginTop: 8 }}>El pago a la persona externa se registra en <strong>Por Pagar</strong>.</p>
             </div>
             )}
+
+            {/* Modal: productos resultantes de un lote del historial. */}
+            {(() => {
+              const b = selProductosId ? selectionBatches.find((x) => x.id === selProductosId) : null;
+              if (!b) return null;
+              const total = b.outputs.reduce((s, o) => s + Number(o.quantity), 0);
+              const alla = b.outputs.reduce((s, o) => s + Number(o.qty_alla ?? 0), 0);
+              return createPortal(
+                <div className="modalOverlay" onClick={() => setSelProductosId(null)}>
+                  <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "100%" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                      <div>
+                        <h3 style={{ margin: 0 }}>🧾 Productos resultantes</h3>
+                        <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{b.batch_number} · {b.provider_name} · {String(b.service_date).slice(0, 10)} · enviado {Number(b.input_qq).enReal()} QQ</div>
+                      </div>
+                      <button type="button" onClick={() => setSelProductosId(null)} aria-label="Cerrar" style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table className="cajaTable">
+                        <thead><tr><th>Producto</th><th style={{ textAlign: "right" }}>QQ</th><th style={{ textAlign: "right" }}>📍 Quedó allá</th></tr></thead>
+                        <tbody>
+                          {b.outputs.map((o, i) => (
+                            <tr key={i}>
+                              <td>{o.product_name}</td>
+                              <td style={{ textAlign: "right" }}>{Number(o.quantity).enReal()}</td>
+                              <td style={{ textAlign: "right" }}>{Number(o.qty_alla ?? 0) > 0 ? Number(o.qty_alla).enReal() : "—"}</td>
+                            </tr>
+                          ))}
+                          <tr style={{ fontWeight: 800 }}>
+                            <td>Total</td>
+                            <td style={{ textAlign: "right" }}>{total.enReal()}</td>
+                            <td style={{ textAlign: "right" }}>{alla > 0 ? alla.enReal() : "—"}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="buttonRow" style={{ marginTop: 6 }}>
+                      <button type="button" onClick={() => setSelProductosId(null)}>Cerrar</button>
+                    </div>
+                  </div>
+                </div>,
+                document.body
+              );
+            })()}
 
             {/* Modal: Gestionar Personas Externas (mismo form + tabla) */}
             {personasModalOpen && (
