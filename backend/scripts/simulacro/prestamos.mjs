@@ -22,6 +22,9 @@ try {
   const caja = exigir(await api("POST", "/cash/registers/open", { name: "Caja CEYRO mixta", tipo: "MIXTO", opening_balance_cash: 1000, opening_balance_bank: 5000 }, matriz), "0. caja MIXTA de CEYRO");
   const movs = async () => q("SELECT id, movement, category, medio, amount::float a, reference_type, reversed_at FROM cash_movements WHERE cash_register_id=$1 ORDER BY created_at, id", [caja.id]);
   const finAntes = (await api("GET", `/finance/income-statement?desde=${mes}-01&hasta=${hoy}`, undefined, matriz)).data;
+  // Los préstamos reales que ya trae la copia: el Balance se compara contra este punto de partida.
+  const balAntes = (await api("GET", `/finance/balance?hasta=${hoy}`, undefined, matriz)).data;
+  const pasivoAntes = r2((balAntes.pasivo?.corriente?.prestamos_bancarios ?? 0) + (balAntes.pasivo?.no_corriente?.prestamos_bancarios ?? 0));
 
   // ── A. Préstamo que ya venía pagándose: lo que falta, sin mover la caja ──
   const tabla = exigir(await api("POST", "/prestamos/tabla", { capital: 12000, cuotas: 12, primera_fecha: masDias(3), tasa_anual: 12 }, matriz), "A1. vista previa de la tabla (12 cuotas al 12 %)");
@@ -65,7 +68,7 @@ try {
   check(r2(finAntes.utilidad_neta - er.utilidad_neta) === 118.5, "E3. la utilidad neta baja solo por el interés");
   const bal = (await api("GET", `/finance/balance?hasta=${hoy}`, undefined, matriz)).data;
   const pasivoPrest = r2((bal.pasivo.corriente.prestamos_bancarios ?? 0) + (bal.pasivo.no_corriente?.prestamos_bancarios ?? 0));
-  check(pasivoPrest === r2(12000 - c1.capital + 5000), "E4. Balance: los préstamos son pasivo por lo que falta de capital", { corriente: bal.pasivo.corriente.prestamos_bancarios, largo: bal.pasivo.no_corriente?.prestamos_bancarios });
+  check(r2(pasivoPrest - pasivoAntes) === r2(12000 - c1.capital + 5000), "E4. Balance: los préstamos son pasivo por lo que falta de capital", { corriente: bal.pasivo.corriente.prestamos_bancarios, largo: bal.pasivo.no_corriente?.prestamos_bancarios });
   check(Math.abs(bal.cuadre) < 0.01, "E5. el Balance sigue cuadrado", bal.cuadre);
   const [y, m] = mes.split("-").map(Number);
   const rm = (await api("GET", `/resultado-mensual?year=${y}&month=${m}`, undefined, matriz)).data;

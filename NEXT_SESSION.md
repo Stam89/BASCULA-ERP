@@ -2,7 +2,12 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🏦 Transferencia de pedido que llegó a CEYRO (2026-11-09)
+## Último cambio: 🎨 Tema fosforescente + revisión general (2026-11-10)
+
+- **Tema**: `styles.css` usa variables por ROL: `--c-brand`/`--c-brand-dark` = tinta (texto y bordes sobre claro), `--c-fill`/`-1`/`-2` + `--c-on-fill` = relleno y su texto, `--c-accent` = tintes y brillos, `--c-tint-1/2/3`. No escribir `#0f766e` ni `color:#fff` sobre relleno de marca: usar las variables. Por defecto verde neón (guía hecha en Canva, diseño `DAHafGlpToI`: #39FF14 / #128000 / #07130B); temas `neon-lima|naranja|rosa|celeste|clasico` en `<html data-tema>` (final de styles.css). En los neón, menú y barra superior van oscuros. `@media print` vuelve a los colores clásicos. Selector 🎨 en el pie del menú (`tema.ts`, localStorage `bascula-erp:tema`, por equipo). Ya no hay un segundo `:root` que pise la marca.
+- **Revisión**: 60 reglas de consistencia OK en la base real; 272 pruebas; batería de 132 simulacros: 104 pasan con datos reales y los otros 28 chocan con datos del día o piden datos de partida (13 pasan en respaldo limpio 05/11, 5 más en respaldo 29/10; ninguno es falla de la app). `envejecido_alla` y `prestamos` ahora comparan contra el punto de partida. Siguen atados a datos viejos: cambiar_secadora, sumar_peso_secado, secador_cambio_fecha, secado_cuadrilla_fuera, secado_pasado, envejecido_saco_venta, servicio_pilada_minimo, venta_desde_alla (pide ROVINSON con 0.11 allá), contar_desde (no conoce `quitado_at` y compara contra el corte por fecha), selectora D1 (choca con la selectora real desde 06/11). Barrido de pantallas en copia (puerto 4002, usuario inventado, escrituras bloqueadas): CEYRO 79, STALYN 64, ROVINSON 52 vistas sin errores de red, consola ni textos rotos.
+
+## Cambio anterior: 🏦 Transferencia de pedido que llegó a CEYRO (2026-11-09)
 
 - Caja › Transferencias por confirmar (solo cuando el activo NO es la Matriz): botón «🏦 Llegó a CEYRO» (`llegoAMatriz`, `POST /receivable/:id/llego-a-matriz`). Quita el por confirmar y llama `cobrarCuentasEnGrupo` con `recibido_por` = Matriz y medio BANCO: el cliente deja de deber, entra a la caja abierta de la Matriz y nace cobro_por_socio (CxC socio ↔ CxP Matriz). Simulacro `transferencia_a_matriz`.
 - Datos 09/11: la Caja Principal de CEYRO pasó a MIXTA (banco arranca en $0) a pedido del dueño, para que las transferencias no se sumen a la gaveta.

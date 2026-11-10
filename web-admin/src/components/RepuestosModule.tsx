@@ -357,7 +357,7 @@ export function RepuestosModule({ cajaAbiertaId, cajaMixta, puedeEditar, avisar,
                     const bloqueado = valor !== "ENTRADA" && !cajaAbiertaId;
                     return (
                       <label key={valor} style={{ display: "flex", alignItems: "flex-start", gap: 8, margin: 0, padding: "7px 10px", borderRadius: 8, fontSize: 13,
-                        border: `1.5px solid ${accion.pago === valor ? "#0f766e" : "#e5e7eb"}`, background: accion.pago === valor ? "#f0fdfa" : "#fff",
+                        border: `1.5px solid ${accion.pago === valor ? "var(--c-brand)" : "#e5e7eb"}`, background: accion.pago === valor ? "var(--c-tint-1)" : "#fff",
                         opacity: bloqueado ? 0.5 : 1, cursor: bloqueado ? "not-allowed" : "pointer" }}>
                         <input type="radio" checked={accion.pago === valor} disabled={bloqueado} onChange={() => setAccion({ ...accion, pago: valor })} style={{ width: "auto", marginTop: 2 }} />
                         <span><strong>{titulo}</strong><small className="muted" style={{ display: "block", fontSize: 11 }}>{sub}</small></span>

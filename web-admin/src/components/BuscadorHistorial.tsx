@@ -102,7 +102,7 @@ export function BuscadorHistorial({ ambito, titulo }: { ambito: "matriz" | "tran
           <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>Rápido:</span>
           {chips.map((c) => (
             <button key={c.texto} type="button" onClick={() => setTexto(c.texto)}
-              style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999, border: "1px solid #cbd5e1", background: texto === c.texto ? "#ccfbf1" : "#fff", cursor: "pointer" }}>
+              style={{ fontSize: 12, padding: "3px 10px", borderRadius: 999, border: "1px solid #cbd5e1", background: texto === c.texto ? "var(--c-tint-2)" : "#fff", cursor: "pointer" }}>
               {c.texto} <span className="muted">({c.veces})</span>
             </button>
           ))}

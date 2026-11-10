@@ -32,7 +32,7 @@ try {
   const piladora = (pid) => stock(pid, false), alla = (pid) => stock(pid, true);
 
   // ── A. Mandar a envejecer y registrar el informe: parte llegó, parte quedó allá ──
-  const p0 = await piladora(arroz), a0 = await alla(arroz), p34 = await piladora(a34);
+  const p0 = await piladora(arroz), a0 = await alla(arroz), p34 = await piladora(a34), a34alla0 = await alla(a34);
   const lote = exigir(await api("POST", "/selection/batches", { provider_id: prov.id, service_type: "ENVEJECIMIENTO", warehouse_id: bodPT, inputs: [{ product_id: arroz, quantity: 10 }] }, acc), "A1. mandar 10 QQ de 0.11 a envejecer");
   check(r3(p0 - await piladora(arroz)) === 10, "A2. salen 10 QQ de la piladora");
   check((await api("POST", `/selection/batches/${lote.id}/finish`, { outputs: [{ product_id: arroz, quantity: 8, qty_alla: 9 }] }, acc)).status === 400, "A3. «quedó allá» mayor que lo que salió → 400");
@@ -42,7 +42,7 @@ try {
     { product_id: polv, quantity: 0.5 }
   ] }, acc), "A4. el informe: 8 QQ de envejecido (5 quedaron allá), 1 de 3/4 (todo allá) y 0.5 de polvillo (llegó)");
   check(r3(await piladora(arroz) - (p0 - 10)) === 3 && r3(await alla(arroz) - a0) === 5, "A5. 0.11 envejecido: 3 QQ llegan a la piladora y 5 quedan allá", { piladora: await piladora(arroz), alla: await alla(arroz) });
-  check(await piladora(a34) === p34 && await alla(a34) === 1, "A6. arrocillo 3/4: nada llegó, 1 QQ allá");
+  check(await piladora(a34) === p34 && r3(await alla(a34) - a34alla0) === 1, "A6. arrocillo 3/4: nada llegó, 1 QQ allá");
   const bod = (await q("SELECT name, type FROM warehouses WHERE external_provider_id=$1", [prov.id]))[0];
   check(bod?.type === "EXTERNO" && bod.name === `Allá: ${prov.name}`, "A7. se creó la bodega «Allá: <proveedor>»", bod);
   const ub = exigir(await api("GET", "/selection/ubicacion", undefined, acc), "A8. consulta «¿dónde está?»");

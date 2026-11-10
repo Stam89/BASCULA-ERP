@@ -27,6 +27,7 @@ import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuest
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
+import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
 import { MaquinaBuscador, etiquetaMaquina } from "./components/MaquinaBuscador";
 import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
@@ -8919,6 +8920,9 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   // 🕒 Ventas por asignar: se vuelven a leer después de cada venta.
   const [porAsignarKey, setPorAsignarKey] = useState(0);
   const [impresoraModal, setImpresoraModal] = useState(false);
+  // 🎨 Color de la app en este equipo.
+  const [temaModal, setTemaModal] = useState(false);
+  const [tema, setTema] = useState<Tema>(temaGuardado);
   // 🖨️ Avisos de la impresión directa (impresion.ts): enviado, impresora desconectada, salió por la ventana…
   useEffect(() => {
     const oir = (e: Event) => { const d = (e as CustomEvent<{ mensaje: string; tipo: "success" | "error" | "warn" }>).detail; if (d?.mensaje) addToast(d.mensaje, d.tipo); };
@@ -15013,6 +15017,7 @@ Motivo (obligatorio):`, ""));
               <strong>{authUser.name}</strong>
               <small>{(authUser.role_name ?? "usuario").toLowerCase()}</small>
             </div>
+            <button className="logoutBtn mailBtn" title="Color de la app en este equipo" aria-label="Color de la app en este equipo" onClick={() => setTemaModal(true)}>🎨</button>
             <button className="logoutBtn mailBtn" title="Impresora de este equipo" aria-label="Impresora de este equipo" onClick={() => setImpresoraModal(true)}>🖨️</button>
             <button className="logoutBtn mailBtn" title="Cambiar mi clave" aria-label="Cambiar mi clave" onClick={() => setClaveModal("manual")}>🔑</button>
             <button className="logoutBtn mailBtn" title="Mi correo de recuperación de clave" aria-label="Mi correo de recuperación de clave" onClick={() => setCorreoModalAbierto(true)}>✉️</button>
@@ -15027,6 +15032,32 @@ Motivo (obligatorio):`, ""));
       </aside>
 
       <section className="workspace">
+        {temaModal && createPortal(
+          <div className="modalOverlay" onClick={() => setTemaModal(false)}>
+            <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 520, width: "94vw" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>🎨 Color de la app</h3>
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>Se guarda solo en este equipo. Lo que se imprime no cambia.</div>
+                </div>
+                <button type="button" onClick={() => setTemaModal(false)} aria-label="Cerrar" style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+              </div>
+              <div className="temaGrid">
+                {TEMAS.map((t) => (
+                  <button key={t.id} type="button" className={`temaOpcion ${tema === t.id ? "is-activo" : ""}`} aria-pressed={tema === t.id}
+                    onClick={() => { guardarTema(t.id); setTema(t.id); }}>
+                    <span className="temaOpcion__muestra" aria-hidden="true"><i style={{ background: t.oscuro }} /><i style={{ background: t.relleno }} /><i style={{ background: t.tinta }} /></span>
+                    <span>{t.nombre}{tema === t.id ? " ✓" : ""}<small style={{ display: "block" }}>{t.nota}</small></span>
+                  </button>
+                ))}
+              </div>
+              <div className="buttonRow" style={{ marginTop: 4 }}>
+                <button type="button" onClick={() => setTemaModal(false)}>Listo</button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
         {impresoraModal && (
           <div className="modalOverlay" onClick={() => setImpresoraModal(false)}>
             <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 640, width: "94vw", maxHeight: "90vh", overflow: "auto" }}>
@@ -19021,7 +19052,7 @@ Motivo (obligatorio):`, ""));
                             {respaldo.comprometidoQq > 0 ? ` · comprometido: ${respaldo.comprometidoQq.enReal()} QQ` : ""}
                           </small>
                         )}
-                        <small style={{ fontWeight: 800, color: hayRespaldo ? "#0f766e" : "#b91c1c" }}>
+                        <small style={{ fontWeight: 800, color: hayRespaldo ? "var(--c-brand)" : "#b91c1c" }}>
                           {hayRespaldo
                             ? `Disponible para nuevos pedidos: ${libre.enReal()} QQ${enEstePedido > 0 ? ` (ya van ${enEstePedido.enReal()} QQ en este pedido)` : ""}`
                             : enEstePedido > 0 ? `Sin disponible: ya van ${enEstePedido.enReal()} QQ en este pedido` : "Sin producto ni cáscara libre para vender"}
@@ -19113,7 +19144,7 @@ Motivo (obligatorio):`, ""));
                               </td>
                               <td style={{ padding: "8px 10px" }}>
                                 {item.presentation_name || "—"}
-                                {item.sobrante_saco_lb ? <small style={{ display: "block", color: "#0f766e", fontWeight: 700 }}>Sobrante en saco de {item.sobrante_saco_lb} LB</small> : null}
+                                {item.sobrante_saco_lb ? <small style={{ display: "block", color: "var(--c-brand)", fontWeight: 700 }}>Sobrante en saco de {item.sobrante_saco_lb} LB</small> : null}
                               </td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.enReal()}</td>
                               <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).enReal(0, 3)}</td>
@@ -19494,7 +19525,7 @@ Motivo (obligatorio):`, ""));
                         </div>
                       )}
                       {listo && (
-                        <button type="button" style={{ padding: "8px 12px", fontWeight: 700, background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }} onClick={() => printOrdenCarga(o)} title="Imprimir ticket de carga para bodega/chofer">
+                        <button type="button" style={{ padding: "8px 12px", fontWeight: 700, background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer" }} onClick={() => printOrdenCarga(o)} title="Imprimir ticket de carga para bodega/chofer">
                           🖨️ Orden de Carga
                         </button>
                       )}
@@ -20063,7 +20094,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* BLOQUE 1: Datos de traslado */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
-                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>1 · Datos de traslado</legend>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "var(--c-brand)", padding: "0 6px" }}>1 · Datos de traslado</legend>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                     <label style={{ fontSize: 12, fontWeight: 600 }}>Fecha de emisión
                       <input type="date" value={guiaForm.fecha_emision} onChange={(e) => setGuiaForm((f) => ({ ...f, fecha_emision: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
@@ -20088,7 +20119,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* BLOQUE 2: Destinatario */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
-                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>2 · Destinatario</legend>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "var(--c-brand)", padding: "0 6px" }}>2 · Destinatario</legend>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Cliente / Razón social
                     <input list="guiaClientesList" value={guiaForm.destinatario_nombre}
                       onChange={(e) => {
@@ -20109,7 +20140,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* BLOQUE 3: Transportista */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
-                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>3 · Transportista</legend>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "var(--c-brand)", padding: "0 6px" }}>3 · Transportista</legend>
                   <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr", gap: 10 }}>
                     <label style={{ fontSize: 12, fontWeight: 600 }}>Nombre / Razón social
                       <input type="text" value={guiaForm.transportista_nombre} onChange={(e) => setGuiaForm((f) => ({ ...f, transportista_nombre: e.target.value }))} style={{ display: "block", width: "100%", marginTop: 4 }} /></label>
@@ -20122,7 +20153,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* BLOQUE 4: Bienes transportados (lista dinámica) */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
-                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>4 · Bienes transportados</legend>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "var(--c-brand)", padding: "0 6px" }}>4 · Bienes transportados</legend>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead><tr style={{ background: "#f9fafb" }}>
                       <th style={{ padding: "6px 8px", textAlign: "left", width: 90 }}>Cantidad</th>
@@ -20149,7 +20180,7 @@ Motivo (obligatorio):`, ""));
 
                 {/* BLOQUE 5: Adicionales */}
                 <fieldset style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 14, margin: 0 }}>
-                  <legend style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", padding: "0 6px" }}>5 · Adicionales</legend>
+                  <legend style={{ fontSize: 12, fontWeight: 800, color: "var(--c-brand)", padding: "0 6px" }}>5 · Adicionales</legend>
                   <label style={{ fontSize: 12, fontWeight: 600 }}>Observaciones
                     <textarea value={guiaObs} onChange={(e) => setGuiaObs(e.target.value)} placeholder="Observaciones del traslado" style={{ display: "block", width: "100%", marginTop: 4, minHeight: 60 }} /></label>
                 </fieldset>
@@ -21588,7 +21619,7 @@ Motivo (obligatorio):`, ""));
                                   ))}
                                 </div>
                                 {movPagadoPor && (
-                                  <small style={{ color: "#0f766e" }}>
+                                  <small style={{ color: "var(--c-brand)" }}>
                                     💳 El gasto queda en esta caja sin sacar efectivo. Primero baja lo que {otrosSocios.find((s) => s.id === movPagadoPor)?.name} le debía a esta caja;
                                     el resto se lo quedas debiendo (Cuentas entre socios).
                                   </small>
@@ -21938,7 +21969,7 @@ Motivo (obligatorio):`, ""));
                     {esMatrizActiva && (() => {
                       const porTerminarse = repuestosAlerta.filter((r) => r.activo && r.stock_minimo > 0 && r.stock <= r.stock_minimo);
                       return (
-                        <div className="formPanel" style={{ background: porTerminarse.length ? "#fff7ed" : "#f0fdfa", border: `1px solid ${porTerminarse.length ? "#fdba74" : "#99f6e4"}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                        <div className="formPanel" style={{ background: porTerminarse.length ? "#fff7ed" : "var(--c-tint-1)", border: `1px solid ${porTerminarse.length ? "#fdba74" : "var(--c-tint-3)"}`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
                           <div style={{ flex: "1 1 240px" }}>
                             <strong style={{ fontSize: 14 }}>🔧 Repuestos de planta</strong>
                             <div className="muted" style={{ fontSize: 12.5 }}>
@@ -21984,7 +22015,7 @@ Motivo (obligatorio):`, ""));
                           <>
                             <p style={{ fontWeight: 600, margin: "4px 0" }}>
                               {vis.length} registros · Pagado en caja: {money(total)}
-                              {totalStock > 0 && <span style={{ color: "#0f766e" }}> · Repuestos del stock: {money(totalStock)} · Costo total: {money((total + totalStock))}</span>}
+                              {totalStock > 0 && <span style={{ color: "var(--c-brand)" }}> · Repuestos del stock: {money(totalStock)} · Costo total: {money((total + totalStock))}</span>}
                             </p>
                             {vis.length === 0 && <p className="muted">Sin mantenimientos</p>}
                             <div className="equipList">
@@ -21994,7 +22025,7 @@ Motivo (obligatorio):`, ""));
                                     <strong>{m.area_label}{m.section_label ? " / " + m.section_label : ""}{m.maquina ? " · " + m.maquina : ""}</strong>
                                     <small>{(m.created_at || "").slice(0, 10)} · {m.maintenance_type} · {m.description}{m.provider ? " · " + m.provider : ""}</small>
                                     {Number(m.repuestos_stock_valor || 0) > 0 && (
-                                      <small style={{ display: "block", color: "#0f766e" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · {money(Number(m.repuestos_stock_valor))}</small>
+                                      <small style={{ display: "block", color: "var(--c-brand)" }}>🔩 Del inventario: {m.repuestos_detalle ?? "repuestos"} · {money(Number(m.repuestos_stock_valor))}</small>
                                     )}
                                     {m.repuestos_comprados && <small style={{ display: "block", color: "#9a3412" }}>🛒 Comprados: {m.repuestos_comprados}</small>}
                                     {Number(m.parts_cost || 0) > 0 && !m.repuestos_comprados && (
@@ -22003,7 +22034,7 @@ Motivo (obligatorio):`, ""));
                                   </div>
                                   <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
                                     <strong>{money(Number(m.amount))}</strong>
-                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "#0f766e" }}>+ {money(Number(m.repuestos_stock_valor))} stock</small>}
+                                    {Number(m.repuestos_stock_valor || 0) > 0 && <small style={{ color: "var(--c-brand)" }}>+ {money(Number(m.repuestos_stock_valor))} stock</small>}
                                     {m.receipt_photo_signed_url && <a href={m.receipt_photo_signed_url} target="_blank" rel="noreferrer">foto</a>}
                                   </div>
                                 </div>
@@ -23141,7 +23172,7 @@ Motivo (obligatorio):`, ""));
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
                       <button type="button" onClick={() => printEstadoCuentaFomento(fomentoDetalle)}
-                        style={{ background: "#0f766e", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                        style={{ background: "var(--c-brand)", color: "#fff", border: "none", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                         🖨️ Imprimir Estado de Cuenta
                       </button>
                       {canEdit("Fomentos") && (
@@ -26336,7 +26367,7 @@ Motivo (obligatorio):`, ""));
                         <button key={st.key} type="button" onClick={() => setServicioTab(st.key)}
                           style={{ textAlign: "left", padding: "10px 12px", borderRadius: 10, cursor: "pointer",
                             border: servicioTab === st.key ? "2px solid #0f766e" : "1px solid #e2e8f0",
-                            background: servicioTab === st.key ? "#f0fdfa" : "#fff" }}>
+                            background: servicioTab === st.key ? "var(--c-tint-1)" : "#fff" }}>
                           <div style={{ fontSize: 12.5, fontWeight: 700, color: "#334155" }}>{st.label}</div>
                           <div style={{ fontSize: 22, fontWeight: 800, color: "#0f172a" }}>{cantidad(tt.total.qq)} QQ</div>
                           <div className="muted" style={{ fontSize: 12 }}>👥 Socios {cantidad(tt.socios.qq)} · 🧑‍🌾 Externos {cantidad(tt.externos.qq)}</div>

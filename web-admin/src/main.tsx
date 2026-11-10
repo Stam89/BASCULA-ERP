@@ -6,6 +6,10 @@ import { DialogoHost } from "./components/Dialogo";
 import { PantallaError } from "./components/PantallaError";
 import "./styles.css";
 import { recargarPorVersionNueva } from "./recargaVersion";
+import { aplicarTema, temaGuardado } from "./tema";
+
+// 🎨 El color elegido en este equipo se pone antes de dibujar, para que no parpadee.
+aplicarTema(temaGuardado());
 
 // Vite avisa cuando no puede precargar un archivo de otra versión (despliegue
 // nuevo con la pestaña abierta): se recarga una vez para traer la versión actual.
