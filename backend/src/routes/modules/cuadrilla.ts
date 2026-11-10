@@ -1400,8 +1400,11 @@ const FECHA_TICKET = `COALESCE(
 const NUM_TICKET = numeroTicketSql("t");
 const CORTE_BAJADA = `(CASE WHEN c.desde_numero IS NOT NULL THEN COALESCE(${NUM_TICKET} >= c.desde_numero, true)
   ELSE ${FECHA_TICKET} >= COALESCE(c.desde, CURRENT_DATE) END)`;
+// Un ticket QUITADO de la báscula (no se ingresó) igual pudo bajarse del carro: cuenta solo si alguien le puso a mano
+// quién lo bajó (pedido del dueño 2026-11-10: los de Fredy Villamar los bajó JOSE). Sin eso queda fuera (duplicados, errores).
 const TICKET_ELEGIBLE = `lower(coalesce(t.raw_payload->>'modo', 'principal')) = 'principal'
-  AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0 AND t.quitado_at IS NULL`;
+  AND NOT coalesce(t.en_espera, false) AND coalesce(t.quintals, 0) > 0
+  AND (t.quitado_at IS NULL OR COALESCE(btrim(t.bajada_manual), '') NOT IN ('', '__NO__'))`;
 // Sábado que abre la semana de pago de una fecha (getUTCDay: dom=0 … sáb=6).
 const inicioSemana = (iso: string) => {
   const d = new Date(`${iso}T12:00:00Z`);
