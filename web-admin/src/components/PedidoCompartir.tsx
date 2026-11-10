@@ -24,7 +24,12 @@ export type PedidoCompartirData = {
   nota: string | null;
   lineas: PedidoCompartirLinea[];
   total: number;
+  /** Socio que vende (su inicial va junto al nombre del negocio). */
+  socio?: string | null;
 };
+
+/** Inicial del socio que vende («ROVINSON» → «R»). */
+export const inicialSocio = (socio?: string | null) => (socio ?? "").trim().charAt(0).toUpperCase();
 
 const fechaCorta = (v: string) => {
   const d = /^\d{4}-\d{2}-\d{2}$/.test(v) ? new Date(`${v}T12:00:00`) : new Date(v);
@@ -50,7 +55,7 @@ export function textoPedido(p: PedidoCompartirData, negocio: string): string {
     return `• ${l.producto}${pres}: ${qqTxt(l.qq)} QQ${bultos} × ${money(l.precio)} = ${money(l.subtotal)}`;
   });
   return [
-    `*${negocio}*`,
+    `*${negocio}${inicialSocio(p.socio) ? ` · ${inicialSocio(p.socio)}` : ""}*`,
     `🧾 Pedido ${p.numero}`,
     `Fecha: ${fechaCorta(p.fecha)}`,
     `Cliente: ${p.cliente}`,
@@ -102,11 +107,11 @@ export function PedidoCompartirModal({ pedido, negocio, titulo, onClose, avisar 
       const canvas = await html2canvas(el, { backgroundColor: "#ffffff", scale: 2, useCORS: true });
       const blob: Blob | null = await new Promise((res) => canvas.toBlob((b) => res(b), "image/png"));
       if (!blob) throw new Error("No se pudo generar la imagen");
-      const nombre = `pedido-${pedido.numero}.png`;
+      const nombre = `pedido-${pedido.cliente.trim().replace(/[^\p{L}\p{N}]+/gu, "-") || pedido.numero}.png`;
       const file = new File([blob], nombre, { type: "image/png" });
       const nav = navigator as Navigator & { canShare?: (d: unknown) => boolean };
       if (nav.canShare && nav.canShare({ files: [file] }) && navigator.share) {
-        await navigator.share({ files: [file], title: `Pedido ${pedido.numero}`, text: `Pedido ${pedido.numero} · Total a pagar ${money(pedido.total)}` });
+        await navigator.share({ files: [file], title: pedido.cliente, text: `${pedido.cliente} · Total a pagar ${money(pedido.total)}` });
       } else {
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a"); a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
@@ -129,7 +134,14 @@ export function PedidoCompartirModal({ pedido, negocio, titulo, onClose, avisar 
         {/* Tarjeta que se ve y que se convierte en imagen. */}
         <div ref={tarjetaRef} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 16, color: "#0f172a" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
-            <strong style={{ fontSize: 15 }}>{negocio}</strong>
+            <strong style={{ fontSize: 15, display: "inline-flex", alignItems: "center", gap: 6 }}>
+              {negocio}
+              {inicialSocio(pedido.socio) && (
+                <span title={pedido.socio ?? undefined} style={{ display: "inline-grid", placeItems: "center", minWidth: 22, height: 22, padding: "0 5px", borderRadius: 6, background: "#0f172a", color: "#fff", fontSize: 12, fontWeight: 800 }}>
+                  {inicialSocio(pedido.socio)}
+                </span>
+              )}
+            </strong>
             <span style={{ fontSize: 11.5, color: "#64748b" }}>{fechaCorta(pedido.fecha)}</span>
           </div>
           <div style={{ fontSize: 12.5, color: "#475569", marginTop: 2 }}>🧾 Pedido {pedido.numero}</div>

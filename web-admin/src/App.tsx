@@ -13556,6 +13556,7 @@ Motivo (obligatorio):`, ""));
         telefono: cliente?.phone ?? null,
         entrega: (form.get("delivery_date") as string) || null,
         nota: (form.get("order_notes") as string) || null,
+        socio: accionistas.find((a) => a.id === (ventaSocioId || activeAccionistaId))?.name ?? null,
         lineas: saleLineItems.map((l) => ({
           producto: products.find((p) => p.id === l.product_id)?.name ?? "",
           presentacion: l.presentation_name || null,
@@ -13591,6 +13592,7 @@ Motivo (obligatorio):`, ""));
       fecha: o.created_at,
       cliente: o.customer_name,
       telefono: o.customer_phone,
+      socio: o.accionista_name ?? accionistas.find((a) => a.id === o.accionista_id)?.name ?? null,
       entrega: o.delivery_date ? String(o.delivery_date).slice(0, 10) : null,
       nota: o.notes,
       lineas: o.items.map((it) => {
