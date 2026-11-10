@@ -2,7 +2,12 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🧾 Selección › Historial: productos en un modal (2026-11-09)
+## Último cambio: 🏦 Transferencia de pedido que llegó a CEYRO (2026-11-09)
+
+- Caja › Transferencias por confirmar (solo cuando el activo NO es la Matriz): botón «🏦 Llegó a CEYRO» (`llegoAMatriz`, `POST /receivable/:id/llego-a-matriz`). Quita el por confirmar y llama `cobrarCuentasEnGrupo` con `recibido_por` = Matriz y medio BANCO: el cliente deja de deber, entra a la caja abierta de la Matriz y nace cobro_por_socio (CxC socio ↔ CxP Matriz). Simulacro `transferencia_a_matriz`.
+- Datos 09/11: la Caja Principal de CEYRO pasó a MIXTA (banco arranca en $0) a pedido del dueño, para que las transferencias no se sumen a la gaveta.
+
+## Cambio anterior: 🧾 Selección › Historial: productos en un modal (2026-11-09)
 
 - La columna «Productos resultantes» muestra un botón resumen (N productos · 📍 QQ allá); al tocarlo abre un modal (portal a body, `selProductosId`) con Producto / QQ / Quedó allá y total. Estilos `.selProdBtn`.
 

@@ -13700,6 +13700,25 @@ Motivo (obligatorio):`, ""));
     } finally { setConfirmandoId(null); }
   }
 
+  // 🏦 La transferencia del pedido de este socio llegó a la cuenta de la Matriz: un paso (pedido del dueño 2026-11-09).
+  async function llegoAMatriz(t: { id: string; monto: number; cliente: string | null; por_confirmar: string }) {
+    const que = t.por_confirmar === "CHECK" ? "el cheque" : "la transferencia";
+    if (!(await confirmar({
+      titulo: `¿${que.charAt(0).toUpperCase() + que.slice(1)} llegó a ${matrizName}?`,
+      mensaje: `${t.cliente ?? "Cliente"} · ${money(Number(t.monto))}\nEl cliente deja de deber, el dinero entra a la caja de ${matrizName} (banco) y ${matrizName} te lo queda debiendo (Por Cobrar · entre socios).`,
+      confirmar: `Sí, llegó a ${matrizName}`, tono: "normal"
+    }))) return;
+    setConfirmandoId(t.id);
+    try {
+      await apiPost(`/receivable/${t.id}/llego-a-matriz`, {});
+      addToast(`🏦 ${que.charAt(0).toUpperCase() + que.slice(1)} de ${t.cliente ?? "el cliente"} (${money(Number(t.monto))}) llegó a ${matrizName}: ahora ${matrizName} te lo debe.`, "success");
+      cargarPorConfirmar();
+      refreshReceivables().catch(() => undefined);
+    } catch (e) {
+      addToast(e instanceof Error ? e.message : "No se pudo registrar", "error");
+    } finally { setConfirmandoId(null); }
+  }
+
   async function despacharPedido(order: SalesOrder) {
     // Flujo de 2 pasos: no se puede despachar sin haber confirmado la preparación.
     if (!order.prepared_at) {
@@ -20603,6 +20622,10 @@ Motivo (obligatorio):`, ""));
                               </span>
                               <span className="cjx-confirmar__btns">
                                 <button type="button" className="primary" disabled={confirmandoId === t.id} onClick={() => confirmarTransferencia(t, true)}>✅ Llegó</button>
+                                {!esMatrizActiva && (
+                                  <button type="button" disabled={confirmandoId === t.id} onClick={() => llegoAMatriz(t).catch(() => undefined)}
+                                    title={`Le depositaron a ${matrizName}: el cliente deja de deber y ${matrizName} te lo queda debiendo`}>🏦 Llegó a {matrizName}</button>
+                                )}
                                 <button type="button" disabled={confirmandoId === t.id} onClick={() => confirmarTransferencia(t, false)}>❌ No llegó</button>
                               </span>
                             </div>

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import type { PoolClient } from "pg";
 import { z } from "zod";
+import { getMatrizId } from "../../services/matriz.js";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
@@ -546,6 +547,35 @@ export async function cobrarCuentasEnGrupo(client: PoolClient, auth: Authenticat
 receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
   const body = cobroGrupoSchema.parse(req.body);
   res.json(await inTransaction((client) => cobrarCuentasEnGrupo(client, req as AuthenticatedRequest, body)));
+}));
+
+// 🏦 «Llegó a la Matriz» (pedido del dueño 2026-11-09): la transferencia de un pedido de un socio llegó a la cuenta de la
+// Matriz y no a la del socio. En un paso: deja de estar por confirmar, el cliente deja de deber, el dinero entra a la caja
+// abierta de la Matriz (banco) y la Matriz queda debiéndoselo al socio (cobro_por_socio, igual que «¿Quién recibió el
+// dinero? · Le depositaron a…» en Por Cobrar).
+receivableRouter.post("/:id/llego-a-matriz", asyncRoute(async (req, res) => {
+  const auth = req as AuthenticatedRequest;
+  const out = await inTransaction(async (client) => {
+    const matrizId = await getMatrizId(client);
+    if (!matrizId) throw new ApiError(409, "No hay una Matriz configurada.");
+    if (matrizId === auth.accionistaId) throw new ApiError(409, "Esta cuenta ya es de la Matriz: usa «✅ Llegó».");
+    const ar = (await client.query(
+      `SELECT id, balance::float AS balance, por_confirmar FROM accounts_receivable
+        WHERE id = $1 AND accionista_id = $2 AND por_confirmar IS NOT NULL AND status IN ('CONFIRMED', 'PARTIAL') FOR UPDATE`,
+      [req.params.id, auth.accionistaId]
+    )).rows[0] as { id: string; balance: number; por_confirmar: string } | undefined;
+    if (!ar) throw new ApiError(404, "Esa cuenta no está por confirmar.");
+    if (!(ar.balance > 0.005)) throw new ApiError(409, "Esa cuenta ya no tiene saldo.");
+    await client.query(
+      `UPDATE accounts_receivable SET por_confirmar = NULL,
+              description = REPLACE(REPLACE(description, 'transferencia por confirmar', 'transferencia llegó a la Matriz'), 'cheque por confirmar', 'cheque llegó a la Matriz')
+        WHERE id = $1`, [ar.id]);
+    return cobrarCuentasEnGrupo(client, auth, {
+      receivable_ids: [ar.id], amount: Math.round(ar.balance * 100) / 100, recibido_por: matrizId, medio_pago: "BANCO",
+      concepto: ar.por_confirmar === "CHECK" ? "Cheque del pedido que llegó a la Matriz" : "Transferencia del pedido que llegó a la Matriz"
+    });
+  });
+  res.json(out);
 }));
 
 // ── COBRO RECIBIDO POR OTRO SOCIO + PAGOS QUE HIZO CON ESA PLATA (un solo paso) ──────────────────────
