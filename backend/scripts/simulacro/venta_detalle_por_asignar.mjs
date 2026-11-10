@@ -48,13 +48,11 @@ try {
   check(ventasS[0].n === 2, "B5. las ventas quedan en las ventas de STALYN");
   check(Math.abs((await saldo()) - (c0 + 40)) < 0.01, "B6. la caja no cambia al asignar");
 
-  // C. Asignar la tercera a CEYRO sin arroz: no deja; con arroz sí (como venta suya)
-  const sinArroz = await api("POST", "/sales/retail/por-asignar/asignar", { ids: [v3.id], dueno_id: matriz }, matriz);
-  check(sinArroz.status === 409 && /no tiene suficiente/.test(sinArroz.data?.error ?? ""), "C1. CEYRO no tiene ese arroz: no se asigna", sinArroz.data?.error);
-  await q("INSERT INTO inventory_movements (product_id, warehouse_id, movement, quantity, unit, ownership, accionista_id, notes) VALUES ($1,$2,'ADJUSTMENT',1,'QQ','OWNED',$3,'sim por asignar')", [prod, wh, matriz]);
-  exigir(await api("POST", "/sales/retail/por-asignar/asignar", { ids: [v3.id], dueno_id: matriz }, matriz), "C2. con arroz, se asigna a CEYRO");
+  // C. Asignar la tercera a CEYRO aunque no le alcance el arroz (pedido del dueño 2026-11-10): se asigna y su stock queda en negativo.
+  const s0 = await stock(matriz);
+  exigir(await api("POST", "/sales/retail/por-asignar/asignar", { ids: [v3.id], dueno_id: matriz }, matriz), "C1-C2. sin arroz suficiente igual se asigna a CEYRO");
   const m3 = (await q("SELECT category FROM cash_movements WHERE id=(SELECT cash_movement_id FROM ventas_detalle_por_asignar WHERE id=$1)", [v3.id]))[0];
-  check(m3.category === "VENTA" && (await stock(matriz)) === r2(1 - 0.5), "C3. queda como venta de CEYRO y sale de su inventario", { m3, s: await stock(matriz) });
+  check(m3.category === "VENTA" && (await stock(matriz)) === r2(s0 - 0.5), "C3. queda como venta de CEYRO y sale de su inventario (puede quedar en negativo)", { m3, antes: s0, s: await stock(matriz) });
   const otraVez = await api("POST", "/sales/retail/por-asignar/asignar", { ids: [v3.id], dueno_id: stalyn }, matriz);
   check(otraVez.status === 409, "C4. no se asigna dos veces", otraVez.status);
 

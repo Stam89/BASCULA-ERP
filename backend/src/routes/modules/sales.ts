@@ -62,6 +62,8 @@ export type OpcionesVenta = {
    * cobro/caja. Las líneas (sale_items) sí se guardan como registro.
    */
   omitirInventario?: boolean;
+  /** Si no alcanza el stock del dueño, la salida igual se hace y queda en negativo (asignar ventas por asignar). */
+  permitirNegativo?: boolean;
 };
 
 export async function crearVenta(
@@ -359,7 +361,7 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
           sack_weight_lb: 100,
           description: `Venta detalle ${v.product_name} · ${v.customer_name ?? "cliente"} (del ${fecha}${esFiada ? ", fiado" : ""}${esPropia ? "" : `, cobró ${cajero}`})`,
           items: [{ product_id: v.product_id, warehouse_id: v.warehouse_id, quantity: Number(v.quantity_qq), unit_price: Number(v.unit_price_qq) }]
-        });
+        }, { permitirNegativo: true }); // el arroz ya se entregó: si al dueño no le alcanza, queda en negativo (pedido del dueño 2026-11-10)
       } catch (e) {
         if (e instanceof ApiError && e.statusCode === 409) {
           throw new ApiError(409, `${dueno.name} no tiene suficiente ${v.product_name} para esta venta (${round2(Number(v.quantity_qq))} QQ): elige otro dueño. (${e.message})`);
@@ -594,7 +596,8 @@ async function crearVentaInterna(
           referenceType: "sales",
           referenceId: sale.rows[0].id,
           createdBy: body.created_by,
-          preferredLotId: item.lot_id ?? null
+          preferredLotId: item.lot_id ?? null,
+          permitirNegativo: opciones.permitirNegativo
         });
       }
 

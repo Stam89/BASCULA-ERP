@@ -2,7 +2,13 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: 🎨 Tema fosforescente + revisión general (2026-11-10)
+## Último cambio: Ventas por asignar sin stock + bajada de tickets quitados (2026-11-10)
+
+- Asignar «Decidir después» a un socio sin stock suficiente ya no se rechaza: `crearVenta(..., { permitirNegativo: true })` → `consumeInventoryFIFO.permitirNegativo` saca lo que hay y el faltante va sin lote con nota «Sin stock suficiente: queda en negativo…»; la regla de consistencia de existencias negativas lo acepta. Simulacro `venta_detalle_por_asignar` C actualizado.
+- Bajada de carro: `TICKET_ELEGIBLE` (cuadrilla.ts) incluye tickets quitados que tengan `bajada_manual` (no `__NO__`). Datos: JOSE en #480/483/484/486 de Fredy Villamar.
+- Datos: el cobro de Fausto Cayo ($1,492.42) se anuló en CEYRO y se cobró en el BANCO de la caja de STALYN (llegó a su cuenta).
+
+## Cambio anterior: 🎨 Tema fosforescente + revisión general (2026-11-10)
 
 - **Tema**: `styles.css` usa variables por ROL: `--c-brand`/`--c-brand-dark` = tinta (texto y bordes sobre claro), `--c-fill`/`-1`/`-2` + `--c-on-fill` = relleno y su texto, `--c-accent` = tintes y brillos, `--c-tint-1/2/3`. No escribir `#0f766e` ni `color:#fff` sobre relleno de marca: usar las variables. Por defecto verde neón (guía hecha en Canva, diseño `DAHafGlpToI`: #39FF14 / #128000 / #07130B); temas `neon-lima|naranja|rosa|celeste|clasico` en `<html data-tema>` (final de styles.css). En los neón, menú y barra superior van oscuros. `@media print` vuelve a los colores clásicos. Selector 🎨 en el pie del menú (`tema.ts`, localStorage `bascula-erp:tema`, por equipo). Ya no hay un segundo `:root` que pise la marca.
 - **Revisión**: 60 reglas de consistencia OK en la base real; 272 pruebas; batería de 132 simulacros: 104 pasan con datos reales y los otros 28 chocan con datos del día o piden datos de partida (13 pasan en respaldo limpio 05/11, 5 más en respaldo 29/10; ninguno es falla de la app). `envejecido_alla` y `prestamos` ahora comparan contra el punto de partida. Siguen atados a datos viejos: cambiar_secadora, sumar_peso_secado, secador_cambio_fecha, secado_cuadrilla_fuera, secado_pasado, envejecido_saco_venta, servicio_pilada_minimo, venta_desde_alla (pide ROVINSON con 0.11 allá), contar_desde (no conoce `quitado_at` y compara contra el corte por fecha), selectora D1 (choca con la selectora real desde 06/11). Barrido de pantallas en copia (puerto 4002, usuario inventado, escrituras bloqueadas): CEYRO 79, STALYN 64, ROVINSON 52 vistas sin errores de red, consola ni textos rotos.

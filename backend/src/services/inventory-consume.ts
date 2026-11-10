@@ -17,6 +17,8 @@ type ConsumeInventoryOptions = {
   preferredLotId?: string | null;
   /** 📦 Solo los bultos llenos de ese peso de saco (marca por presentación). Sin él, sale primero lo «sin presentación». */
   sackWeightLb?: number | null;
+  /** Lo que no alcanza sale igual y el stock queda en NEGATIVO (asignar ventas por asignar, pedido del dueño 2026-11-10). */
+  permitirNegativo?: boolean;
 };
 
 /** Lo que salió de cada tramo (lote + peso del saco), para quien deba volver a ingresarlo igual (ej. traer de allá). */
@@ -61,7 +63,7 @@ export async function consumeInventoryFIFO(
   );
 
   const totalAvailable = round3(available.rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0));
-  if (totalAvailable + 0.001 < quantity) {
+  if (totalAvailable + 0.001 < quantity && !opts.permitirNegativo) {
     throw new ApiError(
       409,
       `Stock insuficiente de ${productName}: hay ${totalAvailable.toFixed(2)} QQ y la salida requiere ${quantity.toFixed(2)} QQ.`
@@ -95,6 +97,18 @@ export async function consumeInventoryFIFO(
     remaining = round3(remaining - take);
   }
 
+  if (remaining > 0.001 && opts.permitirNegativo) {
+    // Lo que falta sale sin lote: el stock de ese dueño queda en negativo hasta que entre producto.
+    await client.query(
+      `INSERT INTO inventory_movements
+       (product_id, warehouse_id, lot_id, movement, quantity, reference_type, reference_id, ownership, notes, created_by, accionista_id)
+       VALUES ($1, $2, NULL, 'OUT', $3, $4, $5, $6, $7, $8, $9)`,
+      [opts.productId, opts.warehouseId, -remaining, opts.referenceType, opts.referenceId, ownership,
+       opts.notes ?? `Sin stock suficiente: queda en negativo (${remaining.toFixed(2)} QQ)`, opts.createdBy ?? null, opts.accionistaId ?? null]
+    );
+    tramos.push({ lot_id: null, quantity: remaining, sack_weight_lb: null });
+    remaining = 0;
+  }
   if (remaining > 0.001) {
     throw new ApiError(409, `No se pudo completar la salida de inventario de ${productName}. Faltan ${remaining.toFixed(2)} QQ.`);
   }

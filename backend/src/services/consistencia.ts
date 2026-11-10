@@ -161,13 +161,14 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   // (Los sacos pueden quedar en negativo A PROPÓSITO: es la señal «la matriz debe comprar sacos» de Sacos por comprar.)
   // Un negativo DECLARADO en el arranque (Saldos iniciales: «arroz que se debe», con su motivo) es correcto mientras
   // no pase de lo declarado; solo se marca lo que quede MÁS negativo que eso.
-  { modulo: "Inventario", nombre: "Inventario: sin existencias negativas por producto/bodega/socio/propiedad (salvo el arroz que se debe declarado en el arranque)", sql: `
+  { modulo: "Inventario", nombre: "Inventario: sin existencias negativas por producto/bodega/socio/propiedad (salvo el arroz que se debe declarado en el arranque y lo vendido sin stock al asignar ventas)", sql: `
     SELECT s.product_id, s.warehouse_id, s.accionista_id, sum(s.quantity)::float q FROM inventory_stock s
      GROUP BY s.product_id, s.warehouse_id, s.accionista_id, s.ownership
     HAVING sum(s.quantity) < -0.005
        AND sum(s.quantity) < COALESCE((
              SELECT sum(m.quantity) FROM inventory_movements m
-              WHERE m.reference_type = 'saldo_inicial' AND m.quantity < 0 AND m.product_id = s.product_id
+              WHERE (m.reference_type = 'saldo_inicial' OR m.notes LIKE 'Sin stock suficiente: queda en negativo%')
+                AND m.quantity < 0 AND m.product_id = s.product_id
                 AND m.warehouse_id = s.warehouse_id AND m.accionista_id IS NOT DISTINCT FROM s.accionista_id
                 AND m.ownership = s.ownership), 0) - 0.005` },
   { modulo: "Ventas", nombre: "Ventas: total = suma de sus líneas", sql: `
