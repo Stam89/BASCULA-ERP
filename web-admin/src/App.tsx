@@ -9483,6 +9483,12 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   function removeSaleLineItem(id: string) {
     setSaleLineItems(prev => prev.filter(item => item.id !== id));
   }
+  // ✏️ Cambiar la cantidad (QQ) o el precio de una línea ya agregada, sin borrarla (pedido del dueño 2026-11-10).
+  function cambiarLineaPedido(id: string, campo: "quantity" | "unit_price", texto: string) {
+    const n = Number(String(texto).replace(",", "."));
+    if (!Number.isFinite(n) || n < 0) return;
+    setSaleLineItems(prev => prev.map(item => item.id === id ? { ...item, [campo]: n } : item));
+  }
 
   // ── Calcular total del pedido ──
   function calculateSaleTotal(): number {
@@ -19148,9 +19154,17 @@ Motivo (obligatorio):`, ""));
                                 {item.presentation_name || "—"}
                                 {item.sobrante_saco_lb ? <small style={{ display: "block", color: "var(--c-brand)", fontWeight: 700 }}>Sobrante en saco de {item.sobrante_saco_lb} LB</small> : null}
                               </td>
-                              <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{qq.enReal()}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>
+                                <input type="number" inputMode="decimal" min={0} step="0.01" aria-label={`Cantidad (QQ) de ${product?.name ?? "la línea"}`}
+                                  className="lineaEditable" value={item.quantity}
+                                  onChange={(e) => cambiarLineaPedido(item.id, "quantity", e.target.value)} />
+                              </td>
                               <td style={{ padding: "8px 10px", textAlign: "right", color: "#2563eb" }} title="Bultos físicos = QQ × factor de la presentación (para la Guía)">{bultosDeLinea(item).enReal(0, 3)}</td>
-                              <td style={{ padding: "8px 10px", textAlign: "right" }}>{money(item.unit_price)}</td>
+                              <td style={{ padding: "6px 8px", textAlign: "right" }}>
+                                <input type="number" inputMode="decimal" min={0} step="0.01" aria-label={`Precio por QQ de ${product?.name ?? "la línea"}`}
+                                  className="lineaEditable" value={item.unit_price}
+                                  onChange={(e) => cambiarLineaPedido(item.id, "unit_price", e.target.value)} />
+                              </td>
                               <td style={{ padding: "8px 10px", textAlign: "right", fontWeight: 700 }}>{money(subtotal)}</td>
                               <td style={{ padding: "8px 10px", textAlign: "center" }}>
                                 <button
