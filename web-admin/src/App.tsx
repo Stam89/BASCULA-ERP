@@ -6644,10 +6644,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     if (new Set(outputs.map((o) => o.product_id)).size !== outputs.length) { addToast("Hay un producto repetido en las salidas", "error"); return; }
     const batch = selectionBatches.find((b) => b.id === batchId);
     const totalResultado = outputs.reduce((sum, o) => sum + o.quantity, 0);
-    if (batch && totalResultado > Number(batch.input_qq) + 0.001) {
-      addToast(`El resultado informado (${totalResultado.enReal()} QQ) supera lo enviado (${Number(batch.input_qq).enReal()} QQ)`, "error");
-      return;
-    }
+    // Puede volver más de lo enviado (humedad, pesos del proveedor): se guarda igual, sin freno (pedido del dueño 2026-11-09).
     const cierre = await apiPost<{ sacos_propios?: Array<{ tipo: string; sacos: number; nuevo_stock: number }> }>(`/selection/batches/${batchId}/finish`, { outputs });
     setFinishingBatchId(null);
     setFinishOutputs([{ ...emptyLine }]);
@@ -24670,8 +24667,8 @@ Motivo (obligatorio):`, ""));
                                   {cell("Merma / Desecho", merma, merma > 0.001 ? "#b91c1c" : "#15803d")}
                                 </div>
                                 {merma < -0.001 && (
-                                  <div style={{ padding: "6px 10px", background: "#fef2f2", color: "#b91c1c", fontSize: 11.5, fontWeight: 700, borderTop: "1px solid #fecaca" }}>
-                                    ⛔ Lo recibido supera lo enviado ({(-merma).enReal()} QQ de más). Revisa las cantidades.
+                                  <div style={{ padding: "6px 10px", background: "#fffbeb", color: "#92400e", fontSize: 11.5, fontWeight: 700, borderTop: "1px solid #fde68a" }}>
+                                    ⚠ Volvieron {(-merma).enReal()} QQ más de lo enviado. Se puede guardar igual; revisa que las cantidades estén bien.
                                   </div>
                                 )}
                               </div>

@@ -374,10 +374,9 @@ selectionRouter.post("/batches/:id/finish", asyncRoute(async (req, res) => {
     const label = TYPE_LABEL[batch.rows[0].service_type] ?? "Selección";
     const defaultWarehouse = batch.rows[0].warehouse_id;
     const outputQq = round3(body.outputs.reduce((s, o) => s + o.quantity, 0));
+    // Puede volver MÁS de lo enviado (humedad, pesos del proveedor): se acepta y la merma queda negativa (pedido del
+    // dueño 2026-11-09: «no quiero esa restricción»).
     const mermaQq = round3(Number(batch.rows[0].input_qq) - outputQq);
-    if (outputQq > Number(batch.rows[0].input_qq) + 0.001) {
-      throw new ApiError(422, `Lo recibido (${outputQq.toFixed(3)} QQ) no puede superar lo enviado (${Number(batch.rows[0].input_qq).toFixed(3)} QQ).`);
-    }
 
     const outputIds = body.outputs.map((o) => o.product_id);
     if (new Set(outputIds).size !== outputIds.length) {
