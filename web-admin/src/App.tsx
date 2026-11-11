@@ -15829,8 +15829,12 @@ Motivo (obligatorio):`, ""));
                   <section className="basManual__section">
                     <h4>Datos del ingreso</h4>
                     <div className="basManual__grid basManual__grid--2">
-                      <Select name="farmer_id" label="Cliente / agricultor" rows={farmers.map((farmer) => [farmer.id, farmer.full_name])}
-                        value={manualBasculaForm.farmerId} onChange={(event) => setManualBasculaField("farmerId", event.target.value)} />
+                      <label><span>Cliente / agricultor</span>
+                        <ElegirBuscando id="basManualAgricultor" nombre="farmer_id" valor={manualBasculaForm.farmerId}
+                          placeholder="🔍 Escribe el nombre…" vacio="Ningún agricultor con ese nombre."
+                          opciones={farmers.map((f) => ({ key: f.id, titulo: f.full_name }))}
+                          onCambiar={(id) => setManualBasculaField("farmerId", id)} />
+                      </label>
                       <Select name="operation_type" label="Destino de la carga" rows={[
                         ["COMPRA", "Compra / Producción propia"],
                         ["SECADO", "Solo servicio de secado"],
@@ -20336,24 +20340,18 @@ Motivo (obligatorio):`, ""));
               </div>
               {purchaseForm.compra_a === "AGRICULTOR" ? (
                 <label><span>Agricultor *</span>
-                  <select value={purchaseForm.farmer_id}
-                    onChange={(e: any) => setPurchaseForm({ ...purchaseForm, farmer_id: e.target.value })}>
-                    <option value="">— Selecciona —</option>
-                    {[...farmers].sort((a, b) => a.full_name.localeCompare(b.full_name)).map((f) => (
-                      <option key={f.id} value={f.id}>{f.full_name}</option>
-                    ))}
-                  </select>
+                  <ElegirBuscando id="compraAgricultor" valor={purchaseForm.farmer_id}
+                    placeholder="🔍 Escribe el nombre del agricultor…" vacio="Ningún agricultor con ese nombre."
+                    opciones={[...farmers].sort((a, b) => a.full_name.localeCompare(b.full_name)).map((f) => ({ key: f.id, titulo: f.full_name, buscar: f.identification ?? "" }))}
+                    onCambiar={(id) => setPurchaseForm({ ...purchaseForm, farmer_id: id })} />
                   <small className="muted">Ej.: arroz pilado que te vende un agricultor. A crédito, lo que se le debe queda a su nombre y se le descuenta al pagarle.</small>
                 </label>
               ) : (
               <label><span>Proveedor *</span>
-                <select value={purchaseForm.supplier_id}
-                  onChange={(e: any) => setPurchaseForm({ ...purchaseForm, supplier_id: e.target.value })}>
-                  <option value="">— Selecciona —</option>
-                  {suppliers.filter((s) => s.is_active).map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
+                <ElegirBuscando id="compraProveedor" valor={purchaseForm.supplier_id}
+                  placeholder="🔍 Escribe el nombre del proveedor…" vacio="Ningún proveedor con ese nombre."
+                  opciones={suppliers.filter((s) => s.is_active).map((s) => ({ key: s.id, titulo: s.name }))}
+                  onCambiar={(id) => setPurchaseForm({ ...purchaseForm, supplier_id: id })} />
               </label>
               )}
               <label><span>Tipo de pago</span>

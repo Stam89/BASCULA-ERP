@@ -7,6 +7,15 @@ import { useState } from "react";
 export type OpcionCombo = { key: string; titulo: string; detalle?: string; etiqueta?: string; /** Palabras extra para encontrarla (no se muestran). */ buscar?: string };
 
 const sinTildes = (t: string) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+/** 0 = el nombre empieza con lo escrito · 1 = cada palabra escrita empieza una palabra del nombre · 2 = lo contiene. */
+function rango(titulo: string, escrito: string): number {
+  const t = sinTildes(titulo).trim(), q = sinTildes(escrito).trim();
+  if (q && t.startsWith(q)) return 0;
+  const palabras = t.split(/[\s.,/·()-]+/).filter(Boolean);
+  const tokens = q.split(/\s+/).filter(Boolean);
+  if (tokens.length && tokens.every((k) => palabras.some((p) => p.startsWith(k)))) return 1;
+  return 2;
+}
 
 export function BuscadorCombo({ id, placeholder, opciones, onElegir, crear, onCrear, vacio, autoFocus, max = 8 }: {
   id: string;
@@ -26,7 +35,11 @@ export function BuscadorCombo({ id, placeholder, opciones, onElegir, crear, onCr
   const [idx, setIdx] = useState(0);
   const tokens = sinTildes(texto.trim()).split(/\s+/).filter(Boolean);
   const lista = (tokens.length
-    ? opciones.filter((o) => { const t = sinTildes(`${o.titulo} ${o.detalle ?? ""} ${o.etiqueta ?? ""} ${o.buscar ?? ""}`); return tokens.every((k) => t.includes(k)); })
+    ? opciones
+        .filter((o) => { const t = sinTildes(`${o.titulo} ${o.detalle ?? ""} ${o.etiqueta ?? ""} ${o.buscar ?? ""}`); return tokens.every((k) => t.includes(k)); })
+        .map((o, i) => ({ o, i, r: rango(o.titulo, texto) }))
+        .sort((a, b) => a.r - b.r || a.i - b.i)
+        .map((x) => x.o)
     : opciones).slice(0, max);
   const textoCrear = crear && onCrear && texto.trim().length >= 2 ? crear(texto.trim()) : null;
   const total = lista.length + (textoCrear ? 1 : 0);
