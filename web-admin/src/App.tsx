@@ -3201,11 +3201,12 @@ export function App() {
     { sub: "sistema", tarjeta: "⚠️ Zona de peligro", claves: "borrar datos de prueba reiniciar operacion reset limpiar pruebas movimientos tickets" },
     { sub: "sistema", tarjeta: "💾 Respaldos de la base de datos", claves: "backup respaldo copia de seguridad onedrive pg_dump" },
     { sub: "nomina", tarjeta: "💲 Tarifas de pago", claves: "pilador estibador secador saca tulas 3 tulas arrocillo guardiania tunel costo de secado tendal cuadrilla nomina mano de obra" },
-    { sub: "tarifas", tarjeta: "🛎️ Secado como Servicio", claves: "secado servicio cliente cobro granel saco maquila cxc" },
+    { sub: "tarifas", tarjeta: "🛎️ Secado a clientes", claves: "secado como servicio cliente cobro granel saco maquila cxc" },
+    { sub: "tarifas", tarjeta: "🌾 Pilada a clientes y selectora", claves: "clientes externos servicio de pilada maquila minimo selectora jacobo tarifa por qq" },
     { sub: "planta", tarjeta: "⛽ Precio del combustible", claves: "combustible gas diesel bombona cilindro medidor secadoras" },
-    { sub: "tarifas", tarjeta: "🧾 Tarifario de Servicios", claves: "socios clientes externos agricultores pilado secado flete seleccion selectora envejecido precio por qq vigencia" },
+    { sub: "tarifas", tarjeta: "🤝 Tarifas por socio", claves: "tarifario de servicios socios pilado flete seleccion envejecido precio por qq vigencia" },
     { sub: "tarifas", tarjeta: "📦 Tarifas de empaque", claves: "sacos 10 25 50 libras empaque matriz cargo por bulto socio despacho" },
-    { sub: "tarifas", tarjeta: "🧹 Tarifas de Procesos", claves: "seleccion envejecido envejecimiento por qq" },
+    { sub: "tarifas", tarjeta: "🧹 Selección y envejecido", claves: "tarifas de procesos por defecto seleccion envejecido envejecimiento por qq" },
     { sub: "tarifas", tarjeta: "🛒 Tarifas por libra", claves: "venta al detalle mostrador precio por libra 0.11 corriente arrocillo polvillo venta por qq quintal descuento centavo" },
     { sub: "nomina", tarjeta: "🏷️ Nueva actividad de cuadrilla", claves: "crear actividad tarifa por saco cambio de saco" },
     { sub: "nomina", tarjeta: "Actividades y tarifas", claves: "cuadrilla actividades tarifas listado secado en tendal tendal por saco cambio de saco" },
@@ -3807,7 +3808,7 @@ export function App() {
     if (JSON.stringify(laborRatesForm) !== JSON.stringify(laborRatesPristine.current)) list.push("Tarifas (nómina, secado como servicio o combustible)");
     if (JSON.stringify(packagingRatesForm) !== JSON.stringify(packagingRatesPristine.current)) list.push("Tarifas de empaque");
     if (dif(selectionRatesForm.seleccion_rate, selectionRates.seleccion_rate) || dif(selectionRatesForm.envejecimiento_rate, selectionRates.envejecimiento_rate)) {
-      list.push("Tarifas de Procesos");
+      list.push("Selección y envejecido (por defecto)");
     }
     if (paramContablesSucio) list.push("Parámetros contables");
     return list;
@@ -18516,7 +18517,7 @@ Motivo (obligatorio):`, ""));
                     style={{ fontSize: 11, color: "var(--c-muted)" }}>
                     🔒 Tarifa de pilado congelada por lote (histórica)
                   </span>
-                  {cfgLink("🧾 Tarifario de Servicios", "Tarifas de pilado")}
+                  {cfgLink("🤝 Tarifas por socio", "Tarifas de pilado")}
                   <button type="button" className="btnSecondary" onClick={() => loadProductionHistory().catch(() => undefined)}>↻ Actualizar</button>
                 </div>
               </div>
@@ -24258,7 +24259,7 @@ Motivo (obligatorio):`, ""));
                 </label>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                   <label><span>QQ Secos <span className="muted" style={{ fontWeight: 400, fontSize: 11 }}>(kárdex, exacto)</span></span><input type="text" readOnly value={secadoLotSel ? Number(secadoLotSel.quintals).enReal() : "0.00"} style={{ fontWeight: 700 }} /></label>
-                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado como Servicio", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: ${money(Number(laborRatesForm.secado_servicio_per_qq || 0))}`} /></label>
+                  <label><span>Tarifa de Secado $ / QQ {cfgLink("🛎️ Secado a clientes", "Tarifa global")}</span><input type="number" step="0.001" min="0" value={secadoForm.rate} onChange={(e) => setSecadoForm({ ...secadoForm, rate: e.target.value })} placeholder={`Global: ${money(Number(laborRatesForm.secado_servicio_per_qq || 0))}`} /></label>
                 </div>
                 <div className="totalBox" style={{ margin: "6px 0 10px" }}>
                   <span>Total a cobrar</span>
@@ -24517,7 +24518,7 @@ Motivo (obligatorio):`, ""));
                 <button type="button" onClick={addInputLine} style={{ marginTop: 8, background: "transparent", border: "1px dashed #cbd5e1", borderRadius: 6, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 600 }}>+ Agregar producto</button>
               </div>
 
-              <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($) {cfgLink("🧹 Tarifas de Procesos", "Tarifas por defecto")}</span>
+              <label style={{ marginTop: 10 }}><span>Tarifa por QQ ($) {cfgLink("🧹 Selección y envejecido", "Tarifas por defecto")}</span>
                 <input type="number" step="0.001" min="0" value={selectionForm.rate_per_qq} placeholder={`Por defecto ${defaultRate}`} disabled={!canEditarPrecios}
                   title={canEditarPrecios ? "Déjalo vacío para usar la tarifa vigente" : "Usa la tarifa vigente (cambiarla requiere el permiso «Editar Precios y Tarifas»)"}
                   onChange={(e) => setSelectionForm({ ...selectionForm, rate_per_qq: e.target.value })} />
@@ -26904,10 +26905,9 @@ Motivo (obligatorio):`, ""));
                 <form onSubmit={(e) => savePlantParams(e).catch((err) => addToast(err.message, "error"))}>
                   <p className="muted">Parámetros operativos de la piladora. La humedad base se usa para calcular la merma al pesar en báscula.</p>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <label><span>Tarifa del servicio de pilada a clientes ($/QQ)</span>
-                      <input type="number" step="0.001" min="0" required disabled={!isAdmin}
-                        value={String(settingsForm.tarifa_pilado_qq ?? "")}
-                        onChange={(e) => setSettingsForm({ ...settingsForm, tarifa_pilado_qq: e.target.value })} />
+                    <label><span>Tarifa del servicio de pilada a clientes ($/QQ) {cfgLink("🌾 Pilada a clientes y selectora", "Se cambia en Tarifas a clientes")}</span>
+                      <input type="number" step="0.001" min="0" required disabled readOnly
+                        value={String(settingsForm.tarifa_pilado_qq ?? "")} />
                     </label>
                     <label><span>Humedad base (%)</span>
                       <input type="number" step="0.1" min="0" max="99.9" required disabled={!isAdmin}
@@ -28182,7 +28182,7 @@ Motivo (obligatorio):`, ""));
                     Combustible: se reorganizó solo la vista, no las claves. */}
                 <form className="formPanel" onSubmit={(e) => saveLaborRates(e).catch((err) => addToast(err.message, "error"))}>
                   <details className="cfgCard">
-                    <summary>{cfgSum("🛎️", "Secado como Servicio", "Lo que se cobra al cliente por secar su arroz")}</summary>
+                    <summary>{cfgSum("🛎️", "Secado a clientes", "Clientes de servicio (maquila): a granel o en saco")}</summary>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <label><span>Secado A Granel / Directo a Producción ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_per_qq: Number(e.target.value) })} /></label>
                     <label><span>Secado En Saco ($ x QQ)</span><input type="number" step="0.001" min="0" disabled={!isAdmin} value={laborRatesForm.secado_servicio_saco_per_qq} onChange={(e) => setLaborRatesForm({ ...laborRatesForm, secado_servicio_saco_per_qq: Number(e.target.value) })} /></label>
@@ -28192,10 +28192,10 @@ Motivo (obligatorio):`, ""));
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar las tarifas.</p>}
                   </details>
                 </form>
-                {/* 2) Tarifario de Servicios (Socios y Clientes) */}
+                {/* 2) Pilada a clientes (tarifa general de app_settings) y selectora: tarjeta propia */}
                 <div className="formPanel">
                   <details className="cfgCard">
-                    <summary>{cfgSum("🧾", "Tarifario de Servicios", "Precios por QQ a socios y clientes: pilado, secado, flete…")}</summary>
+                    <summary>{cfgSum("🌾", "Pilada a clientes y selectora", "Lo que se cobra a cualquier cliente por pilar y lo que cobra la selectora")}</summary>
                   <TarifaClientesSelectora
                     puedeEditar={isAdmin}
                     hoy={nominaToday}
@@ -28209,22 +28209,32 @@ Motivo (obligatorio):`, ""));
                       setAppSettings((a) => ({ ...a, tarifa_pilado_qq: tarifa }));
                     }}
                   />
-                  <p className="muted">Precio por QQ por <strong>socio o cliente</strong> y servicio, con fecha de vigencia. El monto es libre: asigna la tarifa negociada con cada quien.</p>
+                  </details>
+                </div>
+                {/* 3) Tarifas por socio (tarifario_servicio). Los cálculos lo leen SOLO por socio. */}
+                <div className="formPanel">
+                  <details className="cfgCard">
+                    <summary>{cfgSum("🤝", "Tarifas por socio", "Pilado, flete, selección y envejecido de cada socio, con fecha de vigencia")}</summary>
+                  <ul className="muted" style={{ margin: "4px 0 12px", paddingLeft: 18, fontSize: 13 }}>
+                    <li><strong>Pilado</strong>: se le cobra al socio al finalizar su pilada. Ya incluye el secado y la selectora.</li>
+                    <li><strong>Flete</strong>: precio sugerido del flete de sus pedidos con carro de Transporte.</li>
+                    <li><strong>Selección / Envejecido</strong>: reemplaza la tarifa por defecto de «Selección y envejecido» para ese socio.</li>
+                  </ul>
 
                   {/* Formulario en tarjeta: cuadrícula armónica con iconos */}
                   <div style={{ border: `1px solid ${tarifaForm.editingId ? "#93c5fd" : "var(--c-border)"}`, borderRadius: 12, padding: 14, background: tarifaForm.editingId ? "#eff6ff" : "var(--c-surface)" }}>
                     {tarifaForm.editingId && <div style={{ fontSize: 12, fontWeight: 700, color: "#1d4ed8", marginBottom: 8 }}>✏️ Editando tarifa</div>}
                     <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
-                      <label style={{ gridColumn: "1 / -1" }}><span>👤 Cliente / Socio</span>
-                        <EntityAutocomplete options={tarifaEntidades} value={tarifaForm.entidad}
+                      <label style={{ gridColumn: "1 / -1" }}><span>👤 Socio</span>
+                        <EntityAutocomplete options={tarifaEntidades.filter((o) => o.tipo === "SOCIO" || (tarifaForm.entidad?.tipo === o.tipo && tarifaForm.entidad?.id === o.id))} value={tarifaForm.entidad}
                           disabled={!isAdmin}
-                          placeholder="Buscar cualquier cliente o socio…"
+                          placeholder="Buscar el socio…"
                           onSelect={(o) => setTarifaForm((f) => ({ ...f, entidad: o }))} />
                       </label>
                       <label><span>⚙️ Servicio</span>
                         <select value={tarifaForm.servicio} onChange={(e) => setTarifaForm({ ...tarifaForm, servicio: e.target.value })}>
-                          <option value="PILADO">Pilado</option>
-                          <option value="SECADO">Secado</option>
+                          <option value="PILADO">Pilado (incluye secado)</option>
+                          {tarifaForm.servicio === "SECADO" && <option value="SECADO">Secado (no se usa)</option>}
                           <option value="FLETE">Flete</option>
                           <option value="SELECCION">Selección</option>
                           <option value="ENVEJECIMIENTO">Envejecido</option>
@@ -28253,7 +28263,7 @@ Motivo (obligatorio):`, ""));
                       <table className="tablaConAcciones" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                         <thead>
                           <tr style={{ background: "#f9fafb", textAlign: "left" }}>
-                            <th style={{ padding: "6px 8px" }}>Cliente / Socio</th>
+                            <th style={{ padding: "6px 8px" }}>Socio</th>
                             <th style={{ padding: "6px 8px" }}>Servicio</th>
                             <th style={{ padding: "6px 8px", textAlign: "right" }}>$ / QQ</th>
                             <th style={{ padding: "6px 8px" }}>Desde</th>
@@ -28275,6 +28285,12 @@ Motivo (obligatorio):`, ""));
                                 </td>
                                 <td style={{ padding: "6px 8px" }}>
                                   <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: "2px 8px", background: "#ecfdf5", color: "#15803d" }}>{t.servicio}</span>
+                                  {(esCliente || t.servicio === "SECADO") && (
+                                    <small className="muted" style={{ display: "block", fontSize: 11 }}
+                                      title={esCliente ? "Los clientes van con la tarifa general de «Pilada a clientes» y «Secado a clientes»." : "Ningún cálculo la lee: el Pilado del socio ya incluye el secado."}>
+                                      ⚠️ no se usa{esCliente ? " (clientes: tarifa general)" : " (el pilado ya incluye el secado)"}
+                                    </small>
+                                  )}
                                 </td>
                                 <td style={{ padding: "6px 8px", textAlign: "right", fontWeight: 700 }}>${fmtTarifa(t.precio_por_qq)}</td>
                                 <td style={{ padding: "6px 8px", color: "var(--c-muted)", whiteSpace: "nowrap" }}>
@@ -28298,7 +28314,7 @@ Motivo (obligatorio):`, ""));
                   )}
                   </details>
                 </div>
-                {/* 3) Tarifas de empaque / uso de sacos (Matriz) */}
+                {/* 4) Tarifas de empaque / uso de sacos (Matriz) */}
                 <div className="formPanel">
                   <details className="cfgCard">
                     <summary>{cfgSum("📦", "Tarifas de empaque", "Cargo por bulto que la Matriz cobra a los socios al despachar")}</summary>
@@ -28326,13 +28342,13 @@ Motivo (obligatorio):`, ""));
                   {!isAdmin && <p className="muted">Solo un administrador puede cambiar estas tarifas.</p>}
                   </details>
                 </div>
-                {/* 4) Tarifas de Procesos (Selección / Envejecido) */}
+                {/* 5) Selección y envejecido por defecto (selection_rates) */}
                 <div className="formPanel">
                   <details className="cfgCard">
-                    <summary>{cfgSum("🧹", "Tarifas de Procesos", "Selección y envejecido, por QQ")}</summary>
+                    <summary>{cfgSum("🧹", "Selección y envejecido", "Tarifa por defecto, por QQ")}</summary>
                   <p className="muted">
-                    Tarifa por defecto ($/QQ) para selección y envejecido. El formulario de «Mandar a selectar»
-                    en Selección la lee para autocompletar la «Tarifa por QQ».
+                    Tarifa por defecto ($/QQ). Se usa cuando el socio no tiene la suya en «Tarifas por socio».
+                    «Mandar a selectar» en Selección la pone sola en la «Tarifa por QQ».
                   </p>
                   <form onSubmit={(e) => saveSelectionRates(e).catch((err) => addToast(err.message, "error"))}>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
