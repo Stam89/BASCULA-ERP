@@ -17401,15 +17401,8 @@ Motivo (obligatorio):`, ""));
                   consultarSRIyRellenar(idEl?.value ?? "", ({ razonSocial }) => { if (nameEl) nameEl.value = razonSocial; });
                 }}>🔍 Consultar SRI</button>
               <Input name="phone" label="Teléfono" />
-              {accionistas.length > 0 && (
-                <Select
-                  name="accionista_id"
-                  label="Accionista"
-                  rows={accionistas.map((a) => [a.id, a.name])}
-                  defaultValue={activeAccionistaId ?? undefined}
-                  required={false}
-                />
-              )}
+              {/* Sin «Accionista» (pedido del dueño 2026-11-11): el agricultor es de todos; quién compra se elige al
+                  ingresar la materia prima. Se guarda sin socio, como la mayoría. */}
               <button className="primary">Guardar</button>
             </form>
             <div className="tablePanel">
