@@ -15989,7 +15989,7 @@ Motivo (obligatorio):`, ""));
                 <span className="chip info">{secadorGuardia?.rows.find((row) => row.work_date === secadorGuardia.today)?.worker_name || secadorSemana || "Sin asignar"}</span>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) minmax(150px, 190px) auto", gap: 10, alignItems: "end", marginTop: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 420px) minmax(150px, 190px) auto", gap: 10, alignItems: "end", marginTop: 12 }}>
                 <label><span>Secador de guardia</span>
                   <input value={secadorSemana} disabled={!canEdit("Secadoras")} onChange={(e) => setSecadorSemana(e.target.value.toUpperCase())} placeholder="Nombre del responsable" />
                 </label>
@@ -20335,7 +20335,7 @@ Motivo (obligatorio):`, ""));
         {activeTab === "Compras" && (
           <div>
             {/* ── Registrar compra ── */}
-            <div className="formPanel" style={{ marginBottom: 16 }}>
+            <div className="formPanel formDosCols" style={{ marginBottom: 16 }}>
               <h2>🛒 Registrar compra</h2>
               <div className="segmented" role="group" aria-label="¿A quién le compras?" style={{ marginBottom: 8 }}>
                 <button type="button" className={purchaseForm.compra_a === "PROVEEDOR" ? "active" : ""} onClick={() => setPurchaseForm({ ...purchaseForm, compra_a: "PROVEEDOR" })}>🏪 Proveedor</button>
@@ -24469,7 +24469,7 @@ Motivo (obligatorio):`, ""));
             </div>
 
             {selectionView === "nuevo" && (
-            <form className="formPanel" style={{ gridColumn: "1 / -1" }} onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
+            <form className="formPanel formDosCols" style={{ gridColumn: "1 / -1" }} onSubmit={(e) => submitStartBatch(e).catch((err) => addToast(err.message, "error"))}>
               <h2>📤 Mandar a selectar</h2>
               <p className="muted">
                 {puedeEnvejecer
