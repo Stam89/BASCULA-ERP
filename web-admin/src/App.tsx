@@ -2777,6 +2777,8 @@ export function App() {
   const [linkFarmerFilter, setLinkFarmerFilter] = useState("");
   const [lotTicket, setLotTicket] = useState<BasculaTicket | null>(null);
   const [lotForm, setLotForm] = useState({ rice_type: "0.11" as "0.11" | "CORRIENTE", operation_type: "COMPRA" as "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO", ownership: "OWNED" as "OWNED" | "MAQUILA", accionista_id: "", product_id: "", warehouse_id: "" });
+  // El tipo de arroz del ingreso viene de la báscula; solo se cambia si la báscula se equivocó.
+  const [lotTipoCorregir, setLotTipoCorregir] = useState(false);
   const [liqTicket, setLiqTicket] = useState<BasculaTicket | null>(null);
   const [liqPrecio, setLiqPrecio] = useState("");
   const [liqPreview, setLiqPreview] = useState<{ quintals: number; grossPayable: number; advancesDiscount: number; netPayable: number } | null>(null);
@@ -8535,6 +8537,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       const esCompra = lotForm.operation_type === "COMPRA";
       await apiPost(`/tickets/${lotTicket.id}/create-lot`, {
         rice_type: lotForm.rice_type,
+        corregir_tipo: lotTipoCorregir || undefined,
         operation_type: lotForm.operation_type,
         ownership: esCompra ? "OWNED" : "MAQUILA",
         accionista_id: esCompra ? (lotForm.accionista_id || undefined) : undefined
@@ -15731,7 +15734,7 @@ Motivo (obligatorio):`, ""));
                               <button type="button" className="btnSecondary" onClick={() => { setLinkTicket(t); setLinkFarmerId(""); setLinkFarmerFilter(t.farmer_name || ""); }}>Vincular cliente</button>
                             )}
                             {!t.en_espera && !t.weighing_ticket_id && !liquidated && linked && (
-                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", operation_type: "COMPRA", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
+                              <button type="button" className="btnSecondary" onClick={() => { setLotTicket(t); setLotTipoCorregir(false); setLotForm({ rice_type: (t.calidad ?? "").includes("0.11") ? "0.11" : "CORRIENTE", operation_type: "COMPRA", ownership: "OWNED", accionista_id: activeAccionistaId ?? (accionistas[0]?.id ?? ""), product_id: "", warehouse_id: "" }); }}>Ingresar materia prima</button>
                             )}
                             {canAnular && !t.weighing_ticket_id && !liquidated && (
                               <button type="button" className="btnSecondary" style={{ marginLeft: 6 }} title="Se borró en la app de báscula, era de prueba o está repetido: deja de ser pendiente (no se borra)"
@@ -22436,7 +22439,7 @@ Motivo (obligatorio):`, ""));
             </nav>
 
             {/* ── Pestaña 1 · Nueva Liquidación: flujo vertical a todo el ancho ── */}
-            <div className="liqVista" role="tabpanel" hidden={liqVista !== "nueva"}>
+            <div className="liqVista liqVistaNueva" role="tabpanel" hidden={liqVista !== "nueva"}>
             <div className="formPanel">
               {liqResult ? (
                 <>
@@ -22887,8 +22890,21 @@ Motivo (obligatorio):`, ""));
                         {filtrado.length === 0 ? (
                           <tr><td colSpan={6} className="muted" style={{ padding: 12, textAlign: "center" }}>Sin materia prima pendiente{nombreFiltro ? " para este agricultor" : ""}.</td></tr>
                         ) : filtrado.map((e, i) => (
-                          <tr key={i}>
-                            <td style={td}>{entryLabel(e)}</td>
+                          <tr key={i} className="liqPendRow" title="Toca para marcarlo en la liquidación"
+                            aria-selected={liqEntryMultiPick.includes(e.id) || liqLines.some((l) => l.lot_id === e.id)}
+                            onClick={() => {
+                              if (liqLines.some((l) => l.lot_id === e.id)) return;
+                              if (e.farmer_id && e.farmer_id !== liqFarmerId) {
+                                setLiqFarmerId(e.farmer_id);
+                                setLiqLines([]);
+                                setLiqCosechadoras([]);
+                                setLiqEntryMultiPick([e.id]);
+                              } else {
+                                toggleLiqEntryPick(e.id);
+                              }
+                              setLiqEntryPickerOpen(true);
+                            }}>
+                            <td style={td}>{liqLines.some((l) => l.lot_id === e.id) ? "✅ " : liqEntryMultiPick.includes(e.id) ? "☑️ " : ""}{entryLabel(e)}</td>
                             <td style={td}>{e.rice_type ?? "—"}</td>
                             <td style={td}>{e.farmer_name ?? "—"}</td>
                             <td style={td}>{e.placa?.trim() || "S/P"}</td>
@@ -29306,13 +29322,20 @@ Motivo (obligatorio):`, ""));
         <div className="modalCard" onClick={(e) => e.stopPropagation()}>
           <h3>Ingresar materia prima · ticket #{lotTicket.numero}</h3>
           <p className="muted">{lotTicket.farmer_name} · {Number(lotTicket.quintals).enReal()} QQ. Entra como materia prima. El <strong>lote se formará después en la secadora</strong>, agrupando varios ingresos en un túnel.</p>
-          <label>
-            <span>Tipo de arroz</span>
-            <select value={lotForm.rice_type} onChange={(e) => setLotForm({ ...lotForm, rice_type: e.target.value as "0.11" | "CORRIENTE" })}>
-              <option value="0.11">0.11</option>
-              <option value="CORRIENTE">Corriente</option>
-            </select>
-          </label>
+          {(lotTicket.calidad ?? "").trim() && !lotTipoCorregir ? (
+            <div style={{ margin: "8px 0", padding: "8px 10px", border: "1px solid var(--c-border)", borderRadius: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span>🌾 Tipo de arroz (de la báscula): <strong>{lotForm.rice_type === "0.11" ? "0.11" : "Corriente"}</strong></span>
+              <button type="button" className="btnSecondary" style={{ marginLeft: "auto", fontSize: 12 }} onClick={() => setLotTipoCorregir(true)}>La báscula lo marcó mal</button>
+            </div>
+          ) : (
+            <label>
+              <span>Tipo de arroz{lotTipoCorregir ? <> · <small style={{ color: "#b45309" }}>⚠️ la báscula dice {(lotTicket.calidad ?? "").includes("0.11") ? "0.11" : "Corriente"}; cámbialo solo si se equivocó</small></> : null}</span>
+              <select value={lotForm.rice_type} onChange={(e) => setLotForm({ ...lotForm, rice_type: e.target.value as "0.11" | "CORRIENTE" })}>
+                <option value="0.11">0.11</option>
+                <option value="CORRIENTE">Corriente</option>
+              </select>
+            </label>
+          )}
           <label>
             <span>Destino / Tipo de operación</span>
             <select value={lotForm.operation_type} onChange={(e) => { const op = e.target.value as "COMPRA" | "SECADO" | "SECADO_PILADO" | "PILADO"; setLotForm({ ...lotForm, operation_type: op, ownership: op === "COMPRA" ? "OWNED" : "MAQUILA" }); }}>

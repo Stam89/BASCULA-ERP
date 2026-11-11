@@ -785,6 +785,8 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exig
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const body = z.object({
     rice_type: z.enum(["0.11", "CORRIENTE"]).default("0.11"),
+    // true = la báscula marcó mal el tipo y se corrige a mano (si no, manda la calidad del ticket).
+    corregir_tipo: z.boolean().optional(),
     // Destino / Tipo de operación del lote (4 opciones de Báscula). is_maquila /
     // ownership se derivan de aquí. Si no viene (compat), se infiere de ownership.
     operation_type: z.enum(["COMPRA", "SECADO", "SECADO_PILADO", "PILADO"]).optional(),
@@ -801,6 +803,9 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exig
   const t = ticketRow.rows[0];
   exigirTicketSinPagar(t, "ingresar");
   if (!t.farmer_id) throw new ApiError(400, "Primero vincula el ticket a un agricultor/cliente.");
+  // 🌾 El tipo de arroz es el que puso la báscula (pedido del dueño 2026-11-11: se ingresó un corriente como 0.11).
+  const calidadBascula = String(t.raw_payload?.calidad ?? "").trim();
+  if (calidadBascula && !body.corregir_tipo) body.rice_type = riceTypeFromCalidad(calidadBascula);
   if (Number(t.quintals) <= 0) throw new ApiError(400, "El ticket no tiene quintales calculados.");
   const isMaquila = operationType !== "COMPRA";
 

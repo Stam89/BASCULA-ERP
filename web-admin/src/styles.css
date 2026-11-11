@@ -510,6 +510,14 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqLayout { display: flex; flex-direction: column; gap: 16px; grid-column: 1 / -1; min-width: 0; }
 .liqVista { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .liqVista[hidden] { display: none; }
+/* PC: el formulario de la liquidación a la izquierda (angosto, fijo al bajar) y la materia prima por liquidar al lado. */
+@media (min-width: 1200px) {
+  .liqVistaNueva:not([hidden]) { display: grid; grid-template-columns: minmax(480px, 620px) minmax(0, 1fr); align-items: start; gap: 20px; }
+  .liqVistaNueva > .formPanel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
+}
+.liqPendRow { cursor: pointer; }
+.liqPendRow:hover td { background: var(--c-surface-2); }
+.liqPendRow[aria-selected="true"] td { font-weight: 600; }
 .liqTabs { margin-bottom: -4px; }
 /* Con todo el ancho, QQ y Precio no se estiran de más: el ingreso toma el resto. */
 .liqLayout .liqLinesHeader, .liqLayout .liqLine { grid-template-columns: minmax(0, 1fr) minmax(110px, 170px) minmax(110px, 170px) 28px; gap: 12px; }
