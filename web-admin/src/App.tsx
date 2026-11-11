@@ -8872,6 +8872,14 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     await refreshPayables();
   }
   // Abono parcial a un acreedor: el backend lo reparte de la deuda más antigua a la más nueva.
+  // ☑️ Pagar SOLO las cuentas marcadas (p. ej. las liquidaciones de unos lotes), cada una por su saldo completo.
+  async function pagarSeleccionPayable(items: AccountPayable[], ids: string[]) {
+    const sel = items.filter((p) => ids.includes(p.id) && Number(p.balance) > 0.001);
+    const total = round2(sel.reduce((s, p) => s + Number(p.balance), 0));
+    if (!sel.length || total <= 0) return;
+    await pagarGrupoCuentas(sel.map((p) => p.id), total);
+    await refreshPayables();
+  }
   async function abonarPayableGrupo(items: AccountPayable[], monto: number) {
     const ids = items.map((p) => p.id);
     if (!(monto > 0)) { addToast("Monto inválido", "error"); return; }
@@ -24125,6 +24133,7 @@ Motivo (obligatorio):`, ""));
                 onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); }}
                 onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
+                onPagarSeleccion={(ids) => pagarSeleccionPayable(detalleGrupo.items, ids).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
                 medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
                 recibidoPor={detalleGrupo.items.some((it) => it.entre_socios && it.reference_type !== "campo_servicio") ? undefined : {
@@ -30486,6 +30495,8 @@ function CuentaDetalleModal(props: {
   onClose: () => void;
   onPagarTotal: () => void;
   onAbonar: (monto: number) => void;
+  /** ☑️ Pagar solo las filas marcadas (cada una por su saldo). Si no viene, la tabla no muestra casillas. */
+  onPagarSeleccion?: (ids: string[]) => void;
   onImprimir: () => void;
   /** Abre el informe del servicio (p. ej. pilado) de una fila que lo tenga. */
   onVerInforme?: (informeId: string) => void;
@@ -30511,6 +30522,10 @@ function CuentaDetalleModal(props: {
   const barColor = props.color === "cobrar" ? "#16a34a" : "#dc2626";
   const [modoAbono, setModoAbono] = React.useState(false);
   const [monto, setMonto] = React.useState(String(saldoTotal.enReal()));
+  const [marcadas, setMarcadas] = React.useState<string[]>([]);
+  const conCasillas = !!props.onPagarSeleccion && props.rows.filter((r) => r.saldo > 0.001).length > 1;
+  const totalMarcado = round2(props.rows.filter((r) => marcadas.includes(r.id)).reduce((s, r) => s + Number(r.saldo), 0));
+  const marcar = (id: string, on: boolean) => setMarcadas((m) => on ? [...m, id] : m.filter((x) => x !== id));
   const valor = Number(monto);
   return (
     <div className="modalOverlay" onClick={props.onClose}>
@@ -30527,12 +30542,13 @@ function CuentaDetalleModal(props: {
 
         <div style={{ overflowX: "auto", marginTop: 12 }}>
           <table className="cajaTable" style={{ width: "100%" }}>
-            <thead><tr><th>Fecha</th><th>Concepto</th><th className="num">Monto</th><th className="num">Abonos</th><th className="num">Saldo</th></tr></thead>
+            <thead><tr>{conCasillas && <th title="Marca para pagar solo esas">☑️</th>}<th>Fecha</th><th>Concepto</th><th className="num">Monto</th><th className="num">Abonos</th><th className="num">Saldo</th></tr></thead>
             <tbody>
               {props.rows.map((r) => {
                 const abonos = Math.max(0, r.monto - r.saldo);
                 return (
-                  <tr key={r.id}>
+                  <tr key={r.id} style={marcadas.includes(r.id) ? { background: "var(--c-tint-1, #ecfdf5)" } : undefined}>
+                    {conCasillas && <td>{r.saldo > 0.001 && <input type="checkbox" checked={marcadas.includes(r.id)} onChange={(e) => marcar(r.id, e.target.checked)} aria-label="Pagar esta" />}</td>}
                     <td>{(r.fecha || "").slice(0, 10)}</td>
                     <td>{r.concepto}{r.desglose && <div style={{ fontSize: 11, color: "#6b21a8", marginTop: 2 }}>{r.desglose}</div>}
                       {r.informeId && props.onVerInforme && <div><button type="button" className="vdTarifaLink" onClick={() => props.onVerInforme!(r.informeId!)}>📄 Ver informe del servicio</button></div>}</td>
@@ -30543,7 +30559,7 @@ function CuentaDetalleModal(props: {
                 );
               })}
             </tbody>
-            <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={4}>SALDO TOTAL</td><td className="num" style={{ color: barColor }}>{money(saldoTotal)}</td></tr></tfoot>
+            <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={conCasillas ? 5 : 4}>SALDO TOTAL</td><td className="num" style={{ color: barColor }}>{money(saldoTotal)}</td></tr></tfoot>
           </table>
         </div>
         {props.extra}
@@ -30606,6 +30622,7 @@ function CuentaDetalleModal(props: {
           );
         })()}
 
+        {conCasillas && marcadas.length === 0 && <small className="muted" style={{ display: "block", marginTop: 6 }}>☑️ Marca en la tabla las que quieras pagar (p. ej. solo las liquidaciones de unos lotes).</small>}
         {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>{props.disabledMsg ?? "Abre una caja para continuar."}</div>}
 
         {props.medio && !props.disabled && (
@@ -30617,7 +30634,13 @@ function CuentaDetalleModal(props: {
         {props.medio && !props.disabled && props.medioSinElegir && <small style={{ display: "block", color: "#b45309", fontWeight: 600, marginTop: 4 }}>Elige primero cómo pagó (efectivo o transferencia).</small>}
         {props.medioNota && !props.disabled && <small className="muted" style={{ display: "block", marginTop: 4 }}>{props.medioNota}</small>}
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-          <button type="button" className="primary" disabled={props.disabled || props.medioSinElegir} onClick={props.onPagarTotal} style={{ fontWeight: 700 }}>✅ Pagar total</button>
+          {marcadas.length > 0 && props.onPagarSeleccion ? (
+            <button type="button" className="primary" disabled={props.disabled || props.medioSinElegir} onClick={() => { props.onPagarSeleccion!(marcadas); setMarcadas([]); }} style={{ fontWeight: 700 }}>
+              ☑️ Pagar {marcadas.length === 1 ? "la marcada" : `las ${marcadas.length} marcadas`} · {money(totalMarcado)}
+            </button>
+          ) : (
+            <button type="button" className="primary" disabled={props.disabled || props.medioSinElegir} onClick={props.onPagarTotal} style={{ fontWeight: 700 }}>✅ Pagar total</button>
+          )}
           <button type="button" disabled={props.disabled} onClick={() => { setMonto(String(saldoTotal.enReal())); setModoAbono((v) => !v); }}>💳 Abono parcial</button>
           <button type="button" onClick={props.onImprimir}>🖨️ Imprimir</button>
           <button type="button" onClick={props.onClose} style={{ marginLeft: "auto" }}>Cerrar</button>
