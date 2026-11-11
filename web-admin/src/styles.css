@@ -512,7 +512,7 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .liqVista[hidden] { display: none; }
 /* PC: el formulario de la liquidación a la izquierda (angosto, fijo al bajar) y la materia prima por liquidar al lado. */
 @media (min-width: 1200px) {
-  .liqVistaNueva:not([hidden]) { display: grid; grid-template-columns: minmax(480px, 620px) minmax(0, 1fr); align-items: start; gap: 20px; }
+  .liqVistaNueva:not([hidden]) { display: grid; grid-template-columns: minmax(440px, 540px) minmax(0, 1fr); align-items: start; gap: 20px; }
   .liqVistaNueva > .formPanel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
 }
 .liqPendRow { cursor: pointer; }
