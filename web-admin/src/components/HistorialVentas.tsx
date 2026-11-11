@@ -21,11 +21,13 @@ const qqTxt = (n: number) => `${Number(n).toFixed(2)} QQ`;
 const lbDe = (pres: string | null) => { const m = String(pres ?? "").match(/(\d+(?:[.,]\d+)?)/); const n = m ? Number(m[1].replace(",", ".")) : NaN; return n > 0 ? n : null; };
 const hoy = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
 
-export function HistorialVentas({ socios }: { socios: Array<{ id: string; name: string }> }) {
+// Cada socio ve su historial (pedido del dueño 2026-11-10): sigue al socio con el que se está trabajando, sin «Todos».
+export function HistorialVentas({ socios, activo }: { socios: Array<{ id: string; name: string }>; activo: string | null }) {
   const [ventas, setVentas] = useState<Venta[]>([]);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState("");
-  const [socio, setSocio] = useState("");
+  const [socio, setSocio] = useState(activo ?? socios[0]?.id ?? "");
+  useEffect(() => { if (activo) setSocio(activo); }, [activo]);
   const [desde, setDesde] = useState(() => `${hoy().slice(0, 8)}01`);
   const [hasta, setHasta] = useState(hoy);
   const [abierta, setAbierta] = useState<string | null>(null);
@@ -38,7 +40,7 @@ export function HistorialVentas({ socios }: { socios: Array<{ id: string; name: 
   }, [desde, hasta]);
   useEffect(() => { void cargar(); }, [cargar]);
 
-  const visibles = useMemo(() => ventas.filter((v) => !socio || v.accionista_id === socio), [ventas, socio]);
+  const visibles = useMemo(() => ventas.filter((v) => v.accionista_id === socio), [ventas, socio]);
   const resumen = useMemo(() => {
     const vigentes = visibles.filter((v) => v.sale_status !== "CANCELLED");
     return {
@@ -62,7 +64,6 @@ export function HistorialVentas({ socios }: { socios: Array<{ id: string; name: 
         </div>
       </div>
       <div className="histVentas__socios" role="group" aria-label="Socio">
-        <button type="button" className={!socio ? "on" : ""} onClick={() => setSocio("")}>Todos</button>
         {socios.map((s) => (
           <button key={s.id} type="button" className={socio === s.id ? "on" : ""} onClick={() => setSocio(s.id)}>
             {s.name}{!conVentas.has(s.id) ? " · sin ventas" : ""}

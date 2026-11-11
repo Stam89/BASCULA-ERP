@@ -20095,7 +20095,7 @@ Motivo (obligatorio):`, ""));
             {/* ===== 📄 GUÍAS DE REMISIÓN (formato legal EC) ===== */}
             {ventasView === "historial" && (
               <div style={{ gridColumn: "1 / -1" }}>
-                <HistorialVentas socios={accionistas.map((a) => ({ id: a.id, name: a.name }))} />
+                <HistorialVentas socios={accionistas.map((a) => ({ id: a.id, name: a.name }))} activo={ventaSocioId || activeAccionistaId} />
               </div>
             )}
 
