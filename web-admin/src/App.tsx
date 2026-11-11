@@ -4140,6 +4140,8 @@ export function App() {
   } | null>(null);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
+  // Socio dueño del pedido al abrir la edición: si se elige otro en «Vendiendo como», al guardar el pedido pasa a ese.
+  const [pedidoEditandoDueno, setPedidoEditandoDueno] = useState<string | null>(null);
   // Forma de pago que se escoge al TOMAR el pedido (la Cola de Despachos la trae puesta).
   // Forma de pago del pedido: EN BLANCO hasta que se elija (pedido del dueño: se enviaban de contado los que eran a crédito).
   const [pedidoFormaPago, setPedidoFormaPago] = useState("");
@@ -9275,7 +9277,14 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   // (no se mezclan dueños en un pedido) y se trae el inventario del nuevo socio.
   function cambiarSocioVenta(id: string) {
     if (id === ventaSocioId) return;
-    if (pedidoEditando) { addToast("Termina o cancela la edición del pedido antes de cambiar de socio", "error"); return; }
+    if (pedidoEditando) {
+      // Editando: los productos se quedan y el pedido pasa a este socio al guardar (pedido del dueño 2026-11-10).
+      setVentaSocioId(id);
+      cargarSesionVenta(id).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo cargar el inventario del socio", "error"));
+      const nombre = accionistas.find((a) => a.id === id)?.name ?? "el socio";
+      addToast(id === pedidoEditandoDueno ? `El pedido sigue con ${nombre}` : `Al guardar, el pedido pasa a ${nombre}`, "warn");
+      return;
+    }
     const habia = saleLineItems.length;
     setVentaSocioId(id);
     setSaleLineItems([]);
@@ -14180,6 +14189,7 @@ Motivo (obligatorio):`, ""));
     setPedidoFormaPago(detalle.payment_method ?? "");
     // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
     const dueno = order.accionista_id || activeAccionistaId || "";
+    setPedidoEditandoDueno(dueno || null);
     if (dueno && dueno !== ventaSocioId) { setVentaSocioId(dueno); await cargarSesionVenta(dueno).catch(() => undefined); }
     setSaleLineItems(detalle.items.map((it, i) => ({
       id: `edit-${i}`,
@@ -14222,7 +14232,11 @@ Motivo (obligatorio):`, ""));
       addToast("Elige la forma de pago del pedido antes de guardarlo.", "error");
       return;
     }
-    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`, { items, payment_method: pedidoFormaPago }, ventaOpts);
+    const otroDueno = pedidoEditandoDueno && ventaSocioId && ventaSocioId !== pedidoEditandoDueno ? ventaSocioId : undefined;
+    const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`,
+      { items, payment_method: pedidoFormaPago, nuevo_dueno_id: otroDueno },
+      { accionistaId: pedidoEditandoDueno || ventaSocioId || null });
+    if (otroDueno) addToast(`El pedido pasó a ${accionistas.find((a) => a.id === otroDueno)?.name ?? "otro socio"}`, "success");
     setPedidoFormaPago("");
     addToast(`Pedido ${r.order_number} actualizado: ${money(Number(r.total_amount))}`, "success");
     cancelarEdicionPedido();
@@ -14231,6 +14245,7 @@ Motivo (obligatorio):`, ""));
 
   function cancelarEdicionPedido() {
     setPedidoEditando(null);
+    setPedidoEditandoDueno(null);
     setSaleLineItems([]);
     setSelectedCustomerId("");
     setCustomerSearch("");
@@ -18845,7 +18860,7 @@ Motivo (obligatorio):`, ""));
               <SalesSessionSwitcher
                 socios={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: a.tipo }))}
                 valor={ventaSocioId} activoGlobalId={activeAccionistaId} cargando={ventaCargando}
-                bloqueado={pedidoEditando ? "Termina o cancela la edición del pedido para cambiar de socio" : null}
+                bloqueado={null}
                 onCambio={cambiarSocioVenta} />
             </div>
             )}

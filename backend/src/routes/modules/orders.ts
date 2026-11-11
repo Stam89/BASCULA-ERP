@@ -627,8 +627,17 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     delivery_date: z.string().optional(),
     notes: z.string().optional(),
     payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).optional(),
-    items: z.array(orderItemSchema).min(1)
+    items: z.array(orderItemSchema).min(1),
+    // 🔁 Pasar el pedido a OTRO socio (pedido del dueño 2026-11-10): su inventario lo respalda y la cuenta por cobrar es suya.
+    nuevo_dueno_id: z.string().uuid().optional()
   }).parse(req.body);
+  const r = req as AuthenticatedRequest;
+  const nuevoDueno = body.nuevo_dueno_id && body.nuevo_dueno_id !== accionistaId ? body.nuevo_dueno_id : null;
+  if (nuevoDueno && r.user?.role_name !== "ADMINISTRADOR") {
+    const acceso = await pool.query("SELECT 1 FROM user_accionistas WHERE user_id = $1 AND accionista_id = $2", [r.user?.id ?? null, nuevoDueno]);
+    if (!acceso.rowCount) throw new ApiError(403, "No tienes acceso a ese socio: no puedes pasarle el pedido.");
+  }
+  const duenoFinal = nuevoDueno ?? accionistaId;
 
   const result = await inTransaction(async (client) => {
     const order = await client.query(
@@ -644,8 +653,24 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
       throw new ApiError(409, "No se puede editar un pedido ya preparado. Primero revierte su preparacion.");
     }
 
-    await validarSacosPropiosDelPedido(client, accionistaId, body.items);
-    await validarRespaldoDelPedido(client, accionistaId, body.items, req.params.id as string);
+    if (nuevoDueno) {
+      const existe = (await client.query("SELECT 1 FROM accionistas WHERE id = $1 AND is_active = true", [nuevoDueno])).rowCount;
+      if (!existe) throw new ApiError(404, "Ese socio no existe o está inactivo.");
+      if (order.rows[0].receivable_id) {
+        const ar = (await client.query("SELECT amount, balance FROM accounts_receivable WHERE id = $1", [order.rows[0].receivable_id])).rows[0];
+        if (ar && Number(ar.amount) - Number(ar.balance) > 0.005) {
+          throw new ApiError(409, "Este pedido ya tiene cobros: no se puede pasar a otro socio. Anula primero el cobro.");
+        }
+      }
+    }
+    await validarSacosPropiosDelPedido(client, duenoFinal, body.items);
+    await validarRespaldoDelPedido(client, duenoFinal, body.items, req.params.id as string);
+    if (nuevoDueno) {
+      await client.query("UPDATE sales_orders SET accionista_id = $2 WHERE id = $1", [req.params.id, nuevoDueno]);
+      if (order.rows[0].receivable_id) {
+        await client.query("UPDATE accounts_receivable SET accionista_id = $2 WHERE id = $1", [order.rows[0].receivable_id, nuevoDueno]);
+      }
+    }
     if (body.payment_method) {
       await client.query("UPDATE sales_orders SET payment_method = $2 WHERE id = $1", [req.params.id, body.payment_method]);
     }
