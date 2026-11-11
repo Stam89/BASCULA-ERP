@@ -4142,6 +4142,8 @@ export function App() {
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   // Socio dueño del pedido al abrir la edición: si se elige otro en «Vendiendo como», al guardar el pedido pasa a ese.
   const [pedidoEditandoDueno, setPedidoEditandoDueno] = useState<string | null>(null);
+  // 📅 Fecha del pedido (por defecto hoy): para ingresar pedidos de días anteriores.
+  const [pedidoFecha, setPedidoFecha] = useState(() => hoyLocal());
   // Forma de pago que se escoge al TOMAR el pedido (la Cola de Despachos la trae puesta).
   // Forma de pago del pedido: EN BLANCO hasta que se elija (pedido del dueño: se enviaban de contado los que eran a crédito).
   const [pedidoFormaPago, setPedidoFormaPago] = useState("");
@@ -13523,6 +13525,7 @@ Motivo (obligatorio):`, ""));
       customer_id: selectedCustomerId,
       delivery_date: (form.get("delivery_date") as string) || undefined,
       notes: (form.get("order_notes") as string) || undefined,
+      fecha: pedidoFecha && pedidoFecha !== hoyLocal() ? pedidoFecha : undefined,
       created_by: authUser?.id,
       payment_method: pedidoFormaPago,
       items
@@ -14190,6 +14193,7 @@ Motivo (obligatorio):`, ""));
     // La sesión de ventas pasa al dueño del pedido (su inventario respalda la edición).
     const dueno = order.accionista_id || activeAccionistaId || "";
     setPedidoEditandoDueno(dueno || null);
+    setPedidoFecha(order.created_at ? new Date(order.created_at).toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }) : hoyLocal());
     if (dueno && dueno !== ventaSocioId) { setVentaSocioId(dueno); await cargarSesionVenta(dueno).catch(() => undefined); }
     setSaleLineItems(detalle.items.map((it, i) => ({
       id: `edit-${i}`,
@@ -14234,7 +14238,7 @@ Motivo (obligatorio):`, ""));
     }
     const otroDueno = pedidoEditandoDueno && ventaSocioId && ventaSocioId !== pedidoEditandoDueno ? ventaSocioId : undefined;
     const r = await apiPut<{ order_number: string; total_amount: string | number }>(`/orders/${pedidoEditando}`,
-      { items, payment_method: pedidoFormaPago, nuevo_dueno_id: otroDueno },
+      { items, payment_method: pedidoFormaPago, nuevo_dueno_id: otroDueno, fecha: pedidoFecha || undefined },
       { accionistaId: pedidoEditandoDueno || ventaSocioId || null });
     if (otroDueno) addToast(`El pedido pasó a ${accionistas.find((a) => a.id === otroDueno)?.name ?? "otro socio"}`, "success");
     setPedidoFormaPago("");
@@ -14246,6 +14250,7 @@ Motivo (obligatorio):`, ""));
   function cancelarEdicionPedido() {
     setPedidoEditando(null);
     setPedidoEditandoDueno(null);
+    setPedidoFecha(hoyLocal());
     setSaleLineItems([]);
     setSelectedCustomerId("");
     setCustomerSearch("");
@@ -19247,6 +19252,11 @@ Motivo (obligatorio):`, ""));
                   <option value="CHECK">🏦 Banco · cheque</option>
                   <option value="CREDIT">📋 Crédito</option>
                 </select>
+              </label>
+              <label>
+                <span>Fecha del pedido</span>
+                <input type="date" value={pedidoFecha} max={hoyLocal()} onChange={(e) => setPedidoFecha(e.target.value || hoyLocal())} />
+                {pedidoFecha !== hoyLocal() && <small style={{ color: "#b45309", fontWeight: 700 }}>📅 Pedido de un día anterior</small>}
               </label>
               <Input name="delivery_date" label="Fecha de entrega" type="date" required={false} />
               <Input name="order_notes" label="Nota (opcional)" required={false} />

@@ -21,7 +21,25 @@ import { calculateOrderStockCoverage, CODIGOS_CASCARA, rawBackingCode, RENDIMIEN
 import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../services/campo-flete-venta.js";
 import { notificar } from "../../services/notificaciones.js";
 import { getMatrizId } from "../../services/matriz.js";
-import { fechaEc } from "../../utils/fechas.js";
+import { fechaEc, hoyEc } from "../../utils/fechas.js";
+
+// 📅 Fecha del pedido (pedido del dueño 2026-11-10): un pedido de un día anterior que se ingresa después queda con su fecha.
+// Hasta 90 días atrás y nunca en el futuro. Devuelve la fecha a aplicar, o null si es hoy o no vino.
+function fechaDelPedido(fecha: string | undefined): string | null {
+  if (!fecha) return null;
+  const hoy = hoyEc();
+  if (fecha > hoy) throw new ApiError(400, "La fecha del pedido no puede ser futura.");
+  const limite = new Date(`${hoy}T12:00:00Z`); limite.setUTCDate(limite.getUTCDate() - 90);
+  if (fecha < limite.toISOString().slice(0, 10)) throw new ApiError(400, "La fecha del pedido no puede tener más de 90 días.");
+  return fecha === hoy ? null : fecha;
+}
+async function ponerFechaPedido(client: PoolClient, orderId: string, fecha: string) {
+  const r = await client.query(
+    `UPDATE sales_orders SET created_at = ($2::date + time '12:00') AT TIME ZONE 'America/Guayaquil' WHERE id = $1 RETURNING receivable_id`,
+    [orderId, fecha]);
+  const ar = r.rows[0]?.receivable_id;
+  if (ar) await client.query(`UPDATE accounts_receivable SET created_at = ($2::date + time '12:00') AT TIME ZONE 'America/Guayaquil' WHERE id = $1`, [ar, fecha]);
+}
 
 export const ordersRouter = Router();
 
@@ -210,8 +228,10 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
     // 📴 Pedido tomado SIN CONEXIÓN en el celular: llave única del celular (si el envío se repite, se devuelve el
     // mismo pedido) y cuándo se tomó.
     client_key: z.string().trim().min(8).max(80).optional(),
-    tomado_sin_conexion_at: z.string().datetime({ offset: true }).optional()
+    tomado_sin_conexion_at: z.string().datetime({ offset: true }).optional(),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
+  const fechaPedido = fechaDelPedido(body.fecha);
 
   if (body.client_key) {
     const ya = (await pool.query("SELECT * FROM sales_orders WHERE client_key = $1", [body.client_key])).rows[0];
@@ -248,6 +268,10 @@ ordersRouter.post("/", asyncRoute(async (req, res) => {
       );
     }
     await crearCobroDelPedido(client, order.rows[0], accionistaId);
+    if (fechaPedido) {
+      await ponerFechaPedido(client, order.rows[0].id, fechaPedido);
+      order.rows[0] = (await client.query("SELECT * FROM sales_orders WHERE id = $1", [order.rows[0].id])).rows[0];
+    }
     await avisarPedidoNuevo(client, order.rows[0], accionistaId);
     return order.rows[0];
   });
@@ -629,8 +653,10 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     payment_method: z.enum(["CASH", "TRANSFER", "CARD", "CHECK", "CREDIT"]).optional(),
     items: z.array(orderItemSchema).min(1),
     // 🔁 Pasar el pedido a OTRO socio (pedido del dueño 2026-11-10): su inventario lo respalda y la cuenta por cobrar es suya.
-    nuevo_dueno_id: z.string().uuid().optional()
+    nuevo_dueno_id: z.string().uuid().optional(),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
+  if (body.fecha) fechaDelPedido(body.fecha);
   const r = req as AuthenticatedRequest;
   const nuevoDueno = body.nuevo_dueno_id && body.nuevo_dueno_id !== accionistaId ? body.nuevo_dueno_id : null;
   if (nuevoDueno && r.user?.role_name !== "ADMINISTRADOR") {
@@ -674,6 +700,7 @@ ordersRouter.put("/:id", asyncRoute(async (req, res) => {
     if (body.payment_method) {
       await client.query("UPDATE sales_orders SET payment_method = $2 WHERE id = $1", [req.params.id, body.payment_method]);
     }
+    if (body.fecha) await ponerFechaPedido(client, req.params.id as string, body.fecha);
 
     const total = round2(body.items.reduce((sum, item) => sum + item.quantity * item.unit_price, 0));
     await client.query("DELETE FROM sales_order_items WHERE order_id = $1", [req.params.id]);
