@@ -523,6 +523,11 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   .formDosCols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 18px; align-content: start; }
   .formDosCols > :not(label) { grid-column: 1 / -1; }
   .formDosCols > label { max-width: none; }
+  /* Ítem de compra en una sola fila: tipo · insumo/producto (y bodega) · cantidad y precio. */
+  .compraItem { flex-direction: row !important; align-items: center; }
+  .compraItem > select:first-child { flex: 0 0 130px; }
+  .compraItem > select { flex: 1 1 0; min-width: 0; }
+  .compraItem > div { flex: 1 1 0; }
 }
 .liqPendRow:hover td { background: var(--c-surface-2); }
 .liqPendRow[aria-selected="true"] td { font-weight: 600; }

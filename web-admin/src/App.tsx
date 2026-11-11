@@ -20391,7 +20391,7 @@ Motivo (obligatorio):`, ""));
 
               <h3 style={{ marginBottom: 6 }}>Items</h3>
               {purchaseItems.map((it, idx) => (
-                <div key={idx} style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                <div key={idx} className="compraItem" style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 10, marginBottom: 8, display: "flex", flexDirection: "column", gap: 6 }}>
                   <select value={it.item_type}
                     onChange={(e: any) => updatePurchaseItem(idx, { item_type: e.target.value, insumo_id: "", product_id: "", warehouse_id: "" })}>
                     <option value="INSUMO">Insumo</option>
