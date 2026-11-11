@@ -1188,7 +1188,6 @@ cashRouter.post("/:id/movements", asyncRoute(async (req, res) => {
     if (body.modalidad_pago === "CREDITO" || body.es_fondo || body.activo_fijo || (body.sacos?.length ?? 0) > 0 || body.maquina_id) {
       throw new ApiError(400, "El gasto de un socio se registra de contado y sin fondo, activo fijo, sacos ni máquina.");
     }
-    await exigirMatriz(req);
   }
   // Un movimiento manual no se enlaza a mano a cuentas, ventas, nómina…: cada uno tiene su flujo (si no, al anularlo
   // devolvería saldo a una cuenta que nunca se pagó).
@@ -1903,7 +1902,9 @@ export const pagoGrupoSchema = z.object({
     cash_register_id: z.string().uuid().optional(),
     amount: z.number().positive().transform(round2),
     pagado_por: z.string().uuid().optional(),
-    medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional()
+    medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional(),
+    // 💬 Comentario de qué se está pagando (pedido del dueño 2026-11-10): queda en la caja y en el aviso al otro socio.
+    comentario: z.string().trim().max(200).optional()
   });
 export type PagoGrupo = z.infer<typeof pagoGrupoSchema>;
 export async function pagarCuentasEnGrupo(client: PoolClient, req: AuthenticatedRequest, body: PagoGrupo) {
@@ -1911,6 +1912,7 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
   const auth = req;
   const accionistaId = auth.accionistaId;
   const otroSocio = body.pagado_por && body.pagado_por !== accionistaId ? body.pagado_por : null;
+  const coment = body.comentario ? ` · 💬 ${body.comentario}` : "";
     let cajaId: string;
     let pagador: { id: string; name: string; caja_tipo: string } | null = null;
     if (otroSocio) {
@@ -1983,7 +1985,7 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
           desde: "payable",
           cuentaId: String(ap.id),
           monto: abono,
-          descripcion: `Abono recibido — ${ap.description ?? "cuenta entre accionistas"}`
+          descripcion: `Abono recibido — ${ap.description ?? "cuenta entre accionistas"}${coment}`
         }));
       }
       restante = round2(restante - abono);
@@ -1997,12 +1999,12 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
          VALUES ($1, 'EXPENSE', 'PAGO_POR_SOCIO', 'accounts_payable', $2, $3, $4, $5) RETURNING id`,
-        [cajaId, primera.id, body.amount, `Pago por ${socio}: ${aQuien}`, medioParaCaja(pagador.caja_tipo, body.medio_pago ?? "EFECTIVO")])
+        [cajaId, primera.id, body.amount, `Pago por ${socio}: ${aQuien}${coment}`, medioParaCaja(pagador.caja_tipo, body.medio_pago ?? "EFECTIVO")])
       : await client.query(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description)
          VALUES ($1, 'EXPENSE', $2, 'accounts_payable', $3, $4, $5) RETURNING id`,
-        [cajaId, categoriaDePagoCxP(primera), primera.id, body.amount, `Pago a ${aQuien}`]);
+        [cajaId, categoriaDePagoCxP(primera), primera.id, body.amount, `Pago a ${aQuien}${coment}`]);
     // Desglose: cuánto se abonó a cada cuenta (al anular el pago, TODAS vuelven a deber lo suyo).
     for (const d of desglose) {
       await client.query(
@@ -2029,7 +2031,7 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
       await notificar(client, {
         accionistaId, tipo: "PAGO",
         titulo: `${pagador.name} pagó por ti`,
-        mensaje: `${pagador.name} le pagó ${dinero(body.amount)} a ${aQuien}.${detalle}`,
+        mensaje: `${pagador.name} le pagó ${dinero(body.amount)} a ${aQuien}.${detalle}${coment}`,
         monto: body.amount, referenciaTipo: "cash_movements", referenciaId: movId
       });
       await notificar(client, {
@@ -2037,7 +2039,7 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
         titulo: `Pagaste por ${socio}`,
         mensaje: `Salieron ${dinero(body.amount)} de tu caja para pagarle a ${aQuien} por ${socio}.` +
           `${descontado > 0 ? ` ${dinero(descontado)} se descontaron de lo que le debías a ${socio}.` : ""}` +
-          `${falta > 0.005 ? ` ${socio} te debe ${dinero(falta)} (Por Cobrar).` : ""}`,
+          `${falta > 0.005 ? ` ${socio} te debe ${dinero(falta)} (Por Cobrar).` : ""}${coment}`,
         monto: body.amount, referenciaTipo: "cash_movements", referenciaId: movId
       });
       porSocio = { pagador: pagador.name, descontado, deuda_nueva: round2(Math.max(0, falta)) };

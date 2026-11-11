@@ -88,10 +88,10 @@ export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categ
     setBusy(true);
     try {
       if (form.op === "pago" && form.modo === "deuda") {
-        if (form.marcadas.length === 0) throw new Error(`Marca la deuda de ${otro} que pagaste`);
+        if (form.marcadas.length === 0) throw new Error(`Marca arriba la deuda de ${otro} que pagaste. Si no está en la lista, elige «Otra cosa suya que no está anotada».`);
         if (monto > sumaMarcadas + 0.005) throw new Error(`El monto pasa lo que se debe en lo marcado (${money(sumaMarcadas)})`);
         const r = await apiPost<{ pago_por_socio?: { descontado: number; deuda_nueva: number } | null }>("/cash/payables/pay-group",
-          { payable_ids: form.marcadas, amount: monto, pagado_por: yo.id, medio_pago: form.medio }, { accionistaId: form.con });
+          { payable_ids: form.marcadas, amount: monto, pagado_por: yo.id, medio_pago: form.medio, comentario: form.nota.trim() || undefined }, { accionistaId: form.con });
         const ps = r.pago_por_socio;
         avisar(`🧾 Pagaste ${money(monto)} por ${otro}: su deuda bajó` +
           (ps?.descontado ? ` · se descontaron ${money(ps.descontado)} de lo que le debías` : "") +
@@ -192,7 +192,7 @@ export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categ
         {f.op === "pago" && f.con && (
           <div className="es-chips" role="group" aria-label="Qué pagaste">
             <button type="button" className={f.modo === "deuda" ? "is-on" : ""} onClick={() => setForm({ ...f, modo: "deuda" })}>Una deuda suya (agricultor, cosechador, proveedor…)</button>
-            {yo?.tipo === "MATRIZ" && <button type="button" className={f.modo === "gasto" ? "is-on" : ""} onClick={() => setForm({ ...f, modo: "gasto" })}>Un gasto suyo (diésel, almuerzo…)</button>}
+            {accionistas.find((a) => a.id === f.con)?.tipo !== "MATRIZ" && <button type="button" className={f.modo === "gasto" ? "is-on" : ""} onClick={() => setForm({ ...f, modo: "gasto" })}>Otra cosa suya que no está anotada (diésel, almuerzo, un pago…)</button>}
           </div>
         )}
         {f.op === "pago" && f.con && f.modo === "deuda" && (
@@ -239,11 +239,9 @@ export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categ
                 <option value="BANCO">🏦 Banco / transferencia</option>
               </select>
             </label>
-            {!(f.op === "pago" && f.modo === "deuda") && (
-              <label className="es-campo es-campo--ancho"><span>Nota (opcional)</span>
-                <input value={f.nota} maxLength={200} placeholder={f.op === "pago" ? "Ej.: almuerzo de los trabajadores" : "Ej.: abono, préstamo para pagar cáscara"} onChange={(e) => setForm({ ...f, nota: e.target.value })} />
-              </label>
-            )}
+            <label className="es-campo es-campo--ancho"><span>{f.op === "pago" && f.modo === "deuda" ? "💬 Comentario: qué se está pagando (opcional)" : "Nota (opcional)"}</span>
+              <input value={f.nota} maxLength={200} placeholder={f.op === "pago" ? (f.modo === "deuda" ? "Ej.: liquidación del lote de Gabino" : "Ej.: almuerzo de los trabajadores") : "Ej.: abono, préstamo para pagar cáscara"} onChange={(e) => setForm({ ...f, nota: e.target.value })} />
+            </label>
           </div>
         )}
         {f.con && monto > 0 && (

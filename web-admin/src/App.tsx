@@ -3993,6 +3993,8 @@ export function App() {
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
   // Ídem para Por Pagar (acreedor).
   const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
+  // 💬 Comentario de qué se está pagando (Por Pagar).
+  const [pagoComentario, setPagoComentario] = useState("");
   // «Hoy» → cuota de préstamo: lleva la vista al panel de préstamos del banco (Por Pagar).
   const [prestamosFoco, setPrestamosFoco] = useState(0);
   // Modal "Comprar producto / Cruzar CxC": compra producto a un cliente y lo
@@ -11210,12 +11212,13 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   async function pagarGrupoCuentas(payableIds: string[], amount: number) {
     const registerId = dashboard.current_cash_register?.id;
     const pagadoPor = pagoHechoPor;
+    const comentario = pagoComentario.trim() || undefined;
     if (!registerId && !pagadoPor) throw new Error("No hay caja abierta");
     const r = await apiPost<{ pago_por_socio?: { pagador: string; descontado: number; deuda_nueva: number } | null }>("/cash/payables/pay-group",
       pagadoPor
         // Lo pagó otro socio: el dinero sale de SU caja abierta (el servidor la busca).
-        ? { payable_ids: payableIds, amount, pagado_por: pagadoPor, medio_pago: medioOperacion }
-        : { payable_ids: payableIds, cash_register_id: registerId, amount, ...cuerpoMedio(medioOperacion) });
+        ? { payable_ids: payableIds, amount, pagado_por: pagadoPor, medio_pago: medioOperacion, comentario }
+        : { payable_ids: payableIds, cash_register_id: registerId, amount, ...cuerpoMedio(medioOperacion), comentario });
     const ps = r.pago_por_socio;
     addToast(ps
       ? `Pago registrado: lo pagó ${ps.pagador}.` +
@@ -11224,6 +11227,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       : medioOperacion === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
     setMedioOperacion("EFECTIVO");
     setPagoHechoPor("");
+    setPagoComentario("");
     if (registerId) await refreshCaja(registerId);
     if (pagadoPor) await refreshReceivables();
   }
@@ -24130,7 +24134,8 @@ Motivo (obligatorio):`, ""));
                 })()}
                 disabled={!dashboard.current_cash_register && !pagoHechoPor}
                 disabledMsg="Abre una caja para poder pagar (o elige abajo quién pagó)."
-                onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); }}
+                onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); setPagoComentario(""); }}
+                comentario={{ value: pagoComentario, onChange: setPagoComentario }}
                 onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onPagarSeleccion={(ids) => pagarSeleccionPayable(detalleGrupo.items, ids).catch((e) => addToast(e.message, "error"))}
@@ -30497,6 +30502,8 @@ function CuentaDetalleModal(props: {
   onAbonar: (monto: number) => void;
   /** ☑️ Pagar solo las filas marcadas (cada una por su saldo). Si no viene, la tabla no muestra casillas. */
   onPagarSeleccion?: (ids: string[]) => void;
+  /** 💬 Comentario de qué se está pagando (queda en la caja y en el aviso al otro socio). */
+  comentario?: { value: string; onChange: (v: string) => void };
   onImprimir: () => void;
   /** Abre el informe del servicio (p. ej. pilado) de una fila que lo tenga. */
   onVerInforme?: (informeId: string) => void;
@@ -30622,6 +30629,13 @@ function CuentaDetalleModal(props: {
           );
         })()}
 
+        {props.comentario && !props.disabled && (
+          <label style={{ display: "block", marginTop: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>💬 Comentario <small className="muted">(opcional: qué se está pagando)</small></span>
+            <input value={props.comentario.value} maxLength={200} placeholder="Ej.: liquidación del lote de Luis Lozano, sacos de octubre…"
+              onChange={(e) => props.comentario!.onChange(e.target.value)} style={{ width: "100%" }} />
+          </label>
+        )}
         {conCasillas && marcadas.length === 0 && <small className="muted" style={{ display: "block", marginTop: 6 }}>☑️ Marca en la tabla las que quieras pagar (p. ej. solo las liquidaciones de unos lotes).</small>}
         {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>{props.disabledMsg ?? "Abre una caja para continuar."}</div>}
 
