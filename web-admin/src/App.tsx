@@ -18216,20 +18216,78 @@ Motivo (obligatorio):`, ""));
 
             {/* Últimos lotes (debajo de Secadora, en la columna izquierda) */}
             <aside className="productionRecentLots">
-              <DataList
-                title="Últimos lotes"
-                headers={["Lote", "Agricultor", "Tipo", "QQ"]}
-                rows={lots
-                  .filter((lot) => !esSoloSecadaOp(lot.operation_type))
-                  .slice(0, 8)
-                  .map((lot) => [
-                    lot.lot_code,
-                    lot.farmer_name ?? "—",
-                    riceTypeLabel(lot.rice_type) + (esServicioPiladaOp(lot.operation_type, lot.is_maquila, lot.lot_code) ? " · 🔧 SERV. PILADA" : ""),
-                    `${Number(lot.quintals ?? 0).enReal()} QQ`
-                  ])}
-              />
+              {(() => {
+                // 🌾 Lo que falta por pilar: túneles secos sin pilar (también los que tienen un proceso guardado) y
+                // lotes secos en bodega. Sin los de «Solo servicio de secado».
+                const secos = dryingReports.filter((r) => r.status === "COMPLETED" && !r.is_processed && !r.apartado_arianos && !esSoloSecado(r));
+                const idsSecos = new Set(secos.flatMap((r) => [r.lot_id, ...(r.lots ?? []).map((l) => l.lot_id)]));
+                const filas: Array<{ key: string; lote: string; origen: string; tipo: string; qq: number }> = [
+                  ...secos.map((r) => ({
+                    key: r.id,
+                    lote: [...new Set((r.lots ?? []).map((l) => l.lot_code))].join(" + ") || (lots.find((l) => l.id === r.lot_id)?.lot_code ?? "—"),
+                    origen: (r.dry_method === "TENDAL" ? "Tendal" : `Secadora ${r.tunnel_number}`) + (r.has_draft ? " · ⏸ guardado" : "") + (esServicioDeSecado(r) ? " · 🔧 servicio" : ""),
+                    tipo: riceTypeLabel(r.rice_type),
+                    qq: Number(r.total_quintals ?? 0)
+                  })),
+                  ...dryStorageLots.filter((l) => !idsSecos.has(l.id) && Number(l.quintals ?? 0) > 0).map((l) => ({
+                    key: l.id, lote: l.lot_code, origen: "Bodega" + (l.has_draft ? " · ⏸ guardado" : ""), tipo: riceTypeLabel(l.rice_type), qq: Number(l.quintals ?? 0)
+                  }))
+                ];
+                const totalQQ = filas.reduce((s, f) => s + f.qq, 0);
+                return (
+                  <div className="tablePanel">
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                      <h2 style={{ margin: 0 }}>🌾 Lotes por pilar{filas.length ? ` (${filas.length})` : ""}</h2>
+                      <button type="button" className="btnSecondary" onClick={() => { setProductionHistoryOpen(true); loadProductionHistory().catch(() => undefined); }}>📜 Historial de pilado</button>
+                    </div>
+                    {filas.length === 0 ? (
+                      <p className="muted" style={{ marginTop: 8 }}>No hay arroz seco esperando pilar.</p>
+                    ) : (
+                      <table className="cajaTable porPilarTabla" style={{ marginTop: 8 }}>
+                        <thead><tr><th>Lote</th><th>Origen</th><th>Tipo</th><th className="num">QQ</th></tr></thead>
+                        <tbody>
+                          {filas.map((f) => (
+                            <tr key={f.key}><td>{f.lote}</td><td>{f.origen}</td><td>{f.tipo}</td><td className="num">{f.qq.enReal()}</td></tr>
+                          ))}
+                        </tbody>
+                        {filas.length > 1 && <tfoot><tr><th colSpan={3}>Total</th><th className="num">{totalQQ.enReal()}</th></tr></tfoot>}
+                      </table>
+                    )}
+                  </div>
+                );
+              })()}
             </aside>
+            {productionHistoryOpen && (
+              <div className="modalOverlay" onClick={() => setProductionHistoryOpen(false)}>
+                <div className="modalCard" style={{ maxWidth: 860, width: "100%" }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <h3 style={{ margin: 0 }}>📜 Historial de pilado</h3>
+                    <button type="button" onClick={() => setProductionHistoryOpen(false)}>Cerrar</button>
+                  </div>
+                  {productionHistory.length === 0 ? (
+                    <p className="muted">Todavía no hay piladas finalizadas.</p>
+                  ) : (
+                    <div style={{ overflowX: "auto", maxHeight: "70vh", marginTop: 10 }}>
+                      <table className="cajaTable">
+                        <thead><tr><th>Fecha</th><th>Lote</th><th>Tipo</th><th className="num">Blanco</th><th className="num">Rend.</th><th>Pilador</th></tr></thead>
+                        <tbody>
+                          {productionHistory.map((h) => (
+                            <tr key={h.id}>
+                              <td>{h.finished_at ? new Date(h.finished_at).toLocaleDateString("es-EC") : "—"}</td>
+                              <td>{h.lot_code}{h.is_service ? " · 🔧" : ""}</td>
+                              <td>{riceTypeLabel(h.rice_type)}</td>
+                              <td className="num">{h.white_rice_qty != null ? Number(h.white_rice_qty).enReal() : "—"}</td>
+                              <td className="num">{h.yield_percent != null ? `${Number(h.yield_percent).toFixed(1)}%` : "—"}</td>
+                              <td>{h.pilador_name ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
             </div>
 
             {/* ── Columna DERECHA: Procesamiento (Reporte de pilado) ── */}
