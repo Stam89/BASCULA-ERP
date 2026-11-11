@@ -18224,7 +18224,7 @@ Motivo (obligatorio):`, ""));
                 const filas: Array<{ key: string; lote: string; origen: string; tipo: string; qq: number }> = [
                   ...secos.map((r) => ({
                     key: r.id,
-                    lote: [...new Set((r.lots ?? []).map((l) => l.lot_code))].join(" + ") || (lots.find((l) => l.id === r.lot_id)?.lot_code ?? "—"),
+                    lote: lots.find((l) => l.id === r.lot_id)?.lot_code ?? `${(r.lots ?? []).length} ingreso(s)`,
                     origen: (r.dry_method === "TENDAL" ? "Tendal" : `Secadora ${r.tunnel_number}`) + (r.has_draft ? " · ⏸ guardado" : "") + (esServicioDeSecado(r) ? " · 🔧 servicio" : ""),
                     tipo: riceTypeLabel(r.rice_type),
                     qq: Number(r.total_quintals ?? 0)
