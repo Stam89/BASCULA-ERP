@@ -4551,6 +4551,10 @@ export function App() {
   // Un ingreso agregado en una secadora no debe aparecer en la otra.
   const idsUsados = new Set(Object.values(dryingSelections).flat());
   const entradasLibres = availableDryingLots.filter((lot) => !idsUsados.has(lot.id));
+  // Tipo de arroz que se ve en el selector de cada secadora (el mismo que filtra la lista de tickets).
+  const tipoDeSecadora = (secadora: string): "0.11" | "CORRIENTE" =>
+    dryingRiceType[secadora] ?? (editingDryingReport && tunelDeSecadora(editingDryingReport.dryer_name ?? "1") === tunelDeSecadora(secadora) && editingDryingReport.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11");
+  const tipoDeEntrada = (e: { rice_type?: string | null }) => (e.rice_type === "CORRIENTE" ? "CORRIENTE" : "0.11");
   // Se compara por número ("Secador 1" viejo y "Secadora 1" son la misma).
   const editandoEnSecadora = (secadora: string) =>
     editingDryingReport && tunelDeSecadora(editingDryingReport.dryer_name ?? "1") === tunelDeSecadora(secadora)
@@ -11762,7 +11766,11 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
         entry_ids: seleccionFinal(secadora),
         lot_code: String(form.get(`lot_code_${t}`) ?? "").trim() || undefined,
         tunnel_number: t,
-        rice_type: form.get(`rice_type_${t}`) || "0.11",
+        rice_type: (() => {
+          // El lote toma el tipo de sus tickets cuando todos son del mismo tipo.
+          const tipos = new Set(availableDryingLots.filter((e) => seleccionFinal(secadora).includes(e.id)).map(tipoDeEntrada));
+          return tipos.size === 1 ? [...tipos][0] : (form.get(`rice_type_${t}`) || "0.11");
+        })(),
         moisture_before: numberOrUndefined(form.get(`moisture_before_${t}`)),
         filled_at: fechaLlenadoMotor,
         dry_start_at: horaInicioMotor,
@@ -16465,7 +16473,7 @@ Motivo (obligatorio):`, ""));
                           </div>
                         )}
                         <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr", gap: 10 }}>
-                          <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} defaultValue="0.11" onChange={(e) => {
+                          <Select name={`rice_type_${t}`} label="Tipo de arroz" rows={[["0.11", "0.11"], ["CORRIENTE", "Corriente"]]} value={tipoDeSecadora(secadora)} onChange={(e) => {
                             setDryingRiceType((cur) => ({ ...cur, [secadora]: e.target.value as "0.11" | "CORRIENTE" }));
                             setDryingEntryMultiPick((cur) => ({ ...cur, [secadora]: [] }));
                           }} />
@@ -16486,10 +16494,7 @@ Motivo (obligatorio):`, ""));
                             {dryingPickerOpen[secadora] && (
                             <div style={{ maxHeight: 210, overflowY: "auto", border: "1px solid var(--c-border)", borderRadius: 8, background: "var(--c-surface)", marginTop: 6 }}>
                               {entradasLibres
-                                .filter((entry) => {
-                                  const tipoSeleccionado = dryingRiceType[secadora];
-                                  return !tipoSeleccionado || (entry.rice_type ?? "0.11") === tipoSeleccionado;
-                                })
+                                .filter((entry) => tipoDeEntrada(entry) === tipoDeSecadora(secadora))
                                 .map((entry) => {
                                   const checked = (dryingEntryMultiPick[secadora] ?? []).includes(entry.id);
                                   const badge = opTypeBadgeLabel(entry.operation_type, entry.is_maquila);
@@ -16503,8 +16508,8 @@ Motivo (obligatorio):`, ""));
                                     </label>
                                   );
                                 })}
-                              {entradasLibres.filter((entry) => !dryingRiceType[secadora] || (entry.rice_type ?? "0.11") === dryingRiceType[secadora]).length === 0 && (
-                                <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay ingresos disponibles de este tipo.</div>
+                              {entradasLibres.filter((entry) => tipoDeEntrada(entry) === tipoDeSecadora(secadora)).length === 0 && (
+                                <div className="muted" style={{ padding: 10, fontSize: 13 }}>No hay ingresos {tipoDeSecadora(secadora) === "CORRIENTE" ? "corrientes" : "0.11"} disponibles. {entradasLibres.some((entry) => tipoDeEntrada(entry) !== tipoDeSecadora(secadora)) ? `Hay de ${tipoDeSecadora(secadora) === "CORRIENTE" ? "0.11" : "Corriente"}: cambia el tipo arriba.` : ""}</div>
                               )}
                             </div>
                             )}

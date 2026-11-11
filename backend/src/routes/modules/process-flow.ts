@@ -2206,7 +2206,7 @@ async function createDryingReport(
   const esTendal = input.dry_method === "TENDAL";
   if (!esTendal && !input.tunnel_number) throw new ApiError(400, "Falta el número de túnel");
   const entries = await client.query(
-    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.operation_type, w.accionista_id, w.lot_id,
+    `SELECT w.id, w.ticket_number, w.farmer_id, w.is_maquila, w.operation_type, w.accionista_id, w.lot_id, w.rice_type,
             COALESCE(w.net_weight, 0) AS net_weight_kg,
             COALESCE(w.quintals, 0) AS quintals,
             f.full_name AS farmer_name,
@@ -2236,6 +2236,10 @@ async function createDryingReport(
   if (new Set(entries.rows.map((e) => e.is_maquila)).size > 1) {
     throw new ApiError(400, "No se puede mezclar compra propia y servicio de pilado en el mismo lote.");
   }
+
+  // 🌾 Si todos los tickets son del mismo tipo de arroz, el lote es de ese tipo (no del selector de la pantalla).
+  const tiposTickets = new Set(entries.rows.map((e) => (e.rice_type === "CORRIENTE" ? "CORRIENTE" : e.rice_type ? "0.11" : null)).filter(Boolean));
+  if (tiposTickets.size === 1) input = { ...input, rice_type: [...tiposTickets][0] as "0.11" | "CORRIENTE" };
 
   const isMaquila = Boolean(entries.rows[0].is_maquila);
   const lotAccionista = entries.rows[0].accionista_id as string | null;
