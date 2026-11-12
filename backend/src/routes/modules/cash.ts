@@ -12,6 +12,7 @@ import { resolverProveedor } from "../../services/proveedores.js";
 import { anularGastoTransporte } from "../../services/gasto-transporte.js";
 import { cruzarGastoPorSocio, cuantoLeDebeAlSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 import { anularDineroEntreSocios, bajarDeudasDe, crearDeudaEntreSocios } from "../../services/entre-socios.js";
+import { REF_PRESTAMO_PERSONA, anularPrestamoPersona } from "../../services/prestamo-persona.js";
 import { reabrirPagoNomina } from "../../services/nomina-reabrir.js";
 import { anularDeudaDeCobroPorSocio, anularPagoPorSocio, buscarCuentaHermana, deshacerCrucesYDeuda, espejarAbonoEnContraparte, espejarPagoATransporte, revertirAbonoDeCuentaPorAnulacion } from "../../services/cuentas-vinculadas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -821,6 +822,10 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
       }
     }
 
+    // 💸 Préstamo a una persona: se anula su Por Cobrar (si no tiene abonos) y lo que hizo entre socios.
+    if (m.reference_type === REF_PRESTAMO_PERSONA && m.reference_id) {
+      await anularPrestamoPersona(client, m.id, String(m.reference_id));
+    }
     // 💳 Gasto que pagó OTRO socio (su tarjeta o su dinero): se anula la otra línea y vuelve lo cruzado.
     if (m.reference_type === "pagado_por_socio" && m.reference_id) {
       const par = (await client.query(

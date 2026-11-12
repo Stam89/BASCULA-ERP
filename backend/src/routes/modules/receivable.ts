@@ -13,6 +13,7 @@ import { bajarPayableHermanaSinCaja, espejarAbonoEnContraparte } from "../../ser
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { anularCruce, aplicarCruce, listarCruces, resumenCruce } from "../../services/cruce-socios.js";
 import { pagarCuentasEnGrupo } from "./cash.js";
+import { registrarPrestamoPersona } from "../../services/prestamo-persona.js";
 
 export const receivableRouter = Router();
 
@@ -553,6 +554,27 @@ receivableRouter.post("/pay-group", asyncRoute(async (req, res) => {
 // Matriz y no a la del socio. En un paso: deja de estar por confirmar, el cliente deja de deber, el dinero entra a la caja
 // abierta de la Matriz (banco) y la Matriz queda debiéndoselo al socio (cobro_por_socio, igual que «¿Quién recibió el
 // dinero? · Le depositaron a…» en Por Cobrar).
+// 💸 Préstamo a una persona (sin interés, no es fomento): Por Cobrar del que presta; el dinero sale de su caja o de la
+// de otro socio que lo puso (services/prestamo-persona.ts).
+receivableRouter.post("/prestamo-persona", asyncRoute(async (req, res) => {
+  const auth = req as AuthenticatedRequest;
+  const body = z.object({
+    persona: z.string().trim().max(160).default(""),
+    customer_id: z.string().uuid().optional(),
+    monto: z.number().positive().max(10_000_000),
+    medio: z.enum(["EFECTIVO", "BANCO"]).optional(),
+    pagado_por: z.string().uuid().optional(),
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    nota: z.string().trim().max(200).optional()
+  }).parse(req.body);
+  if (!auth.accionistaId) throw new ApiError(400, "Elige el accionista que presta.");
+  const out = await inTransaction((client) => registrarPrestamoPersona(client, req, {
+    prestaId: auth.accionistaId!, persona: body.persona, customerId: body.customer_id ?? null, monto: body.monto,
+    medio: body.medio ?? null, pagadoPor: body.pagado_por ?? null, fecha: body.fecha ?? null, nota: body.nota ?? null, userId: auth.user?.id ?? null
+  }));
+  res.status(201).json(out);
+}));
+
 receivableRouter.post("/:id/llego-a-matriz", asyncRoute(async (req, res) => {
   const auth = req as AuthenticatedRequest;
   const out = await inTransaction(async (client) => {

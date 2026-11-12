@@ -25,6 +25,7 @@ import { planDeSacos, sobranteLb, SacosAlertaDashboard, SacosCatalogoConfig, Sac
 import { PedidoCompartirModal, type PedidoCompartirData } from "./components/PedidoCompartir";
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
+import { PrestamoPersona } from "./components/PrestamoPersona";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
@@ -3048,6 +3049,8 @@ export function App() {
   const [movPagadoPor, setMovPagadoPor] = useState("");
   // 🤝 Cuentas entre socios (pantalla + los tres movimientos); `op` abre directo uno desde el buscador de Caja.
   const [entreSocios, setEntreSocios] = useState<null | { op?: OpEntreSocios; con?: string }>(null);
+  // 💸 Préstamo a una persona (Caja › Otros registros).
+  const [prestamoPersonaAbierto, setPrestamoPersonaAbierto] = useState(false);
   const [movDeudaSocio, setMovDeudaSocio] = useState<{ socio: string; le_debe: number } | null>(null);
   useEffect(() => {
     if (!movPorCuentaDe) { setMovDeudaSocio(null); return; }
@@ -15121,6 +15124,16 @@ Motivo (obligatorio):`, ""));
             </div>
           </div>
         )}
+        {prestamoPersonaAbierto && (
+          <PrestamoPersona
+            accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
+            activoId={activeAccionistaId}
+            cajaTipo={(dashboard.current_cash_register as { tipo?: string } | null | undefined)?.tipo ?? null}
+            personas={customers.map((c) => ({ id: c.id, nombre: c.full_name }))}
+            avisar={addToast}
+            onListo={() => Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined), refreshReceivables().catch(() => undefined), refreshPayables().catch(() => undefined)])}
+            onCerrar={() => setPrestamoPersonaAbierto(false)} />
+        )}
         {entreSocios && authUser && (
           <CuentasEntreSocios
             accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
@@ -20702,6 +20715,10 @@ Motivo (obligatorio):`, ""));
                                   <span className="cj-menu-ico">🤝</span><span className="cj-menu-label">Cuentas entre socios</span>
                                 </button>
                               )}
+                              <button type="button" role="menuitem" className="cj-menu-item" title="Préstamo sin interés a una persona: queda en Por Cobrar"
+                                onClick={() => { setCajaMenu(null); setPrestamoPersonaAbierto(true); }}>
+                                <span className="cj-menu-ico">💸</span><span className="cj-menu-label">Préstamo a una persona</span>
+                              </button>
                               {esMatrizActiva && (
                                 <button type="button" role="menuitem" className="cj-menu-item" onClick={() => { setCajaMenu(null); setCajaSubTab("nomina"); loadSemana().catch(() => undefined); }}>
                                   <span className="cj-menu-ico">🗓️</span><span className="cj-menu-label">Pagar nómina del viernes</span>
