@@ -14210,6 +14210,8 @@ Motivo (obligatorio):`, ""));
         .sig hr{border:none;border-top:1px solid #111;margin:0 0 5px}
         .sig span{font-size:11px;color:#333}
         .muted{color:#777}
+        .decl{margin-top:14px;border-top:1px dashed #94a3b8;padding-top:6px;font-size:8.5px;line-height:1.35;color:#333;text-align:justify;page-break-inside:avoid}
+        .decl strong{color:#111}
         @media print{ button{display:none!important} }
       </style></head><body>
       <div class="sheet">
@@ -14257,6 +14259,12 @@ Motivo (obligatorio):`, ""));
           <thead><tr><th class="c" style="width:80px">Cantidad</th><th style="width:34%">Presentación</th><th>Descripción del producto</th></tr></thead>
           <tbody>${filas}</tbody>
         </table>
+
+        <!-- Declaración de responsabilidad: los datos del conductor (chofer, cédula, placa)
+             y su firma ya están en esta guía; aquí solo va el texto legal. -->
+        <div class="decl">
+          <strong>DECLARACIÓN DE RESPONSABILIDAD:</strong> ${esc(appSettings.business_name) || "La Piladora"}${appSettings.ruc ? ` (RUC ${esc(appSettings.ruc)})` : ""} responde únicamente por la mercadería detallada en esta guía, cargada y despachada desde sus instalaciones. Cualquier otro producto, carga o bien que transporte el vehículo es responsabilidad exclusiva del transportista y/o propietario del vehículo. El conductor declara haber verificado la carga recibida.
+        </div>
 
         <div class="sigs">
           <div class="sig"><hr><span>Firma Despachador (Matriz)</span></div>
