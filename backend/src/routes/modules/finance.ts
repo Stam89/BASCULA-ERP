@@ -18,6 +18,7 @@ import {
 import { revisarConsistencia } from "../../services/consistencia.js";
 import { calcularResultadoMensual } from "../../services/resultado-mensual.js";
 import { getMatrizId } from "../../services/matriz.js";
+import { vidaUtilPorTipo } from "../../services/activos.js";
 import {
   parsearExtracto,
   conciliarAutomatico,
@@ -129,6 +130,53 @@ financeRouter.post("/fixed-assets", requireAdmin, asyncRoute(async (req, res) =>
      body.salvage_value, body.is_depreciable]
   );
   res.status(201).json(r.rows[0]);
+}));
+
+// 📥 Importar activos fijos desde el Excel (pedido del dueño 2026-11-12). La pantalla lee el archivo y manda las filas;
+// aquí se crean las que no existan (mismo nombre + fecha + costo + descripción = ya está): subir el mismo Excel dos veces
+// no duplica. Solo administrador: entra al balance y a la depreciación.
+financeRouter.post("/fixed-assets/importar", requireAdmin, asyncRoute(async (req, res) => {
+  const fecha = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+  const body = z.object({
+    filas: z.array(z.object({
+      nombre: z.string().trim().min(1).max(160),
+      tipo: z.string().trim().max(60).optional(),
+      ubicacion: z.string().trim().max(120).optional(),
+      descripcion: z.string().trim().max(300).optional(),
+      condicion: z.string().trim().max(20).optional(),
+      fecha: fecha.optional(),
+      vida: z.number().int().positive().max(50).optional(),
+      costo: z.number().nonnegative().default(0),
+      residual: z.number().nonnegative().default(0),
+      notas: z.string().trim().max(300).optional()
+    })).min(1).max(1000)
+  }).parse(req.body);
+  const accionistaId = accionista(req as AuthenticatedRequest);
+  const out = await inTransaction(async (client) => {
+    let creados = 0, repetidos = 0, total = 0;
+    for (const f of body.filas) {
+      const nombre = f.nombre.replace(/\s+/g, " ").toUpperCase();
+      const desc = f.descripcion?.replace(/\s+/g, " ") || null;
+      const ya = await client.query(
+        `SELECT 1 FROM equipment WHERE (accionista_id = $1 OR accionista_id IS NULL) AND upper(btrim(name)) = $2
+            AND acquisition_date IS NOT DISTINCT FROM $3::date AND round(COALESCE(acquisition_cost, 0), 2) = round($4::numeric, 2)
+            AND COALESCE(upper(btrim(descripcion)), '') = COALESCE(upper(btrim($5::text)), '') LIMIT 1`,
+        [accionistaId, nombre, f.fecha ?? null, f.costo, desc]
+      );
+      if (ya.rowCount) { repetidos++; continue; }
+      await client.query(
+        `INSERT INTO equipment (name, type, status, accionista_id, acquisition_cost, acquisition_date, useful_life_years,
+                                salvage_value, is_depreciable, location, descripcion, condicion, notas)
+         VALUES ($1, $2, 'ACTIVA', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [nombre, (f.tipo || "OTRO").replace(/\s+/g, " ").toUpperCase(), accionistaId, f.costo, f.fecha ?? null,
+         f.vida ?? vidaUtilPorTipo(f.tipo), Math.min(f.residual, f.costo), f.costo > 0,
+         f.ubicacion?.replace(/\s+/g, " ").toUpperCase() || null, desc, f.condicion?.toUpperCase() || null, f.notas || null]
+      );
+      creados++; total += f.costo;
+    }
+    return { creados, repetidos, costo_total: Math.round(total * 100) / 100 };
+  });
+  res.status(201).json(out);
 }));
 
 // Limpieza de duplicados sin costo: elimina de la base los activos fijos con

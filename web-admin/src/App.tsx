@@ -26,6 +26,7 @@ import { PedidoCompartirModal, type PedidoCompartirData } from "./components/Ped
 import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuesto } from "./components/RepuestosModule";
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { PrestamoPersona } from "./components/PrestamoPersona";
+import { ImportarActivosExcel } from "./components/ImportarActivosExcel";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
@@ -17078,6 +17079,7 @@ Motivo (obligatorio):`, ""));
                         <button type="button" onClick={() => limpiarDuplicadosActivos().catch((e) => addToast(e.message, "error"))}>
                           🧹 Limpiar duplicados sin costo
                         </button>
+                        {isAdmin && <ImportarActivosExcel avisar={addToast} onListo={() => loadFinanzas()} />}
                         <button type="button" className="primary" onClick={() => { setNuevoActivo({ nombre: "", tipo: "VEHICULO", costo: "", fecha: "", vida: "" }); setModalNuevoActivo(true); }}>
                           ➕ Agregar Activo Fijo
                         </button>
