@@ -22183,6 +22183,7 @@ Motivo (obligatorio):`, ""));
                     accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
                     activoId={activeAccionistaId} recargar={porAsignarKey} avisar={addToast}
                     vacio="No hay ventas por asignar. 👍"
+                    productos={productosVentaDetalle().map((p) => ({ id: p.id, label: p.label }))}
                     onCambio={() => { setPorAsignarKey((k) => k + 1); return Promise.all([refreshCaja().catch(() => undefined), refresh().catch(() => undefined)]); }} />
                 )}
                 {cajaSubTab === "venta_detalle" && (!esMatrizActiva || vdVista === "vender") && (

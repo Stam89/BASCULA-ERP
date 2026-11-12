@@ -516,6 +516,7 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
   .liqVistaNueva > .formPanel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
 }
 .liqPendRow { cursor: pointer; }
+.vpa__corregir { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex-basis: 100%; padding: 6px 0 2px; }
 /* PC (pedido del dueño 2026-11-11: formularios muy estirados): un campo nunca pasa de un ancho cómodo, y los
    formularios largos se reparten en dos columnas (lo que no es un campo ocupa todo el ancho). */
 @media (min-width: 1100px) {

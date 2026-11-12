@@ -13,7 +13,7 @@ type Acc = { id: string; name: string; tipo: string };
 
 const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
 
-export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCambio, vacio }: {
+export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCambio, vacio, productos = [] }: {
   accionistas: Acc[];
   activoId: string | null;
   /** Cambia cuando se registra una venta nueva (para volver a leer). */
@@ -22,11 +22,15 @@ export function VentasPorAsignar({ accionistas, activoId, recargar, avisar, onCa
   onCambio: () => unknown;
   /** Texto cuando no hay nada por asignar (en su propia pestaña); sin él, no se muestra nada. */
   vacio?: string;
+  /** Productos de mostrador, para ✏️ Corregir (sin ellos no se ofrece). */
+  productos?: Array<{ id: string; label: string }>;
 }) {
   const [datos, setDatos] = useState<{ ventas: Venta[]; stock: Stock[] } | null>(null);
   const [abiertos, setAbiertos] = useState<string[]>([]);
   const [marcadas, setMarcadas] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  // ✏️ Corregir: venta en edición (producto y libras; el dinero no cambia).
+  const [editando, setEditando] = useState<{ id: string; product_id: string; libras: string } | null>(null);
 
   const cargar = useCallback(async () => {
     try { setDatos(await apiGet<{ ventas: Venta[]; stock: Stock[] }>("/sales/retail/por-asignar")); }
@@ -81,6 +85,22 @@ No pagó nada, así que no hay nada en la caja.`))) return;
   }
   const debeDe = (v: Venta) => (v.pagado == null ? 0 : r2(v.total - v.pagado));
 
+  async function corregir(v: Venta) {
+    if (!editando) return;
+    const prod = productos.find((p) => p.id === editando.product_id);
+    const libras = Number(editando.libras);
+    if (!prod) { avisar("Elige el producto", "error"); return; }
+    if (!(libras > 0)) { avisar("Escribe las libras", "error"); return; }
+    setBusy(true);
+    try {
+      await apiPost(`/sales/retail/por-asignar/${v.id}/corregir`, { product_id: prod.id, product_name: prod.label, libras });
+      avisar(`✏️ Corregida: ${prod.label} · ${libras} lb (${money(v.total)}, el dinero no cambia)`, "success");
+      setEditando(null);
+      await cargar();
+      await onCambio();
+    } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo corregir", "error"); } finally { setBusy(false); }
+  }
+
   return (
     <div className="vpa">
       <div className="vpa__cab">
@@ -132,6 +152,23 @@ No pagó nada, así que no hay nada en la caja.`))) return;
                       <b>{money(v.total)}{debeDe(v) > 0.005 ? ` · 📝 debe ${money(debeDe(v))}` : ""}</b>
                       {!v.en_caja && (
                         <button type="button" className="btnGhost" disabled={busy} onClick={(ev) => { ev.preventDefault(); void anular(v); }}>Anular</button>
+                      )}
+                      {productos.length > 0 && editando?.id !== v.id && (
+                        <button type="button" className="btnGhost" disabled={busy}
+                          onClick={(ev) => { ev.preventDefault(); setEditando({ id: v.id, product_id: v.product_id, libras: String(v.libras) }); }}>✏️ Corregir</button>
+                      )}
+                      {editando?.id === v.id && (
+                        <span className="vpa__corregir" onClick={(ev) => { const t = ev.target as HTMLElement; if (t === ev.currentTarget || t.tagName === "SMALL") ev.preventDefault(); }}>
+                          <select value={editando.product_id} onChange={(e) => setEditando({ ...editando, product_id: e.target.value })}>
+                            {!productos.some((p) => p.id === editando.product_id) && <option value={editando.product_id}>{v.product_name}</option>}
+                            {productos.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                          </select>
+                          <input type="number" min="0" step="0.01" value={editando.libras} style={{ width: 90 }}
+                            onChange={(e) => setEditando({ ...editando, libras: e.target.value })} /> lb
+                          <button type="button" className="primary" disabled={busy} onClick={() => { void corregir(v); }}>Guardar</button>
+                          <button type="button" className="btnGhost" disabled={busy} onClick={() => setEditando(null)}>Cancelar</button>
+                          <small className="muted" style={{ flexBasis: "100%" }}>El dinero ({money(v.total)}) no cambia: solo qué se vendió y cuánto.</small>
+                        </span>
                       )}
                     </label>
                   );

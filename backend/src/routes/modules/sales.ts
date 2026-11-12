@@ -434,6 +434,40 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
 
 // Anular una venta por asignar que no tiene ingreso en Caja (fiada sin abono). Las que sí cobraron algo se anulan en
 // Caja (el ingreso), como cualquier movimiento. Solo administrador.
+salesRouter.post("/retail/por-asignar/:id/corregir", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const body = z.object({
+    product_id: z.string().uuid(),
+    product_name: z.string().trim().min(1).max(120),
+    libras: z.number().positive().max(1_000_000)
+  }).parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const p = (await client.query("SELECT id FROM products WHERE id = $1 AND is_active = true", [body.product_id])).rows[0];
+    if (!p) throw new ApiError(404, "Ese producto no existe o está desactivado.");
+    const v = (await client.query(
+      `SELECT id, product_name, total::float AS total, cash_movement_id FROM ventas_detalle_por_asignar
+        WHERE id = $1 AND accionista_id = $2 AND asignado_at IS NULL AND anulado_at IS NULL FOR UPDATE`,
+      [req.params.id, accionistaId]
+    )).rows[0] as { id: string; product_name: string; total: number; cash_movement_id: string | null } | undefined;
+    if (!v) throw new ApiError(409, "Esa venta ya se asignó o se anuló: ya no se corrige aquí.");
+    const qq = Math.round(body.libras / 100 * 10000) / 10000;
+    await client.query(
+      `UPDATE ventas_detalle_por_asignar SET product_id = $2, product_name = $3, libras = $4, quantity_qq = $5,
+              unit_price_qq = CASE WHEN $5::numeric > 0 THEN ROUND(total / $5::numeric, 4) ELSE unit_price_qq END
+        WHERE id = $1`,
+      [v.id, body.product_id, body.product_name, body.libras, qq]
+    );
+    if (v.cash_movement_id && v.product_name !== body.product_name) {
+      await client.query(
+        "UPDATE cash_movements SET description = REPLACE(description, $2, $3) WHERE id = $1",
+        [v.cash_movement_id, `: ${v.product_name} ·`, `: ${body.product_name} ·`]
+      );
+    }
+    return { ok: true, antes: v.product_name, ahora: body.product_name, qq };
+  });
+  res.json(out);
+}));
+
 salesRouter.post("/retail/por-asignar/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const v = (await pool.query(
