@@ -1797,6 +1797,60 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
   await wb.xlsx.write(res);
 }));
 
+// ── 📊 Matriz mensual de Cuentas por Pagar a Agricultores (pedido del dueño 2026-11-12: «como mi Excel, mes a mes») ──
+// Una fila por liquidación (o deuda cargada como saldo inicial / compra) del mes del accionista activo, con sus descuentos
+// y cada abono que salió de caja o banco. Lo que bajó sin caja (anticipos aplicados, cruces) sale en «otros_abonos».
+cashRouter.get("/payables/matriz-mensual", asyncRoute(async (req, res) => {
+  const q = z.object({ mes: z.string().regex(/^\d{4}-\d{2}$/) }).parse(req.query);
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const filas = (await pool.query(
+    `SELECT ap.id, to_char(ap.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha,
+            ap.farmer_id, f.full_name AS agricultor, ap.reference_type, ap.description,
+            ap.amount::float AS monto, ap.balance::float AS saldo, ap.status::text AS estado,
+            l.liquidation_number, COALESCE(w.rice_type, lo.rice_type) AS tipo_cascara, lo.lot_code,
+            l.quintals::float AS qq, l.price_per_quintal::float AS precio_qq, l.gross_amount::float AS bruto,
+            COALESCE((l.discount_breakdown->>'flete')::float, 0) AS flete,
+            COALESCE((l.discount_breakdown->>'cosechadora')::float, 0) AS cosecha,
+            COALESCE((l.discount_breakdown->>'bascula')::float, 0) AS bascula,
+            COALESCE((l.discount_breakdown->>'fomento')::float, 0) AS fomento,
+            COALESCE(l.advances_discount, 0)::float AS anticipos,
+            COALESCE(l.other_discounts, 0)::float AS otros_descuentos,
+            COALESCE(l.net_amount, ap.amount)::float AS neto,
+            COALESCE((
+              SELECT json_agg(json_build_object('fecha', x.fecha, 'monto', x.monto, 'medio', x.medio, 'detalle', x.detalle) ORDER BY x.creado)
+                FROM (
+                  SELECT m.created_at AS creado, to_char(m.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha,
+                         c.monto::float AS monto, COALESCE(m.medio, 'EFECTIVO') AS medio, m.description AS detalle
+                    FROM cash_movement_cuentas c JOIN cash_movements m ON m.id = c.cash_movement_id
+                   WHERE c.tabla = 'accounts_payable' AND c.cuenta_id = ap.id AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+                  UNION ALL
+                  SELECT m.created_at, to_char(m.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD'),
+                         m.amount::float, COALESCE(m.medio, 'EFECTIVO'), m.description
+                    FROM cash_movements m
+                   WHERE m.reference_type = 'accounts_payable' AND m.reference_id = ap.id AND m.movement = 'EXPENSE'
+                     AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+                     AND NOT EXISTS (SELECT 1 FROM cash_movement_cuentas c WHERE c.cash_movement_id = m.id)
+                ) x
+            ), '[]'::json) AS abonos
+       FROM accounts_payable ap
+       JOIN farmers f ON f.id = ap.farmer_id
+       LEFT JOIN liquidations l ON l.id = ap.liquidation_id
+       LEFT JOIN lots lo ON lo.id = l.lot_id
+       LEFT JOIN weighing_tickets w ON w.id = l.weighing_ticket_id
+      WHERE ap.accionista_id = $1 AND ap.status::text <> 'CANCELLED'
+        AND COALESCE(ap.reference_type, '') NOT IN ('retencion_matriz', 'campo_servicio', 'fomento_cruce')
+        AND (l.id IS NULL OR l.cancelled_at IS NULL)
+        AND ap.created_at >= ($2 || '-01')::date::timestamp AT TIME ZONE 'America/Guayaquil'
+        AND ap.created_at < (($2 || '-01')::date + interval '1 month')::timestamp AT TIME ZONE 'America/Guayaquil'
+      ORDER BY ap.created_at, f.full_name`,
+    [accionistaId, q.mes]
+  )).rows as Array<Record<string, unknown> & { monto: number; saldo: number; abonos: Array<{ monto: number }> }>;
+  res.json(filas.map((f) => {
+    const enCaja = round2(f.abonos.reduce((s, a) => s + Number(a.monto), 0));
+    return { ...f, abonado_caja: enCaja, otros_abonos: Math.max(0, round2(f.monto - f.saldo - enCaja)) };
+  }));
+}));
+
 // ── 💵 Préstamo al dueño de la selectora: se descuenta de a poco de lo que la Matriz le debe ──────────────────────────
 cashRouter.get("/payables/prestamo-selectora", asyncRoute(async (req, res) => {
   const q = z.object({ provider_id: z.string().uuid() }).parse(req.query);

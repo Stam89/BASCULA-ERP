@@ -27,6 +27,7 @@ import { RepuestosAlertaDashboard, RepuestosModule, etiquetaCompat, type Repuest
 import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/BuscadorCombo";
 import { PrestamoPersona } from "./components/PrestamoPersona";
 import { ImportarActivosExcel } from "./components/ImportarActivosExcel";
+import { MatrizPorPagar } from "./components/MatrizPorPagar";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
@@ -1913,6 +1914,7 @@ const SUB_TABS: Record<string, Array<{ key: string; label: string }>> = {
   ],
   "Por Pagar": [
     { key: "cuentas", label: "Cuentas por pagar" },
+    { key: "matriz", label: "Agricultores mes a mes" },
     { key: "prestamos", label: "Préstamos del banco" },
   ],
   Liquidaciones: [
@@ -24180,6 +24182,8 @@ Motivo (obligatorio):`, ""));
               </p>
             </div>
             )}
+
+            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} avisar={addToast} />}
 
             {puedeVerSubTab("Por Pagar", "prestamos") && <PrestamosBancarios
               cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
