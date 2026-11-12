@@ -396,6 +396,10 @@ const finishProductionSchema = z.object({
   bran: productionOutputSchema.extend({
     unit: productionUnitSchema.default("QQ")
   }).optional(),
+  // ♻️ Rechazo de la selectora (grano que la selectora saca): subproducto RECHAZO.
+  rechazo: productionOutputSchema.extend({
+    unit: productionUnitSchema.default("QQ")
+  }).optional(),
   packaging_supply_id: z.string().uuid().optional(),
   sacks_used: z.number().nonnegative().optional(),
   service_rate_per_qq: z.number().nonnegative().optional(),
@@ -554,6 +558,15 @@ function buildOutputRows(body: FinishProductionInput) {
       isByproduct: true,
       output: body.bran,
       kg: outputToKg(body.bran)
+    });
+  }
+
+  if (body.rechazo) {
+    rows.push({
+      label: "RECHAZO",
+      isByproduct: true,
+      output: body.rechazo,
+      kg: outputToKg(body.rechazo)
     });
   }
 

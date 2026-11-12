@@ -1245,6 +1245,8 @@ type MillingReportState = {
   broken34: string;
   fineBroken: string;
   polvillo: string;
+  /** ♻️ QQ de rechazo de la selectora (subproducto RECHAZO). */
+  rechazo?: string;
   /** Libras por saco de cada subproducto (variable según cliente: 95, 96, 100…).
    *  Definen cuántos sacos especiales descuenta la matriz (sacos = QQ×100/lb). */
   broken34_lb: string;
@@ -4409,6 +4411,8 @@ export function App() {
     () => products.find((product) => product.code === "ARROCILLO-FINO") ?? products.find((product) => product.name.toUpperCase().includes("ARROCILLO")) ?? products[0],
     [products]
   );
+  // ♻️ Producto RECHAZO (salida de la selectora en el pilado).
+  const rechazoProduct = useMemo(() => products.find((p) => p.code === "RECHAZO" && p.is_active !== false) ?? null, [products]);
   const branProduct = useMemo(
     () =>
       products.find(
@@ -4777,14 +4781,15 @@ export function App() {
   }, [millingPiladoQq]);
   // Suma de subproductos capturados (arrocillos + polvillo), solo valores válidos.
   const millingSubproductosSum = useMemo(() =>
-    Math.max(0, Number(millingReport.broken34 || 0)) + Math.max(0, Number(millingReport.fineBroken || 0)) + Math.max(0, Number(millingReport.polvillo || 0)),
-    [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo]);
+    Math.max(0, Number(millingReport.broken34 || 0)) + Math.max(0, Number(millingReport.fineBroken || 0)) + Math.max(0, Number(millingReport.polvillo || 0))
+      + Math.max(0, Number(millingReport.rechazo || 0)),
+    [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo, millingReport.rechazo]);
   // Validez para habilitar el guardado/finalización: subproductos NO negativos
   // (un rendimiento mayor al ingreso SÍ se permite).
   const millingSubproductosOk = useMemo(() => {
     const b = Number(millingReport.broken34 || 0), f = Number(millingReport.fineBroken || 0), p = Number(millingReport.polvillo || 0);
-    return b >= 0 && f >= 0 && p >= 0;
-  }, [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo]);
+    return b >= 0 && f >= 0 && p >= 0 && Number(millingReport.rechazo || 0) >= 0;
+  }, [millingReport.broken34, millingReport.fineBroken, millingReport.polvillo, millingReport.rechazo]);
   // Se habilita en cuanto hay algo de producción: arroz pilado (ya añadido O
   // escrito en el input) O subproductos > 0. No exige personal de turno ni que
   // todos los campos estén llenos: es un borrador/cierre flexible.
@@ -4800,7 +4805,7 @@ export function App() {
     const broken34 = Number(millingReport.broken34 || 0);
     const fineBroken = Number(millingReport.fineBroken || 0);
     const polvillo = Number(millingReport.polvillo || 0);
-    const subproductos = broken34 + fineBroken + polvillo;
+    const subproductos = broken34 + fineBroken + polvillo + Math.max(0, Number(millingReport.rechazo || 0));
     if (entrada <= 0) return null;
     const pct = (x: number) => (x / entrada) * 100;
     const blancoPct = pct(blanco);
@@ -13208,7 +13213,8 @@ Motivo (obligatorio):`, ""));
     const effSubproductosQq =
       Number(millingReport.broken34 || 0) +
       Number(millingReport.fineBroken || 0) +
-      Number(millingReport.polvillo || 0);
+      Number(millingReport.polvillo || 0) +
+      Number(millingReport.rechazo || 0);
 
     if (effTotalQq <= 0 && effSubproductosQq <= 0) {
       showFinalizeValidation("Registre al menos una salida real: arroz pilado, arrocillo o polvillo");
@@ -13312,6 +13318,12 @@ Motivo (obligatorio):`, ""));
         quantity: Number(millingReport.polvillo || 0),
         unit: "QQ",
         sack_weight_lb: Number(millingReport.polvillo_lb) > 0 ? Number(millingReport.polvillo_lb) : undefined
+      } : undefined,
+      rechazo: Number(millingReport.rechazo || 0) > 0 && rechazoProduct ? {
+        product_id: rechazoProduct.id,
+        warehouse_id: finishedWarehouse.id,
+        quantity: Number(millingReport.rechazo || 0),
+        unit: "QQ"
       } : undefined,
       sacks_used: 0,
       pilador_name: piladorName || undefined,
@@ -18432,6 +18444,7 @@ Motivo (obligatorio):`, ""));
                     <ControlledNumberInput label="Arrocillo 3/4" value={millingReport.broken34} onChange={(value) => updateMillingField("broken34", value)} />
                     <ControlledNumberInput label="Arrocillo Fino" value={millingReport.fineBroken} onChange={(value) => updateMillingField("fineBroken", value)} />
                     <ControlledNumberInput label="Polvillo" value={millingReport.polvillo} onChange={(value) => updateMillingField("polvillo", value)} />
+                    <ControlledNumberInput label="♻️ Rechazo (selectora)" value={millingReport.rechazo ?? ""} onChange={(value) => updateMillingField("rechazo", value)} />
                   </div>
                   </div>
                   </div>

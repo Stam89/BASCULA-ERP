@@ -24,6 +24,7 @@ export function qqDelBorrador(riceType: unknown, entradas: Entrada[], reporte: R
   sumar("ARROCILLO-34", num(reporte.broken34));
   sumar("ARROCILLO-FINO", num(reporte.fineBroken));
   sumar("POLVILLO", num(reporte.polvillo));
+  sumar("RECHAZO", num(reporte.rechazo));
   return m;
 }
 
