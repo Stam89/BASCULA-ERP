@@ -13780,9 +13780,9 @@ Motivo (obligatorio):`, ""));
       sugerirTarifaFlete(order);
       return;
     }
-    const metodo = orderPayMethod[order.id] ?? "";
+    const metodo = order.payment_method ?? "";
     if (!metodo) {
-      addToast("Elige cómo pagó al despachar: efectivo, transferencia, tarjeta, cheque o crédito.", "error");
+      addToast("Este pedido no tiene forma de pago: quien toma los pedidos debe ponerla en Ventas (✏️ Editar pedido) antes de despacharlo.", "error");
       return;
     }
     // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
@@ -19396,10 +19396,7 @@ Motivo (obligatorio):`, ""));
                     // "Listo para cargar" = ya se confirmó la preparación (picking).
                     const listo = Boolean(o.prepared_at);
                     // Condición de pago elegida (por defecto contado). CREDIT = a crédito.
-                    // Se elige al despachar (no viene marcado): lo del pedido es solo una pista.
-                    const metodoPago = orderPayMethod[o.id] ?? "";
-                    const metodoDelPedido = ({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque", CREDIT: "📋 Crédito" } as Record<string, string>)[o.payment_method ?? ""] ?? "";
-                    const esCredito = (metodoPago || o.payment_method) === "CREDIT";
+                    // La forma de pago es del pedido (la pone Ventas); preparación y despacho no la ven ni la cambian.
                     // Stock disponible (QQ) en bodega de los productos del pedido: pista de
                     // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
                     const demandaPorProducto = new Map<string, number>();
@@ -19481,19 +19478,6 @@ Motivo (obligatorio):`, ""));
                         <strong style={{ fontSize: 18, color: listo ? "#15803d" : "#b45309" }}>{money(Number(o.total_amount))}</strong>
                       </div>
 
-                      {/* Condición de pago (junto al valor): contado/contra entrega vs crédito. */}
-                      <div>
-                        {esCredito ? (
-                          <span style={{ background: "#ede9fe", color: "#6d28d9", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>💳 Crédito (a convenir)</span>
-                        ) : (
-                          <>
-                            <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>
-                              {({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque" } as Record<string, string>)[metodoPago || (o.payment_method ?? "")] ?? "💵 Contado"} · Contra Entrega
-                            </span>
-                            <div style={{ marginTop: 4, fontSize: 11.5, color: "#b45309", fontWeight: 600 }}>⚠ Verificar cobro en caja antes de autorizar salida.</div>
-                          </>
-                        )}
-                      </div>
 
                       <div>
                         {o.accionista_name && (
@@ -19622,25 +19606,7 @@ Motivo (obligatorio):`, ""));
                       ) : (
                         // PASO 2: ya está listo → elegir método de pago y despachar.
                         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: "auto" }}>
-                          {o.ya_cobrado ? (
-                            <span className="colaYaCobrado">✓ Ya cobrado · entrega pendiente</span>
-                          ) : (
-                          <select
-                            value={metodoPago}
-                            onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
-                            style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${metodoPago ? "var(--c-border)" : "#dc2626"}`, fontSize: 13 }}
-                          >
-                            {!metodoPago && <option value="" disabled>— ¿Cómo pagó? —</option>}
-                            <option value="CASH">💵 Efectivo</option>
-                            <option value="TRANSFER">🏦 Banco · transferencia</option>
-                            <option value="CARD">🏦 Banco · tarjeta</option>
-                            <option value="CHECK">🏦 Banco · cheque</option>
-                            <option value="CREDIT">📋 Crédito</option>
-                          </select>
-                          )}
-                          {!o.ya_cobrado && metodoDelPedido && !metodoPago && (
-                            <small className="muted" style={{ flexBasis: "100%" }}>Al tomar el pedido dijo: {metodoDelPedido}. Confírmalo o cámbialo.</small>
-                          )}
+                          {o.ya_cobrado && <span className="colaYaCobrado">✓ Ya cobrado · entrega pendiente</span>}
                           <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => { setColaAbierto(null); despacharPedido(o).catch((e) => addToast(e.message, "error")); }}>
                             {o.ya_cobrado ? "🚚 Entregar saldo" : "🚚 Despachar y entregar"}
                           </button>
@@ -19921,12 +19887,11 @@ Motivo (obligatorio):`, ""));
                       <span><small>Cliente</small><strong>{o.customer_name}</strong></span>
                       <span><small>Cantidad</small><strong>{qq.enReal()} QQ</strong></span>
                       {m.modo === "despacho" && m.metodo !== "YA_COBRADO" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
-                      {m.modo === "despacho" && <span><small>Cobro</small><strong>{m.metodo === "YA_COBRADO" ? "✓ Ya cobrado con el pedido original" : m.metodo === "CREDIT" ? "📋 Crédito" : m.metodo === "CASH" ? "💵 Efectivo, a la caja" : "🏦 Por el banco"}</strong></span>}
                       {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
                     </div>
                     {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>{m.metodo === "YA_COBRADO"
                       ? "Es la entrega pendiente de un pedido que ya se cobró completo: no se cobra otra vez."
-                      : <>La mercadería sale del inventario. {m.metodo === "CREDIT" ? "Queda como cuenta por cobrar al cliente." : "El cobro entra a la caja abierta."}</>}</p>}
+                      : "La mercadería sale del inventario. El cobro lo maneja Ventas con la forma de pago del pedido."}</p>}
 
                     {/* 🚚 ¿El camión se lleva todo? Si no, lo que queda pasa a un pedido saldo ya preparado (2026-10-23). */}
                     {m.modo === "despacho" && (o.items ?? []).every((it) => it.id) && (
