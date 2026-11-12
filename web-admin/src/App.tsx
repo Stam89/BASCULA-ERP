@@ -14685,6 +14685,11 @@ Motivo (obligatorio):`, ""));
         + fomentoRecibo.nuevos_saldos.map((n) => `<tr><td class="lbl">Nuevo saldo pendiente (${n.accionista_nombre}):</td><td class="val" style="color:#b45309">${money(Number(n.monto))}</td></tr>`).join("")
       : "";
 
+    // 📒 Hoja tipo Excel (pedido del dueño 2026-11-12): fecha de cada ingreso y los pagos hechos, con saldo acumulado.
+    type HojaLiq = { lineas: Array<{ fecha: string; tipo: string | null; lot_code: string | null; numero_bascula: string | null; qq: number; precio: number }>;
+      pagos: Array<{ fecha: string; monto: number; medio: string; detalle: string | null }> };
+    let hoja: HojaLiq = { lineas: [], pagos: [] };
+    try { hoja = await apiGet<HojaLiq>(`/liquidations/hoja?ids=${b.liquidation_ids.join(",")}`); } catch { /* imprime con lo que hay */ }
     const qqTotal = b.lots.reduce((s, l) => s + l.quintals, 0);
     // El NETO se calcula aquí: bruto menos anticipos menos otros descuentos.
     // No se confía en el net_amount guardado porque un anticipo aplicado
@@ -14722,70 +14727,88 @@ Motivo (obligatorio):`, ""));
         ? `<tr><td class="lbl disc">Desc. Anticipos</td><td class="val disc">-${money(b.advances_total)}</td></tr>`
         : "";
 
+    // Filas de la hoja: ingresos (+), descuentos y pagos (−), cada una con el saldo que va quedando.
+    const fCorta = (iso: string) => { const d = new Date(iso.slice(0, 10) + "T12:00:00"); return d.toLocaleDateString("es-EC", { day: "2-digit", month: "short" }).replace(".", ""); };
+    const diaLiq = b.created_at.slice(0, 10);
+    const filasHoja: Array<{ fecha: string; desc: string; qq?: number; precio?: number; abono?: number; valor: number }> = [];
+    const ingresos = hoja.lineas.length ? hoja.lineas : b.lots.map((l) => ({ fecha: diaLiq, tipo: l.rice_type, lot_code: l.lot_code, numero_bascula: null, qq: l.quintals, precio: l.price_per_quintal }));
+    for (const l of ingresos) {
+      const tipo = l.tipo === "CORRIENTE" ? "Corriente" : (l.tipo ?? "Arroz");
+      filasHoja.push({ fecha: l.fecha, desc: `${tipo}${l.numero_bascula ? ` · ticket ${l.numero_bascula}` : l.lot_code ? ` · ${l.lot_code}` : ""}`, qq: l.qq, precio: l.precio, valor: Math.round(l.qq * l.precio * 100) / 100 });
+    }
+    const descuento = (desc: string, monto: number, fecha = diaLiq) => { if (monto > 0.004) filasHoja.push({ fecha, desc, abono: monto, valor: -monto }); };
+    descuento("Báscula", b.discount_breakdown.bascula);
+    descuento("Flete", b.discount_breakdown.flete);
+    descuento("Cosechadora", b.discount_breakdown.cosechadora);
+    descuento("Fomento", b.discount_breakdown.fomento);
+    descuento("Otros descuentos", otrosAdicionales);
+    if (appliedAdvances.length) for (const a of appliedAdvances) descuento(`Anticipo ${a.advance_number}${a.concept ? ` · ${a.concept}` : ""}`, Number(a.amount_applied), (a.issued_at || diaLiq).slice(0, 10));
+    else descuento("Anticipos", b.advances_total);
+    for (const p of hoja.pagos) descuento(`${p.medio === "BANCO" ? "Transferencia" : "Pago en efectivo"}`, Number(p.monto), p.fecha);
+    let corrido = 0;
+    const filasHtml = filasHoja.map((f) => {
+      corrido = Math.round((corrido + f.valor) * 100) / 100;
+      return `<tr>
+        <td>${fCorta(f.fecha)}</td><td>${f.desc.replace(/</g, "&lt;")}</td>
+        <td class="n peso">${f.qq != null ? f.qq.enReal() : ""}</td>
+        <td class="n">${f.precio != null ? money(f.precio) : ""}</td>
+        <td class="n">${f.abono != null ? money(f.abono) : ""}</td>
+        <td class="n ${f.valor < 0 ? "neg" : ""}">${f.valor < 0 ? "-" + money(-f.valor) : money(f.valor)}</td>
+        <td class="n">${money(corrido)}</td>
+      </tr>`;
+    }).join("");
+    const pagado = Math.round(hoja.pagos.reduce((s, p) => s + Number(p.monto), 0) * 100) / 100;
+    const socioCorto = (accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "").slice(0, 2).toUpperCase();
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-      <title>Comprobante de Liquidación</title>
+      <title>Liquidación ${b.farmer_name}</title>
       <style>
         *{box-sizing:border-box}
-        body{font-family:Arial,sans-serif;font-size:13px;color:#111;margin:24px 32px}
-        .hdr{text-align:center;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
-        .hdr h1{margin:0;font-size:19px;letter-spacing:1px}
-        .hdr h2{margin:2px 0;font-size:13px;font-weight:normal}
-        .hdr h3{margin:6px 0 0;font-size:15px;letter-spacing:2px;text-transform:uppercase}
-        .meta{display:flex;justify-content:space-between;margin-bottom:14px;font-size:13px}
-        table{width:100%;border-collapse:collapse;margin-bottom:10px}
-        th{background:#f0f0f0;padding:6px 8px;text-align:left;border:1px solid #bbb;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
-        td{padding:6px 8px;border:1px solid #ccc;font-size:13px}
-        .totals{width:320px;margin-left:auto;border-collapse:collapse}
-        .totals td{padding:5px 8px;border:none;font-size:13px}
-        .lbl{font-weight:600;text-align:right;padding-right:12px}
-        .val{text-align:right}
-        .disc{color:#b91c1c}
-        .disc-header td{font-size:11px;font-weight:700;text-transform:uppercase;color:#888;padding-top:8px;padding-bottom:2px}
-        .total-row td{font-weight:700;font-size:15px;border-top:2px solid #111;padding-top:7px}
-        .sigs{display:flex;justify-content:space-around;margin-top:52px}
+        body{font-family:Arial,sans-serif;font-size:12.5px;color:#111;margin:18px 22px}
+        .neg{color:#b91c1c}
+        .emp{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:6px;font-size:11.5px;color:#444}
+        .emp b{font-size:14px;color:#111}
+        .barra{display:flex;align-items:stretch;margin-bottom:0}
+        .barra .nom{flex:1;background:#1f6f8b;color:#fff;font-size:24px;font-weight:800;padding:6px 12px;letter-spacing:.5px}
+        .barra .soc{background:#f08080;color:#fff;font-size:22px;font-weight:800;padding:6px 14px;min-width:64px;text-align:center}
+        table.h{width:100%;border-collapse:collapse}
+        table.h th{background:#1f6f8b;color:#fff;font-weight:600;padding:6px 8px;font-size:12px;text-align:left;border:1px solid #1f6f8b}
+        table.h td{padding:7px 8px;border:1px solid #9cc3d5;font-size:12.5px}
+        table.h tbody tr:nth-child(odd) td{background:#e6f1f6}
+        table.h .n{text-align:right;white-space:nowrap}
+        table.h td.peso{background:#a8d8ea !important;font-weight:700}
+        .pie{width:100%;border-collapse:collapse;margin-top:0}
+        .pie td{padding:6px 8px;font-size:12.5px}
+        .pie .lbl{text-align:right;color:#1f6f8b}
+        .total{display:flex;justify-content:flex-end;align-items:stretch;margin-top:8px}
+        .total .t1{background:#d6eaf2;padding:8px 14px;font-weight:800;font-size:14px}
+        .total .t2{background:#e53935;color:#fff;padding:8px 14px;font-weight:800;font-size:14px}
+        .total .t3{background:#fff;border:2px solid #111;padding:8px 18px;font-weight:800;font-size:16px;min-width:130px;text-align:right}
+        .sigs{display:flex;justify-content:space-around;margin-top:46px}
         .sig{text-align:center}
         .sig hr{width:180px;border:none;border-top:1px solid #111;margin:0 auto 4px}
-        .sig span{font-size:12px}
-        @media print{body{margin:10mm}}
+        .sig span{font-size:11.5px}
+        @media print{body{margin:8mm}}
       </style></head><body>
-      <div class="hdr">
-        <h1>${appSettings.business_name}</h1>
-        <h2>${appSettings.business_subtitle}</h2>
-        ${appSettings.ruc ? `<h2>RUC: ${appSettings.ruc}</h2>` : ""}
-        ${appSettings.address || appSettings.phone ? `<h2>${[appSettings.address, appSettings.phone && `Telf: ${appSettings.phone}`].filter(Boolean).join(" · ")}</h2>` : ""}
-        <h3>Comprobante de Liquidación</h3>
+      <div class="emp">
+        <div><b>${appSettings.business_name}</b>${appSettings.ruc ? ` · RUC ${appSettings.ruc}` : ""}${appSettings.phone ? ` · Telf ${appSettings.phone}` : ""}</div>
+        <div>Liquidación del ${fecha}</div>
       </div>
-      <div class="meta">
-        <div><strong>Agricultor:</strong> ${b.farmer_name}</div>
-        <div><strong>Fecha:</strong> ${fecha}</div>
-      </div>
-      <table>
-        <thead><tr><th>Lote</th><th>Tipo</th><th style="text-align:right">QQ</th><th style="text-align:right">Precio/QQ</th><th style="text-align:right">Subtotal</th></tr></thead>
-        <tbody>${lotsRows}</tbody>
+      <div class="barra"><div class="nom">${b.farmer_name.toUpperCase()}</div>${socioCorto ? `<div class="soc">${socioCorto}</div>` : ""}</div>
+      <table class="h">
+        <thead><tr><th style="width:62px">Fecha</th><th>Descripción</th><th class="n">Peso (QQ)</th><th class="n">Precio</th><th class="n">Abono</th><th class="n">Valor</th><th class="n">Saldo</th></tr></thead>
+        <tbody>${filasHtml}</tbody>
       </table>
-      <table class="totals">
-        <tr><td class="lbl">Total QQ:</td><td class="val">${qqTotal.enReal()} QQ</td></tr>
-        <tr><td class="lbl">Bruto:</td><td class="val">${money(b.gross_total)}</td></tr>
-        ${advanceRows.length > 0 ? `<tr class="disc-header"><td colspan="2">Anticipos descontados</td></tr>${advanceRows}` : ""}
-        ${b.other_disc_total > 0 ? `
-          <tr class="disc-header"><td colspan="2">Desglose de descuentos operativos</td></tr>
-          ${b.discount_breakdown.fomento     > 0 ? `<tr><td class="lbl disc">Fomento:</td><td class="val disc">-${money(b.discount_breakdown.fomento)}</td></tr>` : ""}
-          ${b.discount_breakdown.bascula     > 0 ? `<tr><td class="lbl disc">Báscula:</td><td class="val disc">-${money(b.discount_breakdown.bascula)}</td></tr>` : ""}
-          <tr><td class="lbl disc">Descuento de Cosechadora:</td><td class="val disc">-${money(b.discount_breakdown.cosechadora)}</td></tr>
-          <tr><td class="lbl disc">Total de Descuento de Flete:</td><td class="val disc">-${money(b.discount_breakdown.flete)}</td></tr>
-          ${otrosAdicionales > 0.01
-            ? `<tr><td class="lbl disc">Otros descuentos:</td><td class="val disc">-${money(otrosAdicionales)}</td></tr>`
-            : ""}
-        ` : ""}
-        <tr><td class="lbl disc">TOTAL DESCUENTOS:</td><td class="val disc">-${money(totalDescuentos)}</td></tr>
-        <tr class="total-row"><td class="lbl">NETO A PAGAR:</td><td class="val">${money(netoReal)}</td></tr>
-        ${fomentoRows}
+      <table class="pie">
+        <tr><td style="width:62px"></td><td class="lbl">QQ</td><td class="n" style="text-align:right;color:#1f6f8b;font-weight:700">${qqTotal.enReal()}</td><td></td>
+            <td class="lbl">Bruto ${money(b.gross_total)} · Descuentos ${money(totalDescuentos)}${pagado > 0 ? ` · Pagado ${money(pagado)}` : ""}</td></tr>
       </table>
+      <div class="total"><div class="t1">NETO ${money(netoReal)}</div><div class="t2">TOTAL A PAGAR</div><div class="t3">${money(corrido)}</div></div>
+      ${fomentoRows ? `<table style="margin-top:10px;width:auto">${fomentoRows}</table>` : ""}
       <div class="sigs">
         <div class="sig"><hr/><span>Agricultor</span></div>
         <div class="sig"><hr/><span>Responsable</span></div>
       </div>
-      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:28px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
+      ${appSettings.receipt_footer ? `<p style="text-align:center;margin-top:22px;font-size:11px;color:#666">${appSettings.receipt_footer}</p>` : ""}
     </body></html>`;
     const win = ventanaDeImpresion("liquidacion");
     if (win) { win.document.write(html); win.document.close(); win.print(); }

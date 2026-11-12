@@ -878,6 +878,41 @@ liquidationsRouter.post("/:id/apply-advances", asyncRoute(async (req, res) => {
 }));
 
 // Anticipos aplicados a un lote de liquidaciones (para impresión detallada)
+liquidationsRouter.get("/hoja", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const ids = String(req.query.ids ?? "").split(",").map((s) => s.trim()).filter((s) => /^[0-9a-f-]{36}$/i.test(s));
+  if (!ids.length) { res.json({ lineas: [], pagos: [] }); return; }
+  const lineas = (await pool.query(
+    `SELECT l.id, to_char(COALESCE(w.created_at, l.created_at) AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha,
+            COALESCE(w.rice_type, lo.rice_type) AS tipo, lo.lot_code, w.ticket_number,
+            (SELECT m.raw_payload->>'numeroTicket' FROM mobile_synced_tickets m WHERE m.weighing_ticket_id = w.id LIMIT 1) AS numero_bascula,
+            l.quintals::float AS qq, l.price_per_quintal::float AS precio
+       FROM liquidations l LEFT JOIN weighing_tickets w ON w.id = l.weighing_ticket_id LEFT JOIN lots lo ON lo.id = l.lot_id
+      WHERE l.id = ANY($1::uuid[]) AND l.accionista_id = $2
+      ORDER BY COALESCE(w.created_at, l.created_at)`,
+    [ids, accionistaId]
+  )).rows;
+  const pagos = (await pool.query(
+    `SELECT to_char(x.creado AT TIME ZONE 'America/Guayaquil', 'YYYY-MM-DD') AS fecha, SUM(x.monto)::float AS monto, x.medio, MIN(x.detalle) AS detalle
+       FROM (
+         SELECT m.id, m.created_at AS creado, c.monto AS monto, COALESCE(m.medio, 'EFECTIVO') AS medio, m.description AS detalle
+           FROM accounts_payable ap JOIN cash_movement_cuentas c ON c.tabla = 'accounts_payable' AND c.cuenta_id = ap.id
+           JOIN cash_movements m ON m.id = c.cash_movement_id
+          WHERE ap.liquidation_id = ANY($1::uuid[]) AND ap.accionista_id = $2 AND COALESCE(ap.reference_type, '') <> 'retencion_matriz'
+            AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+         UNION ALL
+         SELECT m.id, m.created_at, m.amount, COALESCE(m.medio, 'EFECTIVO'), m.description
+           FROM accounts_payable ap JOIN cash_movements m ON m.reference_type = 'accounts_payable' AND m.reference_id = ap.id
+          WHERE ap.liquidation_id = ANY($1::uuid[]) AND ap.accionista_id = $2 AND COALESCE(ap.reference_type, '') <> 'retencion_matriz'
+            AND m.movement = 'EXPENSE' AND m.reversed_at IS NULL AND m.reversal_of IS NULL
+            AND NOT EXISTS (SELECT 1 FROM cash_movement_cuentas c WHERE c.cash_movement_id = m.id)
+       ) x
+      GROUP BY x.id, x.creado, x.medio ORDER BY x.creado`,
+    [ids, accionistaId]
+  )).rows;
+  res.json({ lineas, pagos });
+}));
+
 liquidationsRouter.get("/applied-advances", asyncRoute(async (req, res) => {
   const { batch_id, liquidation_ids } = req.query;
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
