@@ -98,6 +98,13 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
       FROM costo_rubros r CROSS JOIN LATERAL unnest(r.categorias) AS x(codigo)
      WHERE r.activo
      GROUP BY x.codigo HAVING count(*) > 1` },
+  { modulo: "Compras", nombre: "Una compra a contado vigente tiene su pago en caja (o pasó a crédito con su Por Pagar)", sql: `
+    SELECT p.purchase_number, p.total_amount::float AS total
+      FROM purchases p
+     WHERE p.status = 'CONFIRMED' AND p.payment_type = 'CASH'
+       AND NOT EXISTS (SELECT 1 FROM cash_movements m WHERE m.reference_type = 'purchase' AND m.reference_id = p.id
+                          AND m.category = 'COMPRA_GENERAL' AND m.reversal_of IS NULL AND m.reversed_at IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM accounts_payable ap WHERE ap.reference_type = 'purchase' AND ap.reference_id = p.id AND ap.status <> 'CANCELLED')` },
   { modulo: "Caja / Resultado mensual", nombre: "Los egresos operativos activos de Matriz tienen rubro en Resultado mensual", sql: `
     SELECT c.codigo, c.nombre
       FROM cash_categories c

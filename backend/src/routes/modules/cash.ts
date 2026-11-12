@@ -19,6 +19,7 @@ import { dinero, notificar } from "../../services/notificaciones.js";
 import { vidaUtilPorTipo } from "../../services/activos.js";
 import ExcelJS from "exceljs";
 import { avisarSobregiro, medioParaCaja, saldosDeCaja, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
+import { medioPagoDeLaPeticion } from "../../http/medio-pago.js";
 import { anularPagoConBanco, registrarPagoConBanco, REF_PAGADO_CON_BANCO } from "../../services/pagado-con-banco.js";
 import { revertirMovimientoDePrestamo } from "./prestamos.js";
 import { getMatrizId } from "../../services/matriz.js";
@@ -58,6 +59,13 @@ async function getMovimientoDelAccionistaForUpdate(
   );
   if (!result.rows[0]) throw new ApiError(404, "Movimiento no disponible para el accionista activo");
   return result.rows[0];
+}
+
+// Efectivo o banco con que salió un pago de esta caja: el elegido en la petición (solo cuenta en una MIXTA) o el único
+// medio de la caja. Lo usa el espejo a Transporte para que una transferencia no entre a su gaveta.
+async function medioDelPago(client: PoolClient, cajaId: string): Promise<"EFECTIVO" | "BANCO"> {
+  const tipo = (await client.query("SELECT tipo FROM cash_registers WHERE id = $1", [cajaId])).rows[0]?.tipo ?? "EFECTIVO";
+  return medioParaCaja(tipo, medioPagoDeLaPeticion());
 }
 
 // Guarda una subcategoría escrita a mano para sugerirla luego (memoria). Es
@@ -773,6 +781,11 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
     if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta línea es la del banco: anula el movimiento al que acompaña y esta se anula sola.");
     if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
+    // El pago de una COMPRA a contado no se anula suelto (pedido del dueño 2026-11-12): la compra quedaba «pagada» sin
+    // dinero y sin deuda con el proveedor. Se anula la compra, o se pasa a crédito y queda en Por Pagar.
+    if (m.reference_type === "purchase" && m.category === "COMPRA_GENERAL") {
+      throw new ApiError(409, "Este es el pago de una compra: anúlala en Compras o, si fue a crédito, usa «Pasar a crédito» en esa compra (queda en Por Pagar).");
+    }
     // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
     await revertirMovimientoDePrestamo(client, m);
 
@@ -1933,7 +1946,8 @@ cashRouter.post("/payables/:id/pay", asyncRoute(async (req, res) => {
       desde: "payable",
       cuentaId: String(req.params.id),
       monto: body.amount,
-      descripcion: `Abono recibido de ${ap.rows[0].farmer_name ?? "accionista"}`
+      descripcion: `Abono recibido de ${ap.rows[0].farmer_name ?? "accionista"}`,
+      medio: await medioDelPago(client, body.cash_register_id)
     });
 
     return { paid: body.amount, remaining: newBalance, status: newStatus, espejo };
@@ -2037,14 +2051,15 @@ export async function pagarCuentasEnGrupo(client: PoolClient, req: Authenticated
       if (abono > 0 && pagador) {
         desglose.push({ id: ap.id, monto: abono });
         // Deuda con Transporte pagada por otro socio: entra como cobro a la caja de Transporte.
-        if (ap.reference_type === "campo_servicio") await espejarPagoATransporte(client, String(ap.id), abono);
+        if (ap.reference_type === "campo_servicio") await espejarPagoATransporte(client, String(ap.id), abono, await medioDelPago(client, cajaId));
       } else if (abono > 0) {
         desglose.push({ id: ap.id, monto: abono });
         espejos.push(await espejarAbonoEnContraparte(client, {
           desde: "payable",
           cuentaId: String(ap.id),
           monto: abono,
-          descripcion: `Abono recibido — ${ap.description ?? "cuenta entre accionistas"}${coment}`
+          descripcion: `Abono recibido — ${ap.description ?? "cuenta entre accionistas"}${coment}`,
+          medio: await medioDelPago(client, cajaId)
         }));
       }
       restante = round2(restante - abono);

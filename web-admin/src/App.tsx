@@ -2873,10 +2873,13 @@ export function App() {
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
   // sigue disponible (auto-detección desde la placa); solo faltaría el override manual.
   useEffect(() => {
+    // Se vuelve a pedir al iniciar sesión y al abrir un despacho: en el celular la app se abría antes de entrar y la
+    // lista de carros quedaba vacía («no apareció el carro de Transporte» al despachar, 2026-11-12).
+    if (!authUser?.id) return;
     apiGet<Array<{ id: string; nombre: string; tipo?: string }>>("/campo/activos?solo_activos=1")
       .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo }))))
       .catch(() => { /* Campo opcional: se ignora */ });
-  }, []);
+  }, [authUser?.id]);
   // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
   // prellena el monto a descontar con el saldo de cada uno.
   useEffect(() => {
@@ -3106,6 +3109,15 @@ export function App() {
   // Efectivo o banco de los cobros/pagos fuera del formulario de movimientos (Por Cobrar, Por Pagar, anticipos,
   // fomentos, venta al detalle). Solo se pregunta si la caja abierta es MIXTA; tras cada operación vuelve a efectivo.
   const [medioOperacion, setMedioOperacion] = useState<"EFECTIVO" | "BANCO">("EFECTIVO");
+  // Efectivo o banco SIN marcar por defecto (pedido del dueño 2026-11-12: se anulaban pagos y cobros porque quedaba
+  // «efectivo» sin que nadie lo eligiera). Hasta que se toca una opción, el selector sale vacío y no deja guardar.
+  const [medioElegido, setMedioElegido] = useState(false);
+  const elegirMedio = (m: "EFECTIVO" | "BANCO") => { setMedioOperacion(m); setMedioElegido(true); };
+  const reiniciarMedio = () => { setMedioOperacion("EFECTIVO"); setMedioElegido(false); };
+  const medioMostrado = medioElegido ? medioOperacion : null;
+  function exigirMedio(visible: boolean) {
+    if (visible && !medioElegido) throw new Error("Elige cómo se movió el dinero: 💵 Efectivo o 🏦 Banco / transferencia.");
+  }
   // Por Cobrar: el medio del cobro empieza SIN elegir y es obligatorio (efectivo o transferencia), aunque la caja sea
   // solo de efectivo (si llega al banco, la caja pasa sola a mixta).
   const [medioCobroElegido, setMedioCobroElegido] = useState(false);
@@ -4138,7 +4150,8 @@ export function App() {
   const [orderPickLocation, setOrderPickLocation] = useState<Record<string, string>>({});
   // Pedido que toma arroz de «allá»: ¿lo retira el transportista allá o YA lo trajeron a la piladora (sin registrar
   // el viaje)? En el 2º caso se registra el viaje de regreso (con su flete opcional) y la cuadrilla lo embarca.
-  type AllaLlego = { llego: boolean; flete_tipo: "" | "propia" | "tercero"; activo_id: string; prestador: string; monto: string };
+  // `aqui`: «🏭 Sale de aquí (se está pilando)»: sale todo de la piladora, sin tocar lo de allá (2026-11-12).
+  type AllaLlego = { llego: boolean; aqui?: boolean; flete_tipo: "" | "propia" | "tercero"; activo_id: string; prestador: string; monto: string };
   const [orderAllaLlego, setOrderAllaLlego] = useState<Record<string, AllaLlego>>({});
   // Modal de captura de datos del transportista para la Guía de Remisión.
   const [guiaModal, setGuiaModal] = useState<{ order: SalesOrder; nombre: string; cedula: string; placa: string } | null>(null);
@@ -4150,7 +4163,17 @@ export function App() {
     metodo?: string; registerId?: string; esDelActivo?: boolean; tarifaHint?: string; busy?: boolean;
     /** 🚚 El camión no se lleva todo: cuánto cargó de cada línea (id de la línea → QQ). */
     parcial?: boolean; cargado?: Record<string, string>;
+    /** 📅 Día en que salió el camión (vacío = hoy). */
+    fecha?: string;
   } | null>(null);
+  // Al abrir un despacho sin la lista de carros de Transporte (falló al iniciar), se vuelve a pedir.
+  const fleteModalAbierto = !!fleteModal;
+  useEffect(() => {
+    if (!fleteModalAbierto || fletaActivos.length) return;
+    apiGet<Array<{ id: string; nombre: string; tipo?: string }>>("/campo/activos?solo_activos=1")
+      .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo })))).catch(() => undefined);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fleteModalAbierto]);
   /** Pedido que se está editando (sus líneas vuelven al carrito). */
   const [pedidoEditando, setPedidoEditando] = useState<string | null>(null);
   // Socio dueño del pedido al abrir la edición: si se elige otro en «Vendiendo como», al guardar el pedido pasa a ese.
@@ -4278,7 +4301,7 @@ export function App() {
     // 🌾 Compra a un agricultor (p. ej. producto terminado): a crédito, la deuda queda a su nombre.
     farmer_id: "",
     compra_a: "PROVEEDOR" as "PROVEEDOR" | "AGRICULTOR",
-    payment_type: "CASH" as "CASH" | "CREDIT",
+    payment_type: "" as "" | "CASH" | "CREDIT",
     due_date: "",
     invoice_number: "",
     notes: ""
@@ -8738,7 +8761,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
         { receivable_ids: items.map((it) => it.id), amount: total, recibido_por: recibidoPor, medio_pago: medioOperacion,
           pagos: pagos.map(({ payable_ids, amount }) => ({ payable_ids, amount })), cruzar_con_receptor: cruzar > 0 ? cruzar : undefined }
       );
-      setMedioOperacion("EFECTIVO");
+      reiniciarMedio();
       setMedioCobroElegido(false);
       setCobroRecibidoPor("");
       setPagosConPlata({});
@@ -8756,7 +8779,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
         ? { receivable_ids: items.map((it) => it.id), amount: total, recibido_por: recibidoPor, medio_pago: medioOperacion }
         : { receivable_ids: items.map((it) => it.id), amount: total, cash_register_id: registerId, medio_pago: medioOperacion }
     );
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     setMedioCobroElegido(false);
     setCobroRecibidoPor("");
     await refreshReceivables();
@@ -8992,6 +9015,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     type ACuenta = { tipo: "AGRICULTOR"; aplicado: number; anticipo: number; total: number; de: string } | { tipo: "FOMENTO"; fomento: string; total: number; de: string };
     let venta: { customer_name: string; dueno?: string; se_lo_debes?: number; credito?: { pagado: number; debe: number; de: string }; a_cuenta?: ACuenta };
     try {
+      exigirMedio(cajaEsMixta && v.pagado !== 0);
       venta = await apiPost<typeof venta>("/sales/retail", {
         items: v.lineas.length > 1
           ? v.lineas.map((l) => ({ product_id: l.product_id, warehouse_id: finishedWarehouse.id, quantity_qq: l.qq, total_amount: l.total, product_name: l.producto }))
@@ -9821,7 +9845,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ...cuerpoEntregaFomento()
     });
     const aviso = fomentoPorTransferencia() ? avisoTransferenciaFomento() : null;
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     setFomentoTransferidoA("");
     setFomentoEntregaForm({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
     addToast(aviso ?? "Entrega registrada" + (dashboard.current_cash_register ? " y descontada de caja" : ""), "success");
@@ -9897,7 +9921,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ...cuerpoPagoFomento()
     });
     const aviso = avisoPagoFomento();
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     setFomentoPagoForm({ fecha: hoyLocal(), valor: "", concepto: "" });
     addToast(aviso, "success");
     await loadFomentoDetalle(fomentoDetalle.id);
@@ -10254,6 +10278,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       }
     }
     if (purchaseTotal() <= 0) { addToast("El total de la compra debe ser mayor a 0", "error"); return; }
+    // Sin valor por defecto (pedido del dueño 2026-11-12): una compra a crédito quedó como contado.
+    if (!purchaseForm.payment_type) { addToast("Elige el tipo de pago: contado (sale de la caja) o crédito (queda en Por Pagar)", "error"); return; }
 
     const payload: any = {
       supplier_id: aAgricultor ? undefined : purchaseForm.supplier_id,
@@ -10273,7 +10299,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
 
     try {
       await apiPost("/purchases", payload);
-      setPurchaseForm({ supplier_id: "", farmer_id: "", compra_a: purchaseForm.compra_a, payment_type: "CASH", due_date: "", invoice_number: "", notes: "" });
+      setPurchaseForm({ supplier_id: "", farmer_id: "", compra_a: purchaseForm.compra_a, payment_type: "", due_date: "", invoice_number: "", notes: "" });
       setPurchaseItems([{ item_type: "INSUMO", insumo_id: "", product_id: "", warehouse_id: "", quantity: "", unit_price: "" }]);
       await refreshPurchases();
       if (purchaseForm.payment_type === "CASH" && dashboard.current_cash_register?.id) {
@@ -10284,6 +10310,20 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       addToast(`Error: ${e instanceof Error ? e.message : "Error desconocido"}`, "error");
     }
   };
+
+  // 💳 Compra registrada a contado que en realidad fue a crédito: vuelve el dinero a la caja y nace la Por Pagar.
+  async function pasarCompraACredito(c: { id: string; purchase_number: string; supplier_name?: string; total_amount: string | number }) {
+    const motivo = await pedirTexto({
+      titulo: `Pasar a crédito la compra ${c.purchase_number}`,
+      mensaje: `${money(Number(c.total_amount))} vuelven a la caja (si no se anuló ya su pago) y quedan como deuda con ${c.supplier_name ?? "el proveedor"} en Por Pagar. El arroz o insumo sigue en inventario.`,
+      confirmar: "Pasar a crédito", minimo: 0, placeholder: "Motivo (opcional)"
+    });
+    if (motivo === null) return;
+    const r = await apiPost<{ devuelto_a_caja: number; monto: number }>(`/purchases/${c.id}/a-credito`, { reason: motivo.trim() || undefined });
+    addToast(`Compra a crédito: ${money(r.monto)} en Por Pagar${r.devuelto_a_caja > 0 ? ` · volvieron ${money(r.devuelto_a_caja)} a la caja` : ""}`, "success");
+    await refreshPurchases();
+    if (dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
+  }
 
   const submitNewSupplier = async () => {
     if (!supplierForm.name || supplierForm.name.trim().length < 2) { addToast("Nombre del proveedor requerido", "error"); return; }
@@ -10463,7 +10503,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       setCajaFomentoMonto("");
       setCajaFomentoConcepto("");
       setFomentoTransferidoA("");
-      setMedioOperacion("EFECTIVO");
+      reiniciarMedio();
       const porSocio = r?.entregado_por_matriz;
       addToast(porSocio
         ? `Entregado ${money(valor)} del fomento de ${porSocio.socio} (${seleccionado.farmer_name}) con esta caja.` +
@@ -10793,6 +10833,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     // Lo que esta caja le debe hoy: se paga primero (de lo más viejo a lo más nuevo) y el resto queda de anticipo.
     const debe = round2(cashPayables.filter((p) => p.farmer_id === farmerId && !p.entre_socios && Number(p.balance) > 0.005)
       .reduce((s, p) => s + Number(p.balance), 0));
+    exigirMedio(cajaEsMixta);
     await apiPost("/advances", {
       farmer_id: farmerId,
       amount,
@@ -10801,7 +10842,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       apply_to_payables: true,
       ...cuerpoMedio(medioOperacion)
     });
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     safeResetForm(formElement);
     const pagado = Math.min(debe, amount);
     const nombre = farmers.find((f) => f.id === farmerId)?.full_name ?? "el agricultor";
@@ -11198,12 +11239,14 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   const cajaAdmiteTransferencia = cajaEsMixta || dashboard.current_cash_register?.tipo === "EFECTIVO";
   function fomentoPorTransferencia() { return cajaAdmiteTransferencia && medioOperacion === "BANCO"; }
   function cuerpoEntregaFomento() {
+    exigirMedio(cajaAdmiteTransferencia);
     return {
       ...cuerpoMedio(medioOperacion),
       ...(fomentoPorTransferencia() ? { pagado_con_banco: true, transferido_a: fomentoTransferidoA.trim() || undefined } : {})
     };
   }
   function cuerpoPagoFomento() {
+    exigirMedio(cajaAdmiteTransferencia);
     return { ...cuerpoMedio(medioOperacion), ...(fomentoPorTransferencia() ? { pagado_con_banco: true } : {}) };
   }
   function avisoPagoFomento() {
@@ -11213,7 +11256,9 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     return `Transferencia registrada${fomentoTransferidoA.trim() ? ` a ${fomentoTransferidoA.trim()}` : ""}${cajaEsMixta ? "" : ": no salió de la gaveta"}`;
   }
 
-  async function pagarCuenta(payableId: string, amount: number, medio: "EFECTIVO" | "BANCO" = medioOperacion) {
+  async function pagarCuenta(payableId: string, amount: number, medioDado?: "EFECTIVO" | "BANCO") {
+    if (!medioDado) exigirMedio(cajaEsMixta);
+    const medio = medioDado ?? medioOperacion;
     const registerId = dashboard.current_cash_register?.id;
     if (!registerId) throw new Error("No hay caja abierta");
     await apiPost(`/cash/payables/${payableId}/pay`, {
@@ -11222,7 +11267,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       ...cuerpoMedio(medio)
     });
     addToast(medio === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     await refreshCaja(registerId);
   }
 
@@ -11231,6 +11276,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   async function pagarGrupoCuentas(payableIds: string[], amount: number) {
     const registerId = dashboard.current_cash_register?.id;
     const pagadoPor = pagoHechoPor;
+    exigirMedio(cajaEsMixta || !!pagadoPor);
     const comentario = pagoComentario.trim() || undefined;
     if (!registerId && !pagadoPor) throw new Error("No hay caja abierta");
     const r = await apiPost<{ pago_por_socio?: { pagador: string; descontado: number; deuda_nueva: number } | null }>("/cash/payables/pay-group",
@@ -11244,7 +11290,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
         (ps.descontado > 0 ? ` Se descontaron ${money(ps.descontado)} de lo que ${ps.pagador} te debía.` : "") +
         (ps.deuda_nueva > 0 ? ` Le debes ${money(ps.deuda_nueva)} a ${ps.pagador}.` : "")
       : medioOperacion === "BANCO" && cajaEsMixta ? "Pago registrado (🏦 por el banco)" : "Pago registrado", "success");
-    setMedioOperacion("EFECTIVO");
+    reiniciarMedio();
     setPagoHechoPor("");
     setPagoComentario("");
     if (registerId) await refreshCaja(registerId);
@@ -13699,6 +13745,7 @@ Motivo (obligatorio):`, ""));
       traidos_alla?: Array<{ producto: string; bodega: string; qq: number }>;
     }>(`/orders/${order.id}/prepare`, {
       alla_ya_llego: allaYaLlego,
+      desde_piladora: al?.aqui ? true : undefined,
       prepared,
       picking_location: location || undefined,
       prepared_by: authUser?.id,
@@ -13866,7 +13913,8 @@ Motivo (obligatorio):`, ""));
         warehouse_id: finishedWarehouse.id,
         created_by: authUser?.id,
         flete: m.conFlete ? { activo_id: m.activoId, monto: total } : undefined,
-        cargado
+        cargado,
+        fecha: m.fecha && m.fecha !== hoyLocal() ? m.fecha : undefined
       }, optsPedido(m.order));
       setFleteModal(null);
       addToast((m.metodo === "YA_COBRADO" ? `Saldo ${m.order.order_number} entregado (ya estaba cobrado en la venta ${result.sale.sale_number})` :
@@ -14379,6 +14427,8 @@ Motivo (obligatorio):`, ""));
     setLiqEntryPickerOpen(false);
   }
 
+  // 💵 Pagar o abonar al liquidar (pedido del dueño 2026-11-12). «No» = queda en Por Pagar, como siempre.
+  const [liqPago, setLiqPago] = useState<{ modo: "NO" | "TODO" | "ABONO"; monto: string; medio: "" | "EFECTIVO" | "BANCO" }>({ modo: "NO", monto: "", medio: "" });
   async function submitLiquidations() {
     const validLines = liqLines.filter((l) => l.lot_id && l.price);
     if (!liqFarmerId || validLines.length === 0) {
@@ -14465,7 +14515,18 @@ Motivo (obligatorio):`, ""));
           : undefined,
         batch_id: batchId
     }));
-    const resultados = await apiPost<LiqApiResult[]>("/liquidations/lote", { lineas: cuerpos });
+    let pago: { todo?: boolean; monto?: number; cash_register_id: string; medio_pago?: "EFECTIVO" | "BANCO" } | undefined;
+    if (liqPago.modo !== "NO") {
+      const caja = dashboard.current_cash_register;
+      if (!caja?.id) throw new Error("Para pagar ahora abre la caja (o elige «No, queda en Por Pagar»).");
+      if (caja.tipo === "MIXTO" && !liqPago.medio) throw new Error("Elige cómo se le paga: 💵 Efectivo o 🏦 Transferencia.");
+      const monto = round2(Number(liqPago.monto));
+      if (liqPago.modo === "ABONO" && !(monto > 0)) throw new Error("Escribe cuánto se le abona ahora.");
+      pago = { cash_register_id: caja.id, ...(liqPago.modo === "TODO" ? { todo: true } : { monto }),
+        ...(caja.tipo === "MIXTO" && liqPago.medio ? { medio_pago: liqPago.medio } : {}) };
+    }
+    const resultados = await apiPost<Array<LiqApiResult & { pago_inmediato?: { pagado: number; queda: number } }>>("/liquidations/lote", { lineas: cuerpos, pago });
+    const pagoHecho = resultados[0]?.pago_inmediato;
     for (let i = 0; i < resultados.length; i++) {
       const result = resultados[i];
       const { entry } = preparedLines[i];
@@ -14499,8 +14560,11 @@ Motivo (obligatorio):`, ""));
     if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: ${money(cargosCampoTotal)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): ${money(fomentoCruceSocios)}`;
     if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por ${money(saldoContraMonto)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
+    if (pagoHecho) cruceMsg += ` · 💵 Pagado ahora ${money(pagoHecho.pagado)}${pagoHecho.queda > 0.005 ? ` · queda ${money(pagoHecho.queda)} en Por Pagar` : " (pagado completo)"}`;
+    setLiqPago({ modo: "NO", monto: "", medio: "" });
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
+    if (pagoHecho && dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
   }
 
   // Comprobante de venta imprimible, con el membrete del negocio (igual que el
@@ -15228,7 +15292,7 @@ Motivo (obligatorio):`, ""));
                 </div>
                 {dashboard.current_cash_register?.tipo === "MIXTO" && (
                   <div className="cj-card" style={{ padding: "10px 14px", marginBottom: 10 }}>
-                    <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
+                    <MedioPagoSelector value={medioMostrado} onChange={elegirMedio} pregunta="¿El cliente paga en efectivo o por transferencia?" />
                   </div>
                 )}
                 <VentaDetalleCard
@@ -19575,10 +19639,13 @@ Motivo (obligatorio):`, ""));
                           <div className="allaPedido">
                             <div>📍 Parte de este pedido estaba allá: {detalle}</div>
                             <div className="allaPedido__seg" role="group" aria-label="¿Dónde está ese arroz?">
-                              <button type="button" className={!al.llego ? "on" : ""} onClick={() => setAl({ llego: false })}>🚚 Lo retira el transportista allá</button>
-                              <button type="button" className={al.llego ? "on" : ""} onClick={() => setAl({ llego: true })}>🏭 Ya está en la piladora</button>
+                              <button type="button" className={!al.llego && !al.aqui ? "on" : ""} onClick={() => setAl({ llego: false, aqui: false })}>🚚 Lo retira el transportista allá</button>
+                              <button type="button" className={al.llego ? "on" : ""} onClick={() => setAl({ llego: true, aqui: false })}>🏭 Lo trajeron de allá</button>
+                              <button type="button" className={al.aqui ? "on" : ""} onClick={() => setAl({ llego: false, aqui: true })}>⚙️ Sale de aquí (se está pilando)</button>
                             </div>
-                            {!al.llego ? (
+                            {al.aqui ? (
+                              <small>Sale todo de la piladora, de lo que se está pilando: lo de allá queda allá. Si el inventario aún no lo tiene, queda en negativo hasta registrar la producción. La cuadrilla lo embarca (se le paga).</small>
+                            ) : !al.llego ? (
                               <small>Baja de lo que quedó allá. La cuadrilla no lo embarca (no se le paga).</small>
                             ) : (
                               <>
@@ -19919,6 +19986,14 @@ Motivo (obligatorio):`, ""));
                       {m.modo === "despacho" && m.metodo !== "YA_COBRADO" && <span><small>Total</small><strong>{money(Number(o.total_amount))}</strong></span>}
                       {!m.esDelActivo && m.modo === "despacho" && <span><small>Vende</small><strong>{o.accionista_name}</strong></span>}
                     </div>
+                    {m.modo === "despacho" && (
+                      <label className="despachoModal__fecha">
+                        <span>📅 ¿Qué día salió el camión?</span>
+                        <input type="date" value={m.fecha || hoyLocal()} max={hoyLocal()}
+                          onChange={(e) => setFleteModal({ ...m, fecha: e.target.value || hoyLocal() })} />
+                        {m.fecha && m.fecha !== hoyLocal() && <small style={{ color: "#b45309", fontWeight: 700 }}>Se registra con esa fecha: la venta, el cobro, el inventario y el flete.</small>}
+                      </label>
+                    )}
                     {m.modo === "despacho" && <p className="muted" style={{ margin: 0, fontSize: 12.5 }}>{m.metodo === "YA_COBRADO"
                       ? "Es la entrega pendiente de un pedido que ya se cobró completo: no se cobra otra vez."
                       : "La mercadería sale del inventario. El cobro lo maneja Ventas con la forma de pago del pedido."}</p>}
@@ -20354,14 +20429,15 @@ Motivo (obligatorio):`, ""));
                   onCambiar={(id) => setPurchaseForm({ ...purchaseForm, supplier_id: id })} />
               </label>
               )}
-              <label><span>Tipo de pago</span>
-                <select value={purchaseForm.payment_type}
+              <label><span>Tipo de pago *</span>
+                <select value={purchaseForm.payment_type} required
                   onChange={(e: any) => setPurchaseForm({ ...purchaseForm, payment_type: e.target.value })}>
+                  <option value="">— Elige: ¿contado o crédito? —</option>
                   <option value="CASH">Contado (paga de caja)</option>
                   <option value="CREDIT">Crédito (cuenta por pagar)</option>
                 </select>
               </label>
-              {purchaseForm.payment_type === "CASH" ? (
+              {purchaseForm.payment_type === "" ? null : purchaseForm.payment_type === "CASH" ? (
                 <p className="muted">
                   {dashboard.current_cash_register?.id ? "Se registrara el gasto en la caja abierta." : "⚠️ No hay caja abierta; abre una para comprar a contado."}
                 </p>
@@ -20457,7 +20533,13 @@ Motivo (obligatorio):`, ""));
                             <strong>{c.purchase_number} — {c.supplier_name}</strong>
                             <small>{(c.purchase_date || "").slice(0, 10)} · {c.payment_type === "CASH" ? "Contado" : "Crédito"} · {c.status}</small>
                           </div>
-                          <strong>{money(Number(c.total_amount))}</strong>
+                          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <strong>{money(Number(c.total_amount))}</strong>
+                            {isAdmin && c.payment_type === "CASH" && c.status === "CONFIRMED" && (
+                              <button type="button" className="btnSecondary" title="Fue a crédito: el dinero vuelve a la caja y la deuda queda en Por Pagar"
+                                onClick={() => { pasarCompraACredito(c).catch((e) => addToast(e.message, "error")); }}>💳 Pasar a crédito</button>
+                            )}
+                          </span>
                         </div>
                       ))}
                     </div>
@@ -21125,7 +21207,7 @@ Motivo (obligatorio):`, ""));
                                 : "No se le debe nada: todo queda de anticipo y se descuenta solo en su próxima liquidación."}
                             </small>
                           )}
-                          {cajaEsMixta && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿Sale en efectivo o por el banco?" />}
+                          {cajaEsMixta && <MedioPagoSelector value={medioMostrado} onChange={elegirMedio} pregunta="¿Sale en efectivo o por el banco?" />}
                           <button className="primary" style={{ width: "100%", padding: "10px 0" }} disabled={!sel}>💰 Entregar al agricultor</button>
                         </>
                       );
@@ -22165,7 +22247,7 @@ Motivo (obligatorio):`, ""));
                 {/* ── Venta Detalle (por Libra o por QQ) ── */}
                 {cajaSubTab === "venta_detalle" && cajaEsMixta && (
                   <div className="cj-card" style={{ padding: "10px 14px", marginBottom: 10 }}>
-                    <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El cliente paga en efectivo o por transferencia?" />
+                    <MedioPagoSelector value={medioMostrado} onChange={elegirMedio} pregunta="¿El cliente paga en efectivo o por transferencia?" />
                   </div>
                 )}
                 {/* «¿De quién es el arroz?» y «¿Cómo paga?» van al final de la tarjeta (VentaDetalleCard). */}
@@ -22341,12 +22423,12 @@ Motivo (obligatorio):`, ""));
                       </label>
 
                       {cajaFomentoAccion === "entrega" && cajaAdmiteTransferencia && (
-                        <EntregaFomentoMedio medio={medioOperacion} onMedio={setMedioOperacion} mixta={cajaEsMixta}
+                        <EntregaFomentoMedio medio={medioMostrado} onMedio={elegirMedio} mixta={cajaEsMixta}
                           transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
                           onFangueada={() => setCajaFomentoConcepto("Fangueada")} />
                       )}
                       {cajaFomentoAccion === "pago" && cajaAdmiteTransferencia && (
-                        <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El pago llegó en efectivo o por transferencia?" />
+                        <MedioPagoSelector value={medioMostrado} onChange={elegirMedio} pregunta="¿El pago llegó en efectivo o por transferencia?" />
                       )}
 
                       <button type="submit" disabled={cajaFomentoGuardando || cajaFomentosCargando || !!cajaFomentosError}
@@ -22910,6 +22992,30 @@ Motivo (obligatorio):`, ""));
                       </div>
                     )}
                     <small>* Anticipos pendientes se descuentan automáticamente</small>
+                  </div>
+
+                  {/* 💵 ¿Se le paga ahora? Sale de la caja abierta y baja lo que se le debe (lo que quede, a Por Pagar). */}
+                  <div className="liqPagoAhora">
+                    <span className="liqPagoAhora__t">💵 ¿Se le paga ahora?</span>
+                    <div className="sacxForm__seg" role="group" aria-label="Pago al liquidar">
+                      <button type="button" className={liqPago.modo === "NO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "NO" })}>No, queda en Por Pagar</button>
+                      <button type="button" className={liqPago.modo === "TODO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "TODO" })}>Pagar todo</button>
+                      <button type="button" className={liqPago.modo === "ABONO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "ABONO" })}>Abonar una parte</button>
+                    </div>
+                    {liqPago.modo === "ABONO" && (
+                      <label><span>¿Cuánto se le abona? ($)</span>
+                        <input type="number" min="0" step="0.01" inputMode="decimal" value={liqPago.monto} placeholder="0.00"
+                          onChange={(e) => setLiqPago({ ...liqPago, monto: e.target.value })} />
+                      </label>
+                    )}
+                    {liqPago.modo !== "NO" && dashboard.current_cash_register?.tipo === "MIXTO" && (
+                      <MedioPagoSelector value={liqPago.medio || null} onChange={(m) => setLiqPago({ ...liqPago, medio: m })} pregunta="¿En efectivo o por transferencia?" />
+                    )}
+                    {liqPago.modo !== "NO" && (
+                      <small className="muted">{dashboard.current_cash_register
+                        ? `Sale de la caja abierta${dashboard.current_cash_register.tipo === "BANCO" ? " (banco)" : dashboard.current_cash_register.tipo === "EFECTIVO" ? " (efectivo)" : ""} en el mismo momento.${liqPago.modo === "ABONO" ? " Lo que falte queda en Por Pagar." : ""}`
+                        : "⚠️ No hay caja abierta: ábrela para pagar ahora."}</small>
+                    )}
                   </div>
 
                   <button className="primary"
@@ -23526,7 +23632,7 @@ Motivo (obligatorio):`, ""));
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
                         </label>
                         {cajaAdmiteTransferencia && (
-                          <EntregaFomentoMedio medio={medioOperacion} onMedio={setMedioOperacion} mixta={cajaEsMixta}
+                          <EntregaFomentoMedio medio={medioMostrado} onMedio={elegirMedio} mixta={cajaEsMixta}
                             transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
                             onFangueada={() => setFomentoEntregaForm(p => ({...p, concepto: "Fangueada"}))} />
                         )}
@@ -23596,7 +23702,7 @@ Motivo (obligatorio):`, ""));
                             onChange={e => setFomentoPagoForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Abono / pago total" />
                         </label>
-                        {cajaAdmiteTransferencia && <MedioPagoSelector value={medioOperacion} onChange={setMedioOperacion} pregunta="¿El agricultor pagó en efectivo o por transferencia?" />}
+                        {cajaAdmiteTransferencia && <MedioPagoSelector value={medioMostrado} onChange={elegirMedio} pregunta="¿El agricultor pagó en efectivo o por transferencia?" />}
                         <button type="submit" style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: 6, padding: "8px 16px", cursor: "pointer", fontWeight: 700 }}>
                           💵 Registrar Pago
                           {dashboard.current_cash_register && (fomentoPorTransferencia() ? (cajaEsMixta ? " (entra al banco)" : " (no entra a la gaveta)") : " (entra a caja)")}
@@ -24032,7 +24138,7 @@ Motivo (obligatorio):`, ""));
                 color="cobrar"
                 disabled={!dashboard.current_cash_register && !cobroRecibidoPor}
                 disabledMsg="Abre una caja para poder cobrar (o elige abajo quién recibió el dinero)."
-                onClose={() => { setArDetalleKey(null); setCobroRecibidoPor(""); setMedioOperacion("EFECTIVO"); setMedioCobroElegido(false); setPagosConPlata({}); }}
+                onClose={() => { setArDetalleKey(null); setCobroRecibidoPor(""); reiniciarMedio(); setMedioCobroElegido(false); setPagosConPlata({}); }}
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
@@ -24212,16 +24318,17 @@ Motivo (obligatorio):`, ""));
                 })()}
                 disabled={!dashboard.current_cash_register && !pagoHechoPor}
                 disabledMsg="Abre una caja para poder pagar (o elige abajo quién pagó)."
-                onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); setMedioOperacion("EFECTIVO"); setPagoComentario(""); }}
+                onClose={() => { setApDetalleKey(null); setPagoHechoPor(""); reiniciarMedio(); setPagoComentario(""); }}
                 comentario={{ value: pagoComentario, onChange: setPagoComentario }}
                 onPagarTotal={() => pagarTotalPayableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onPagarSeleccion={(ids) => pagarSeleccionPayable(detalleGrupo.items, ids).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
-                medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: setMedioOperacion } : undefined}
+                medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: elegirMedio } : undefined}
+                medioSinElegir={(cajaEsMixta || !!pagoHechoPor) && !medioElegido}
                 recibidoPor={detalleGrupo.items.some((it) => it.entre_socios && it.reference_type !== "campo_servicio") ? undefined : {
                   value: pagoHechoPor,
-                  onChange: (id) => { setPagoHechoPor(id); setMedioOperacion("EFECTIVO"); },
+                  onChange: (id) => { setPagoHechoPor(id); reiniciarMedio(); },
                   opciones: accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "MATRIZ" || a.tipo === "SOCIO"))
                     .map((a) => ({ id: a.id, name: a.tipo === "MATRIZ" ? `${a.name} (Matriz)` : a.name }))
                 }}
@@ -30568,7 +30675,7 @@ function MedioPagoSelector({ value, onChange, pregunta }: { value: "EFECTIVO" | 
 
 /** Entrega de un fomento: en efectivo o por transferencia, al agricultor o a quien hizo el trabajo (la fangueada). */
 function EntregaFomentoMedio({ medio, onMedio, mixta, transferidoA, onTransferidoA, onFangueada }: {
-  medio: "EFECTIVO" | "BANCO"; onMedio: (m: "EFECTIVO" | "BANCO") => void; mixta: boolean;
+  medio: "EFECTIVO" | "BANCO" | null; onMedio: (m: "EFECTIVO" | "BANCO") => void; mixta: boolean;
   transferidoA: string; onTransferidoA: (v: string) => void; onFangueada: () => void;
 }) {
   return (

@@ -214,6 +214,65 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
   res.status(201).json(result);
 }));
 
+// POST pasar a CRÉDITO una compra registrada a contado (pedido del dueño 2026-11-12): el pago vuelve a la caja (si aún
+// no se anuló) y nace la Cuenta por Pagar al proveedor/agricultor; la compra y su inventario quedan igual. También
+// arregla una compra cuyo pago se anuló suelto en Caja (antes no quedaba ni dinero ni deuda). Solo admin.
+purchasesRouter.post("/:id/a-credito", requireAdmin, asyncRoute(async (req, res) => {
+  const authReq = req as AuthenticatedRequest;
+  const accionistaId = authReq.accionistaId ?? null;
+  const body = z.object({
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    reason: z.string().trim().max(200).optional()
+  }).parse(req.body ?? {});
+  const result = await inTransaction(async (client) => {
+    const purchase = (await client.query("SELECT * FROM purchases WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId])).rows[0];
+    if (!purchase) throw new ApiError(404, "Compra no encontrada para el accionista activo");
+    if (purchase.status === "CANCELLED") throw new ApiError(409, "La compra está anulada.");
+    if (purchase.payment_type !== "CASH") throw new ApiError(409, "La compra ya es a crédito.");
+    const ya = await client.query("SELECT 1 FROM accounts_payable WHERE reference_type = 'purchase' AND reference_id = $1 AND status <> 'CANCELLED'", [purchase.id]);
+    if (ya.rowCount) throw new ApiError(409, "La compra ya tiene su Cuenta por Pagar.");
+    const motivo = body.reason || "la compra fue a crédito";
+    // Pago en caja aún vigente: contra-asiento en la caja abierta (la de la compra si sigue abierta).
+    const pago = (await client.query(
+      `SELECT m.* FROM cash_movements m WHERE m.reference_type = 'purchase' AND m.reference_id = $1 AND m.category = 'COMPRA_GENERAL'
+          AND m.reversal_of IS NULL AND m.reversed_at IS NULL FOR UPDATE`,
+      [purchase.id]
+    )).rows[0];
+    let devuelto = 0;
+    if (pago) {
+      const cajaMov = (await client.query("SELECT status FROM cash_registers WHERE id = $1", [pago.cash_register_id])).rows[0];
+      let caja = pago.cash_register_id as string;
+      if (cajaMov?.status !== "OPEN") {
+        const abierta = (await client.query("SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [accionistaId])).rows[0];
+        if (!abierta) throw new ApiError(409, "Abre la caja de hoy: ahí vuelve el dinero de la compra.");
+        caja = abierta.id;
+      }
+      await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+         VALUES ($1, 'INCOME', $2, $3, $4, 'reversal', $5, $5, $6, $7)`,
+        [caja, pago.category, pago.amount, `Anulación: pasa a crédito la compra ${purchase.purchase_number} (${motivo})`, pago.id, authReq.user?.id ?? null, pago.medio ?? null]
+      );
+      await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1",
+        [pago.id, authReq.user?.id ?? null, `Pasa a crédito: ${motivo}`]);
+      devuelto = Number(pago.amount);
+    }
+    const quien = purchase.farmer_id
+      ? `agricultor ${(await client.query("SELECT full_name FROM farmers WHERE id = $1", [purchase.farmer_id])).rows[0]?.full_name ?? ""}`
+      : (await client.query("SELECT name FROM suppliers WHERE id = $1", [purchase.supplier_id])).rows[0]?.name ?? "proveedor";
+    const ap = (await client.query(
+      `INSERT INTO accounts_payable (farmer_id, accionista_id, amount, balance, status, due_date, reference_type, reference_id, description)
+       VALUES ($1, $2, $3, $3, 'CONFIRMED', $4, 'purchase', $5, $6) RETURNING id`,
+      [purchase.farmer_id ?? null, accionistaId, purchase.total_amount, body.due_date ?? null, purchase.id, `Compra ${purchase.purchase_number} a ${quien}`]
+    )).rows[0];
+    await client.query(
+      "UPDATE purchases SET payment_type = 'CREDIT', notes = concat_ws(' · ', NULLIF(notes, ''), $2::text) WHERE id = $1",
+      [purchase.id, `Pasó a crédito: ${motivo}`]
+    );
+    return { purchase_id: purchase.id, cuenta_por_pagar: ap.id, devuelto_a_caja: devuelto, monto: Number(purchase.total_amount) };
+  });
+  res.json(result);
+}));
+
 // POST anular una compra por contra-asiento (nunca borrado fisico). Solo admin.
 purchasesRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;

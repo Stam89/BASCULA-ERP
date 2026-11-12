@@ -2,7 +2,26 @@
 
 Actualizado: 2026-11-06
 
-## Último cambio: Ventas por asignar sin stock + bajada de tickets quitados (2026-11-10)
+## Último cambio: 🧰 Arreglos del 12/11 (compras, medio de pago, despacho, Transporte, liquidación)
+
+- **Compras**: el tipo de pago ya no viene en «Contado»: hay que elegirlo. El pago de una compra (cash_movements
+  reference_type 'purchase', COMPRA_GENERAL) ya no se anula suelto en Caja (409). Nuevo `POST /purchases/:id/a-credito`
+  (admin, botón «💳 Pasar a crédito» en la lista): devuelve el pago a la caja (si sigue vigente) y crea la Por Pagar.
+  Regla de integridad nueva «compra a contado vigente sin pago ni Por Pagar». Dato pendiente: COMP-20261112164302-ZCXH
+  (STALYN, Adrián, 35.3 QQ, $1,412): su pago se anuló suelto y no hay deuda; se arregla con «Pasar a crédito».
+- **Efectivo / banco sin marcar por defecto** (`medioElegido`, `elegirMedio`, `reiniciarMedio`, `exigirMedio` en App.tsx):
+  Por Pagar, arroz en cáscara, venta detalle y fomentos no guardan hasta elegir (en cajas mixtas o donde aplica).
+- **Transporte**: `espejarPagoATransporte(…, medio)` manda lo pagado por banco a la cuenta BANCO de Transporte (antes
+  todo a CAJA). `medioDelPago` en cash.ts. Dato pendiente: 3 cobros del 11/11 (STALYN por banco: $50 + $6.35 + $904.95)
+  quedaron en la CAJA de Transporte; gaveta ERP 1416.73 vs manual 376.74 (queda $78.69 sin explicar).
+- **Despacho con fecha** (`services/fecha-despacho.ts`, `fecha` en POST /orders/:id/deliver, «📅 ¿Qué día salió el
+  camión?»): venta, cobro, cuentas, flete y cuadrilla de ese día (≤30 días; la caja debe estar abierta ese día).
+- **Preparar pedido** con arroz allá: tercera opción «⚙️ Sale de aquí (se está pilando)» (`desde_piladora`): todo de la
+  piladora con `permitirNegativo`, sin tocar allá. Carros de Transporte se recargan al iniciar sesión y al abrir un despacho.
+- **Liquidación**: «💵 ¿Se le paga ahora?» (No / Pagar todo / Abonar) → `pago` en POST /liquidations/lote, usa
+  `pagarCuentasEnGrupo` en la misma transacción (fija `app.medio_pago`). Simulacro `arreglos_1112`.
+
+## Cambio anterior: Ventas por asignar sin stock + bajada de tickets quitados (2026-11-10)
 
 - Asignar «Decidir después» a un socio sin stock suficiente ya no se rechaza: `crearVenta(..., { permitirNegativo: true })` → `consumeInventoryFIFO.permitirNegativo` saca lo que hay y el faltante va sin lote con nota «Sin stock suficiente: queda en negativo…»; la regla de consistencia de existencias negativas lo acepta. Simulacro `venta_detalle_por_asignar` C actualizado.
 - Bajada de carro: `TICKET_ELEGIBLE` (cuadrilla.ts) incluye tickets quitados que tengan `bajada_manual` (no `__NO__`). Datos: JOSE en #480/483/484/486 de Fredy Villamar.

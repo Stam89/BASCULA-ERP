@@ -14,6 +14,7 @@ import { registrarCargoCampoLiquidacion, type CargoCampoLiquidacion } from "../.
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { precioDeBascula } from "../../utils/precio-bascula.js";
+import { pagarCuentasEnGrupo } from "./cash.js";
 
 export const liquidationsRouter = Router();
 
@@ -258,11 +259,41 @@ liquidationsRouter.post("/", asyncRoute(async (req, res) => {
 // ninguna. Antes la pantalla enviaba línea por línea y, si una fallaba a la mitad, las anteriores quedaban hechas.
 liquidationsRouter.post("/lote", asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const { lineas } = z.object({ lineas: z.array(liquidationInput).min(1).max(50) }).parse(req.body);
+  const { lineas, pago } = z.object({
+    lineas: z.array(liquidationInput).min(1).max(50),
+    // 💵 Pagar o abonar en el mismo momento (pedido del dueño 2026-11-12): sale de la caja abierta en efectivo o por
+    // banco y baja lo que se le debe al agricultor por esta liquidación (igual que pagarlo después en Por Pagar).
+    pago: z.object({
+      // Sin monto (o con `todo`) = paga todo lo que la liquidación le deja por cobrar al agricultor.
+      monto: z.number().positive().transform(round2).optional(),
+      todo: z.boolean().optional(),
+      cash_register_id: z.string().uuid(),
+      medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional()
+    }).optional()
+  }).parse(req.body);
   await avisarQuintalesDeMas(lineas, req);
   const result = await inTransaction(async (client) => {
     const hechas = [];
     for (const data of lineas) hechas.push(await registrarLiquidacion(client, data, accionistaId));
+    if (pago) {
+      const cuentas = (await client.query(
+        `SELECT id, balance::float AS balance FROM accounts_payable
+          WHERE liquidation_id = ANY($1::uuid[]) AND farmer_id IS NOT NULL AND reference_type IS NULL AND balance > 0.005
+          ORDER BY created_at, id`,
+        [hechas.map((h) => h.id)]
+      )).rows;
+      const debe = round2(cuentas.reduce((t, c) => t + Number(c.balance), 0));
+      if (!cuentas.length) throw new ApiError(409, "Esta liquidación no deja nada por pagarle al agricultor: no hay qué pagar ahora.");
+      const monto = pago.todo || !pago.monto ? debe : pago.monto;
+      if (monto > debe + 0.005) throw new ApiError(409, `El pago supera lo que se le debe por esta liquidación (${debe.toFixed(2)} dólares).`);
+      // El medio va dentro de `pago`: el disparador de caja lo lee de la transacción (en una caja MIXTA).
+      if (pago.medio_pago) await client.query("SELECT set_config('app.medio_pago', $1, true)", [pago.medio_pago]);
+      const pagado = await pagarCuentasEnGrupo(client, req as AuthenticatedRequest, {
+        payable_ids: cuentas.map((c) => String(c.id)), cash_register_id: pago.cash_register_id, amount: monto,
+        medio_pago: pago.medio_pago, comentario: "Pagado al liquidar"
+      });
+      return hechas.map((h, i) => (i === 0 ? { ...h, pago_inmediato: { pagado: monto, queda: round2(debe - monto), detalle: pagado } } : h));
+    }
     return hechas;
   });
   res.status(201).json(result);

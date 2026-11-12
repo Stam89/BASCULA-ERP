@@ -90,12 +90,12 @@ async function nombreAccionista(client: PoolClient, id: string | null | undefine
  */
 export async function espejarAbonoEnContraparte(
   client: PoolClient,
-  opts: { desde: "receivable" | "payable"; cuentaId: string; monto: number; descripcion: string }
+  opts: { desde: "receivable" | "payable"; cuentaId: string; monto: number; descripcion: string; medio?: "EFECTIVO" | "BANCO" }
 ): Promise<Resultado | null> {
   if (opts.desde === "payable") {
     const ap = await client.query("SELECT reference_type FROM accounts_payable WHERE id = $1", [opts.cuentaId]);
     if (ap.rows[0]?.reference_type === "campo_servicio") {
-      await espejarPagoATransporte(client, opts.cuentaId, opts.monto);
+      await espejarPagoATransporte(client, opts.cuentaId, opts.monto, opts.medio);
       return { accionista: "Transporte y Cosechadora", cuenta: "Transporte y Cosechadora", caja_registrada: true };
     }
   }
@@ -309,7 +309,7 @@ export async function bajarPayableHermanaSinCaja(client: PoolClient, receivableI
  * 'bascula.origen_pago = erp' evita que el trigger vuelva a sacar el dinero de
  * la caja del socio (ya lo hizo el pago del ERP).
  */
-export async function espejarPagoATransporte(client: PoolClient, payableId: string, monto: number): Promise<void> {
+export async function espejarPagoATransporte(client: PoolClient, payableId: string, monto: number, medio: "EFECTIVO" | "BANCO" = "EFECTIVO"): Promise<void> {
   const ap = (await client.query(
     "SELECT reference_id, description FROM accounts_payable WHERE id = $1",
     [payableId]
@@ -328,8 +328,11 @@ export async function espejarPagoATransporte(client: PoolClient, payableId: stri
   if (!serv) throw new ApiError(404, "El servicio de Transporte de esta cuenta ya no existe.");
   const abono = round2(Math.min(monto, Number(serv.saldo)));
   if (!(abono > 0)) return;
-  const caja = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = 'CAJA' LIMIT 1")).rows[0]?.id;
-  if (!caja) throw new ApiError(409, "Transporte y Cosechadora no tiene la cuenta CAJA configurada.");
+  // Lo que el socio pagó por banco (transferencia) entra al BANCO de Transporte, no a su gaveta (antes todo iba a CAJA y
+  // la gaveta de Transporte quedaba con dinero que nunca llegó en efectivo).
+  const cuentaNombre = medio === "BANCO" ? "BANCO" : "CAJA";
+  const caja = (await client.query("SELECT id FROM campo_cuentas WHERE nombre = $1 LIMIT 1", [cuentaNombre])).rows[0]?.id;
+  if (!caja) throw new ApiError(409, `Transporte y Cosechadora no tiene la cuenta ${cuentaNombre} configurada.`);
   const sesion = await client.query("SELECT 1 FROM campo_caja_sesiones WHERE estado = 'ABIERTA' LIMIT 1");
   if (!sesion.rowCount) {
     throw new ApiError(409, "La caja de Transporte y Cosechadora está cerrada: ábrela para recibir este pago.");
@@ -337,9 +340,10 @@ export async function espejarPagoATransporte(client: PoolClient, payableId: stri
   // La marca es LOCAL a la transacción; si algo falla, todo se revierte igual.
   await client.query("SELECT set_config('bascula.origen_pago', 'erp', true)");
   await client.query(
-    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id)
-     VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, $5)`,
-    [caja, abono, `Pago recibido desde Por Pagar del socio · ${ap.description ?? "flete/cosecha"}`, serv.id, serv.cliente_id]
+    `INSERT INTO campo_movimientos (fecha, cuenta_id, signo, monto, concepto, servicio_id, cliente_id, medio_pago)
+     VALUES (CURRENT_DATE, $1, 'entrada', $2, $3, $4, $5, $6)`,
+    [caja, abono, `Pago recibido desde Por Pagar del socio · ${ap.description ?? "flete/cosecha"}`, serv.id, serv.cliente_id,
+     medio === "BANCO" ? "TRANSFERENCIA" : "EFECTIVO"]
   );
   await client.query("SELECT set_config('bascula.origen_pago', '', true)");
 }

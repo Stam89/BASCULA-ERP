@@ -5,7 +5,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
+import { exigirCajaAbiertaDelAccionista, fechaValidaDeCaja } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
 import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
@@ -22,6 +22,7 @@ import { quitarFleteVenta, registrarFleteVenta, validarFleteVenta } from "../../
 import { notificar } from "../../services/notificaciones.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { fechaEc, hoyEc } from "../../utils/fechas.js";
+import { fechaDespachoValida, fecharDespachoEn } from "../../services/fecha-despacho.js";
 
 // 📅 Fecha del pedido (pedido del dueño 2026-11-10): un pedido de un día anterior que se ingresa después queda con su fecha.
 // Hasta 90 días atrás y nunca en el futuro. Devuelve la fecha a aplicar, o null si es hoy o no vino.
@@ -476,6 +477,9 @@ async function descontarInventarioPreparacion(
     // «🏭 Ya está en la piladora»: lo que iba a salir de allá YA llegó (nadie registró el viaje). Se registra el
     // viaje de regreso (allá → piladora, con su flete si lo hubo) y todo sale de la piladora (la cuadrilla lo embarca).
     allaYaLlego?: { flete?: FleteEnvejecido | null; orderNumber?: string } | null;
+    // «🏭 Sale de aquí (se está pilando)» (pedido del dueño 2026-11-12): se vende lo que va saliendo de la piladora
+    // aunque el inventario aún no lo tenga; no se toca lo de allá y la piladora puede quedar en negativo un rato.
+    desdePiladora?: boolean;
   }
 ): Promise<{ retiros: RetiroAlla[]; traidos: RetiroAlla[] }> {
   const ya = await client.query(
@@ -532,7 +536,7 @@ async function descontarInventarioPreparacion(
     );
     const dePiladora = Math.min(qq, Math.max(0, round2(Number(enPiladora.rows[0]?.q ?? 0))));
     let falta = round2(qq - dePiladora);
-    const allas = falta > 0.001 ? (await client.query(
+    const allas = falta > 0.001 && !opts.desdePiladora ? (await client.query(
       `SELECT w.id, w.name, SUM(m.quantity)::float AS q, MIN(m.created_at) AS desde
          FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id AND w.type = 'EXTERNO'
         WHERE m.product_id = $1 AND m.accionista_id = $2 AND m.ownership = 'OWNED'
@@ -600,7 +604,8 @@ async function descontarInventarioPreparacion(
       referenceType: "sales_order",
       referenceId: opts.orderId,
       createdBy: opts.createdBy ?? null,
-      notes: s.bodega ? `Retirado allá (${s.bodega.replace(/^Allá: /, "")}) por el transportista para el pedido` : null
+      notes: s.bodega ? `Retirado allá (${s.bodega.replace(/^Allá: /, "")}) por el transportista para el pedido` : null,
+      permitirNegativo: !s.bodega && opts.desdePiladora ? true : undefined
     });
     if (s.bodega) retiros.push({ producto: s.nombre, bodega: s.bodega, qq: s.qq });
   }
@@ -770,8 +775,11 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
         activo_id: z.string().uuid().optional(),
         prestador: z.string().trim().max(120).optional()
       }).optional()
-    }).optional()
+    }).optional(),
+    // Sale de la piladora lo que se está pilando (no se retira allá).
+    desde_piladora: z.boolean().optional()
   }).parse(req.body);
+  if (body.desde_piladora && body.alla_ya_llego) throw new ApiError(400, "Elige una sola opción: ya llegó de allá o sale de lo que se está pilando.");
   if (body.alla_ya_llego?.flete) validarFleteRegreso(body.alla_ya_llego.flete as FleteEnvejecido);
   // ↩ Revertir una preparación devuelve arroz y sacos al inventario: solo el administrador (2026-10-21).
   if (!body.prepared && (req as AuthenticatedRequest).user?.role_name !== "ADMINISTRADOR") {
@@ -809,7 +817,8 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
         createdBy: body.prepared_by ?? null,
         allaYaLlego: body.alla_ya_llego
           ? { flete: (body.alla_ya_llego.flete as FleteEnvejecido | undefined) ?? null, orderNumber: order.rows[0].order_number }
-          : null
+          : null,
+        desdePiladora: body.desde_piladora === true
       }));
       // Los SACOS (marca + peso vendidos) salen de la bodega de la matriz en este
       // mismo momento. Idempotente; si falta stock no bloquea (queda negativo).
@@ -928,9 +937,12 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     // Si un carro de Transporte y Cosechadora lleva el pedido: ese flete se le cobra al que vende.
     flete: z.object({ activo_id: z.string().uuid(), monto: z.coerce.number().positive().max(100000) }).optional(),
     // 🚚 Despacho parcial: cuánto cargó el camión de cada línea (lo que falte queda como pedido saldo).
-    cargado: z.array(z.object({ item_id: z.string().uuid(), quantity: z.number().nonnegative() })).max(100).optional()
+    cargado: z.array(z.object({ item_id: z.string().uuid(), quantity: z.number().nonnegative() })).max(100).optional(),
+    // 📅 Día en que salió el camión, si se registra después (hasta 30 días atrás).
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
   if (body.flete) validarFleteVenta(body.flete);
+  const fechaDespacho = fechaDespachoValida(body.fecha);
   // TRANSFERENCIA / CHEQUE: el dinero no se da por recibido al despachar. La cuenta del pedido queda «por confirmar»
   // y entra a la caja cuando el de caja confirma que llegó (Caja › Transferencias por confirmar).
   const porConfirmar = body.payment_method === "TRANSFER" || body.payment_method === "CHECK" ? body.payment_method : null;
@@ -942,6 +954,10 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
   }
 
   const result = await inTransaction(async (client) => {
+    // Un cobro de otro día solo entra a una caja que ya estaba abierta ese día (y en un mes sin cierre).
+    if (fechaDespacho && body.cash_register_id && body.payment_method !== "CREDIT" && !porConfirmar) {
+      await fechaValidaDeCaja(client, body.cash_register_id, fechaDespacho);
+    }
     const order = await client.query(
       "SELECT * FROM sales_orders WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
       [req.params.id, accionistaId]
@@ -1071,7 +1087,7 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
     const flete = body.flete
       ? await registrarFleteVenta(client, {
           orderId: ordRef.id, orderNumber: ordRef.order_number, accionistaId: accionistaId as string,
-          fecha: (await client.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d,
+          fecha: fechaDespacho ?? (await client.query("SELECT (now() AT TIME ZONE 'America/Guayaquil')::date::text AS d")).rows[0].d,
           qq: totalQqDespachado, cliente: customer.rows[0]?.full_name ?? null, flete: body.flete, createdBy: body.created_by ?? null
         })
       : null;
@@ -1085,6 +1101,8 @@ ordersRouter.post("/:id/deliver", asyncRoute(async (req, res) => {
       created_by: body.created_by ?? null,
       accionista_id: accionistaId as string
     });
+
+    if (fechaDespacho) await fecharDespachoEn(client, order.rows[0].id, fechaDespacho);
 
     // NOTA: los sacos físicos NO se descuentan aquí: ya salieron de la bodega de
     // la matriz al CONFIRMAR LA PREPARACIÓN (descontarSacosPedido). En el despacho
