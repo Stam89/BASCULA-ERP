@@ -13780,9 +13780,9 @@ Motivo (obligatorio):`, ""));
       sugerirTarifaFlete(order);
       return;
     }
-    const metodo = orderPayMethod[order.id] ?? order.payment_method ?? "";
+    const metodo = orderPayMethod[order.id] ?? "";
     if (!metodo) {
-      addToast("Elige la forma de pago (efectivo, banco o crédito) antes de despachar.", "error");
+      addToast("Elige cómo pagó al despachar: efectivo, transferencia, tarjeta, cheque o crédito.", "error");
       return;
     }
     // El cobro entra a la caja abierta del DUEÑO del pedido (puede ser otro socio).
@@ -19396,8 +19396,10 @@ Motivo (obligatorio):`, ""));
                     // "Listo para cargar" = ya se confirmó la preparación (picking).
                     const listo = Boolean(o.prepared_at);
                     // Condición de pago elegida (por defecto contado). CREDIT = a crédito.
-                    const metodoPago = orderPayMethod[o.id] ?? o.payment_method ?? "";
-                    const esCredito = metodoPago === "CREDIT";
+                    // Se elige al despachar (no viene marcado): lo del pedido es solo una pista.
+                    const metodoPago = orderPayMethod[o.id] ?? "";
+                    const metodoDelPedido = ({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque", CREDIT: "📋 Crédito" } as Record<string, string>)[o.payment_method ?? ""] ?? "";
+                    const esCredito = (metodoPago || o.payment_method) === "CREDIT";
                     // Stock disponible (QQ) en bodega de los productos del pedido: pista de
                     // picking junto a la ubicación. Sin modelo por fila, es a nivel bodega.
                     const demandaPorProducto = new Map<string, number>();
@@ -19486,7 +19488,7 @@ Motivo (obligatorio):`, ""));
                         ) : (
                           <>
                             <span style={{ background: "#dbeafe", color: "#1d4ed8", borderRadius: 6, padding: "3px 10px", fontSize: 12.5, fontWeight: 800 }}>
-                              {({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque" } as Record<string, string>)[metodoPago] ?? "💵 Contado"} · Contra Entrega
+                              {({ CASH: "💵 Efectivo", TRANSFER: "🏦 Transferencia", CARD: "🏦 Tarjeta", CHECK: "🏦 Cheque" } as Record<string, string>)[metodoPago || (o.payment_method ?? "")] ?? "💵 Contado"} · Contra Entrega
                             </span>
                             <div style={{ marginTop: 4, fontSize: 11.5, color: "#b45309", fontWeight: 600 }}>⚠ Verificar cobro en caja antes de autorizar salida.</div>
                           </>
@@ -19628,13 +19630,16 @@ Motivo (obligatorio):`, ""));
                             onChange={(e) => setOrderPayMethod((cur) => ({ ...cur, [o.id]: e.target.value }))}
                             style={{ padding: "8px 10px", borderRadius: 8, border: `1px solid ${metodoPago ? "var(--c-border)" : "#dc2626"}`, fontSize: 13 }}
                           >
-                            {!metodoPago && <option value="" disabled>— Forma de pago —</option>}
+                            {!metodoPago && <option value="" disabled>— ¿Cómo pagó? —</option>}
                             <option value="CASH">💵 Efectivo</option>
                             <option value="TRANSFER">🏦 Banco · transferencia</option>
                             <option value="CARD">🏦 Banco · tarjeta</option>
                             <option value="CHECK">🏦 Banco · cheque</option>
                             <option value="CREDIT">📋 Crédito</option>
                           </select>
+                          )}
+                          {!o.ya_cobrado && metodoDelPedido && !metodoPago && (
+                            <small className="muted" style={{ flexBasis: "100%" }}>Al tomar el pedido dijo: {metodoDelPedido}. Confírmalo o cámbialo.</small>
                           )}
                           <button type="button" className="primary" style={{ flex: 1, minWidth: 150, padding: "9px 12px", fontWeight: 800 }} onClick={() => { setColaAbierto(null); despacharPedido(o).catch((e) => addToast(e.message, "error")); }}>
                             {o.ya_cobrado ? "🚚 Entregar saldo" : "🚚 Despachar y entregar"}
