@@ -904,6 +904,40 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
     }
     // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
     const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
+    // 🧾 Cobro de una VENTA (pedido despachado y cobrado, o venta de contado) anulado (pedido del dueño 2026-11-12: «anulé
+    // el cobro de una venta y no volvió a Por Cobrar»): el ingreso apunta a la venta, no a la cuenta. La venta sigue
+    // hecha, así que el cliente vuelve a deber lo anulado: su cuenta de la venta sube; si fue de contado sin cuenta y el
+    // cliente tiene nombre, nace su Por Cobrar. (Consumidor final: no hay a quién cobrarle, queda solo la anulación.)
+    let ventaVuelveADeber: { cuenta: string; monto: number; nueva: boolean } | null = null;
+    if (!cuentaRevertida && m.movement === "INCOME" && m.category === "VENTA" && m.reference_type === "sales" && m.reference_id) {
+      const monto = round2(Number(m.amount));
+      const venta = (await client.query(
+        `SELECT s.id, s.sale_number, s.customer_id, s.accionista_id, c.full_name FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+          WHERE s.id = $1 FOR UPDATE OF s`, [m.reference_id]
+      )).rows[0];
+      if (venta) {
+        const ar = (await client.query(
+          `SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable
+            WHERE sale_id = $1 AND status <> 'CANCELLED' ORDER BY created_at LIMIT 1 FOR UPDATE`, [venta.id]
+        )).rows[0];
+        if (ar) {
+          const nuevo = round2(Math.min(ar.amount, ar.balance + monto));
+          await client.query(
+            `UPDATE accounts_receivable SET balance = $2, status = $3, description = description || $4 WHERE id = $1`,
+            [ar.id, nuevo, nuevo + 0.005 >= ar.amount ? "CONFIRMED" : nuevo < 0.01 ? "PAID" : "PARTIAL",
+             ` · cobro de ${dinero(monto)} anulado: vuelve a deber (${body.reason})`]
+          );
+          ventaVuelveADeber = { cuenta: ar.id, monto: round2(nuevo - ar.balance), nueva: false };
+        } else if (venta.customer_id && !/consumidor\s*final/i.test(String(venta.full_name ?? ""))) {
+          const nueva = (await client.query(
+            `INSERT INTO accounts_receivable (customer_id, sale_id, reference_type, reference_id, description, amount, balance, status, accionista_id)
+             VALUES ($1, $2, 'cobro_anulado', $2, $3, $4, $4, 'CONFIRMED', $5) RETURNING id`,
+            [venta.customer_id, venta.id, `Venta ${venta.sale_number} — ${venta.full_name}: cobro anulado (${body.reason})`, monto, venta.accionista_id]
+          )).rows[0].id as string;
+          ventaVuelveADeber = { cuenta: nueva, monto, nueva: true };
+        }
+      }
+    }
 
     // Fondos a rendir cuentas: sin estados colgados.
     //  · Anular el FONDO anula también su vuelto/faltante registrado aparte (si
@@ -991,7 +1025,7 @@ cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(a
       activosRetirados.push(a.name);
     }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida, banco_anulado: bancoAnulado };
+    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida, banco_anulado: bancoAnulado, venta_vuelve_a_deber: ventaVuelveADeber };
   });
 
   res.status(201).json(result);

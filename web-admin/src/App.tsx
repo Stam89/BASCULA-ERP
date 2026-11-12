@@ -5221,8 +5221,13 @@ export function App() {
     if (reason.trim().length < 3) { addToast("El motivo debe tener al menos 3 caracteres", "error"); return; }
     const registerId = dashboard.current_cash_register?.id;
     try {
-      const out = await apiPost<{ nomina_reabierta?: string | null }>(`/cash/movements/${m.id}/reverse`, { reason: reason.trim() });
-      addToast(out?.nomina_reabierta ? `Movimiento anulado · ${out.nomina_reabierta}` : "Movimiento anulado (contra-asiento registrado)", "success");
+      const out = await apiPost<{ nomina_reabierta?: string | null; cuenta_revertida?: unknown; venta_vuelve_a_deber?: { monto: number; nueva: boolean } | null }>(`/cash/movements/${m.id}/reverse`, { reason: reason.trim() });
+      const vuelve = out?.venta_vuelve_a_deber;
+      addToast(out?.nomina_reabierta ? `Movimiento anulado · ${out.nomina_reabierta}`
+        : vuelve ? `Cobro anulado · el cliente vuelve a deber ${money(vuelve.monto)} (está en Por Cobrar)`
+        : out?.cuenta_revertida ? "Movimiento anulado · la cuenta vuelve a deber lo anulado" : "Movimiento anulado (contra-asiento registrado)", "success");
+      refreshReceivables().catch(() => undefined);
+      refreshPayables().catch(() => undefined);
       if (registerId) await refreshCaja(registerId);
     } catch (err) {
       addToast(`No se pudo anular: ${err instanceof Error ? err.message : "error"}`, "error");
