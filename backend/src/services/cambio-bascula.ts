@@ -7,6 +7,7 @@
 import type { PoolClient } from "pg";
 import { ApiError } from "../http/error-handler.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../utils/rice-formulas.js";
+import { agricultorPorNombre } from "./agricultor-nombres.js";
 
 type Db = Pick<PoolClient, "query">;
 
@@ -14,7 +15,7 @@ export async function listarCambiosBascula(db: Db) {
   return (await db.query(
     `SELECT mt.id, mt.raw_payload->>'numeroTicket' AS numero, mt.farmer_name AS agricultor,
             mt.gross_weight::float AS bruto, mt.tare_weight::float AS tara, mt.net_weight::float AS neto,
-            mt.qualification::float AS calificacion, mt.quintals::float AS qq,
+            mt.qualification::float AS calificacion, mt.quintals::float AS qq, mt.raw_payload->>'placa' AS placa,
             mt.raw_payload->'cambioPosterior' AS cambio,
             (SELECT a.name FROM accionistas a JOIN weighing_tickets w ON w.accionista_id = a.id WHERE w.id = mt.weighing_ticket_id) AS accionista,
             (SELECT l.liquidation_number FROM liquidations l WHERE l.weighing_ticket_id = mt.weighing_ticket_id AND l.status <> 'CANCELLED' LIMIT 1) AS liquidacion
@@ -24,7 +25,8 @@ export async function listarCambiosBascula(db: Db) {
   )).rows.map((r) => {
     const c = r.cambio ?? {};
     const neto = calculateNetWeight(Number(c.pesoBruto), Number(c.pesoTara));
-    return { ...r, nuevo: { bruto: Number(c.pesoBruto), tara: Number(c.pesoTara), calificacion: Number(c.calificacion ?? r.calificacion), neto, qq: round2(calculateQuintals(neto, Number(c.calificacion ?? r.calificacion))), en: c.en } };
+    return { ...r, nuevo: { bruto: Number(c.pesoBruto), tara: Number(c.pesoTara), calificacion: Number(c.calificacion ?? r.calificacion), neto, qq: round2(calculateQuintals(neto, Number(c.calificacion ?? r.calificacion))), en: c.en,
+      cliente: (c.cliente ?? "").trim() || null, placa: (c.placa ?? "").trim() || null } };
   });
 }
 
@@ -120,15 +122,33 @@ export async function aplicarCambioBascula(client: PoolClient, mobileId: string,
     "UPDATE weighing_tickets SET gross_weight = $2, tare_weight = $3, qualification = $4, quintals = $5 WHERE id = $1",
     [wt.id, bruto, tara, cal, qq]
   );
-  const antes = { pesoBruto: Number(mt.gross_weight), pesoTara: Number(mt.tare_weight), calificacion: Number(mt.qualification), totalQQ: qqAntes };
+  // 4) Cliente y placa nuevos de la báscula (si los cambió): el ticket y su agricultor; el ingreso también, salvo que ya
+  //    esté liquidado (entonces la deuda es de otro agricultor: se avisa y se corrige desde Liquidaciones).
+  const clienteNuevo = String(c.cliente ?? "").trim();
+  const placaNueva = String(c.placa ?? "").trim();
+  const cambiaCliente = clienteNuevo !== "" && clienteNuevo.toUpperCase() !== String(mt.farmer_name ?? "").trim().toUpperCase();
+  let agricultorNuevo: { id: string } | null = null;
+  if (cambiaCliente) {
+    agricultorNuevo = await agricultorPorNombre(client, clienteNuevo);
+    if (liq) avisos.push(`La báscula cambió el cliente a ${clienteNuevo}, pero la liquidación ${liq.liquidation_number} está a nombre del anterior: corrígela desde Liquidaciones.`);
+    else if (agricultorNuevo) await client.query("UPDATE weighing_tickets SET farmer_id = $2 WHERE id = $1", [wt.id, agricultorNuevo.id]);
+    else avisos.push(`El cliente nuevo «${clienteNuevo}» no está en Agricultores: vincúlalo en Báscula.`);
+  }
+  const antes = { pesoBruto: Number(mt.gross_weight), pesoTara: Number(mt.tare_weight), calificacion: Number(mt.qualification), totalQQ: qqAntes,
+    ...(cambiaCliente ? { cliente: mt.farmer_name } : {}), ...(placaNueva ? { placa: mt.raw_payload?.placa ?? null } : {}) };
   await client.query(
     `UPDATE mobile_synced_tickets
         SET gross_weight = $2, tare_weight = $3, net_weight = $4, qualification = $5, quintals = $6,
             raw_payload = (raw_payload - 'cambioPosterior')
               || jsonb_build_object('pesoBruto', $2::numeric, 'pesoTara', $3::numeric, 'pesoNeto', $4::numeric, 'calificacion', $5::numeric, 'totalQQ', $6::numeric)
               || jsonb_build_object('cambioAplicado', jsonb_build_object('en', now(), 'por', $7::text, 'antes', $8::jsonb))
+              || CASE WHEN $9::text <> '' THEN jsonb_build_object('cliente', $9::text) ELSE '{}'::jsonb END
+              || CASE WHEN $10::text <> '' THEN jsonb_build_object('placa', $10::text) ELSE '{}'::jsonb END,
+            farmer_name = CASE WHEN $9::text <> '' THEN $9::text ELSE farmer_name END,
+            farmer_id = CASE WHEN $9::text <> '' THEN $11::uuid ELSE farmer_id END
       WHERE id = $1`,
-    [mt.id, bruto, tara, neto, cal, qq, userName ?? "admin", JSON.stringify(antes)]
+    [mt.id, bruto, tara, neto, cal, qq, userName ?? "admin", JSON.stringify(antes), cambiaCliente ? clienteNuevo : "", placaNueva,
+     agricultorNuevo?.id ?? null]
   );
   return { numero: mt.raw_payload?.numeroTicket ?? null, qq_antes: qqAntes, qq, qq_delta: qqDelta, neto_kg: neto, liquidacion, pilados: pilados.length, avisos };
 }

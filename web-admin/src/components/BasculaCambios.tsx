@@ -9,7 +9,8 @@ import { confirmar } from "./Dialogo";
 type Cambio = {
   id: string; numero: string | null; agricultor: string | null; accionista: string | null; liquidacion: string | null;
   bruto: number; tara: number; neto: number; calificacion: number; qq: number;
-  nuevo: { bruto: number; tara: number; neto: number; calificacion: number; qq: number; en?: string };
+  nuevo: { bruto: number; tara: number; neto: number; calificacion: number; qq: number; en?: string; cliente?: string | null; placa?: string | null };
+  placa?: string | null;
 };
 
 export function BasculaCambios({ esAdmin, avisar, onCambio }: {
@@ -57,6 +58,12 @@ export function BasculaCambios({ esAdmin, avisar, onCambio }: {
             <strong>Ticket {c.numero} · {c.agricultor}{c.accionista ? ` · ${c.accionista}` : ""}</strong>
             <span>Ingresado: {c.bruto} − {c.tara} = <b>{c.neto} kg</b> ({c.qq} QQ)</span>
             <span>En la báscula: {c.nuevo.bruto} − {c.nuevo.tara} = <b>{c.nuevo.neto} kg</b> ({c.nuevo.qq} QQ){c.nuevo.calificacion !== c.calificacion ? ` · calificación ${c.calificacion} → ${c.nuevo.calificacion}` : ""}</span>
+            {c.nuevo.cliente && c.nuevo.cliente.toUpperCase() !== String(c.agricultor ?? "").toUpperCase() && (
+              <span>👤 Cliente: {c.agricultor ?? "—"} → <b>{c.nuevo.cliente}</b></span>
+            )}
+            {c.nuevo.placa && c.nuevo.placa.toUpperCase() !== String(c.placa ?? "").toUpperCase() && (
+              <span>🚚 Placa: {c.placa ?? "—"} → <b>{c.nuevo.placa}</b></span>
+            )}
             {c.liquidacion && <small className="muted">Liquidado en {c.liquidacion}: al aplicar se recalcula (si aún no se le pagó al agricultor).</small>}
           </div>
           {esAdmin ? (

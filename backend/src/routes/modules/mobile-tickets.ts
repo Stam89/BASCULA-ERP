@@ -1148,19 +1148,25 @@ export async function importBasculaTickets(
             AND COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') = $2
             AND (weighing_ticket_id IS NOT NULL OR liquidated_at IS NOT NULL)
             AND mobile_updated_at <= $3
-            AND (gross_weight <> $4::numeric OR tare_weight <> $6::numeric OR qualification <> $7::numeric)
+            AND (gross_weight <> $4::numeric OR tare_weight <> $6::numeric OR qualification <> $7::numeric
+                 OR upper(btrim(COALESCE(raw_payload->>'cliente', ''))) <> upper(btrim($8::text))
+                 OR upper(btrim(COALESCE(raw_payload->>'placa', ''))) <> upper(btrim($9::text)))
             -- «Mantener el ingresado»: el mismo cambio ya descartado no se vuelve a marcar.
             AND NOT (raw_payload ? 'cambioDescartado'
                      AND (raw_payload->'cambioDescartado'->>'pesoBruto')::numeric = $4::numeric
                      AND (raw_payload->'cambioDescartado'->>'pesoTara')::numeric = $6::numeric
-                     AND (raw_payload->'cambioDescartado'->>'calificacion')::numeric = $7::numeric)
+                     AND (raw_payload->'cambioDescartado'->>'calificacion')::numeric = $7::numeric
+                     AND upper(btrim(COALESCE(raw_payload->'cambioDescartado'->>'cliente', raw_payload->>'cliente', ''))) = upper(btrim($8::text))
+                     AND upper(btrim(COALESCE(raw_payload->'cambioDescartado'->>'placa', raw_payload->>'placa', ''))) = upper(btrim($9::text)))
             AND (raw_payload->'cambioPosterior' IS NULL
                  OR (raw_payload->'cambioPosterior'->>'pesoBruto')::numeric <> $4::numeric
                  OR (raw_payload->'cambioPosterior'->>'pesoTara')::numeric <> $6::numeric
-                 OR (raw_payload->'cambioPosterior'->>'calificacion')::numeric <> $7::numeric)`,
+                 OR (raw_payload->'cambioPosterior'->>'calificacion')::numeric <> $7::numeric
+                 OR upper(btrim(COALESCE(raw_payload->'cambioPosterior'->>'cliente', ''))) <> upper(btrim($8::text))
+                 OR upper(btrim(COALESCE(raw_payload->'cambioPosterior'->>'placa', ''))) <> upper(btrim($9::text)))`,
         [idScope || "principal", numero, ts, t.pesoBruto,
-         JSON.stringify({ pesoBruto: t.pesoBruto, pesoTara: t.pesoTara, calificacion: t.calificacion, en: new Date().toISOString() }),
-         t.pesoTara, t.calificacion]
+         JSON.stringify({ pesoBruto: t.pesoBruto, pesoTara: t.pesoTara, calificacion: t.calificacion, cliente: clienteName, placa: (t.placa ?? "").trim(), en: new Date().toISOString() }),
+         t.pesoTara, t.calificacion, clienteName, (t.placa ?? "").trim()]
       );
       // 💲 El PRECIO/QQ que se escribe en la báscula DESPUÉS de ingresar el ticket sí se trae (Liquidaciones lo sugiere).
       // Solo ese campo del ticket: no toca pesos, inventario ni cuentas. Un ticket ya liquidado no cambia.
