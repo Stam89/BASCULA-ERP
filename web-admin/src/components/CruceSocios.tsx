@@ -10,7 +10,9 @@ type Par = { id: string; descripcion: string | null; fecha: string; saldo: numbe
 type Resumen = { me_debe: Par[]; le_debo: Par[]; total_me_debe: number; total_le_debo: number; maximo: number };
 type Cruce = { id: string; monto: number; nota: string | null; created_at: string; anulado_at: string | null; contraparte: string; hecho_por_mi: boolean };
 
-export function CruceSocios({ accionistas, activoId, avisar, onCambio }: {
+export function CruceSocios({ accionistas, activoId, avisar, onCambio, puedeAnular = esAdministrador() }: {
+  /** Administrador o permiso «Anular». */
+  puedeAnular?: boolean;
   accionistas: Array<{ id: string; name: string; tipo?: string | null }>;
   activoId: string | null;
   avisar: (msg: string, tipo?: "success" | "error" | "warn") => void;
@@ -124,7 +126,7 @@ export function CruceSocios({ accionistas, activoId, avisar, onCambio }: {
                 {historial.map((c) => (
                   <div key={c.id} className={`cruceSoc__fila ${c.anulado_at ? "is-anulado" : ""}`}>
                     <span>{new Date(c.created_at).toLocaleDateString("es-EC")} · {c.contraparte} · <strong>{money(c.monto)}</strong>{c.nota ? ` · ${c.nota}` : ""}{c.anulado_at ? " · anulado" : ""}</span>
-                    {!c.anulado_at && esAdministrador() && <button type="button" className="btnGhost" disabled={busy} onClick={() => void anular(c)}>Anular</button>}
+                    {!c.anulado_at && puedeAnular && <button type="button" className="btnGhost" disabled={busy} onClick={() => void anular(c)}>Anular</button>}
                   </div>
                 ))}
               </details>

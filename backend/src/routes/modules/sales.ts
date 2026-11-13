@@ -10,7 +10,7 @@ import { exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeC
 import { nextCode } from "../../utils/codes.js";
 import { createLotProcessReport } from "../../utils/process-reports.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { consumeInventoryFIFO } from "../../services/inventory-consume.js";
 import { resolverClienteVentaDetalle } from "../../services/venta-detalle-personas.js";
 import { dinero, notificar } from "../../services/notificaciones.js";
@@ -468,7 +468,7 @@ salesRouter.post("/retail/por-asignar/:id/corregir", asyncRoute(async (req, res)
   res.json(out);
 }));
 
-salesRouter.post("/retail/por-asignar/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+salesRouter.post("/retail/por-asignar/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const v = (await pool.query(
     `UPDATE ventas_detalle_por_asignar SET anulado_at = now()

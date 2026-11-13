@@ -1872,6 +1872,7 @@ const PERM_MATRIX: Array<{ label: string; rows: Array<{ key: string; label: stri
   { label: "CONTABILIDAD", rows: [{ key: "Costos Operativos", label: "Costos Operativos" }, { key: "Estados Financieros", label: "Estados Financieros" }] },
   { label: "SISTEMA", rows: [{ key: "Reportes", label: "Reportes" }] },
   { label: "PERMISOS ESPECIALES", rows: [
+    { key: "PERM:ANULAR", label: "Anular y corregir", ayuda: "Anular cobros, pagos, ventas, despachos, compras y producción mal ingresados; reabrir túneles y deshacer movimientos. Configuración, usuarios y cierres siguen siendo del administrador." },
     { key: "PERM:EDITAR_PRECIOS", label: "Editar precios y tarifas", ayuda: "Precio de venta en Gana, bloquear liquidaciones, tarifa distinta en Selección y gasto administrativo de Fomentos. Las tarifas de Configuración siguen siendo del administrador." },
     { key: "PERM:SALDOS_INICIALES", label: "Cargar Saldos iniciales", ayuda: "La tarjeta le sale en su Inicio. Anular lo cargado es del administrador." },
     { key: "PERM:FOMENTO_GASTO_ADM", label: "Fomentos: cambiar gasto administrativo", ayuda: "Tasa, por entrega y cobrar hasta." },
@@ -5414,9 +5415,9 @@ export function App() {
   // El administrador siempre puede. Un operador solo si su accionista activo se lo
   // concede en Config → Control de Usuarios (tabla matriz de permisos).
   const activeAllowedPerms = new Set(activeAccionista?.allowed_modules ?? []);
-  // Anular, eliminar, reabrir, revertir o cancelar: SOLO el administrador (pedido del dueño 2026-10-21). El antiguo
-  // permiso especial «Anular / Eliminar» ya no se puede dar a otros usuarios.
-  const canAnular = isAdmin;
+  // Anular, eliminar, reabrir, revertir o cancelar: el administrador o quien tenga el permiso especial «Anular» en el
+  // accionista activo (pedido del dueño 2026-11-13: «cada usuario con las mismas opciones que el administrador»).
+  const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
   // Fomentos tiene sus propios permisos (pedido del dueño 2026-11-04): el resto de anular sigue siendo solo del administrador.
   const canGastoAdmFomento = canEditarPrecios || activeAllowedPerms.has("PERM:FOMENTO_GASTO_ADM");
@@ -15251,6 +15252,7 @@ Motivo (obligatorio):`, ""));
         )}
         {entreSocios && authUser && (
           <CuentasEntreSocios
+            puedeAnular={canAnular}
             accionistas={accionistas.map((a) => ({ id: a.id, name: a.name, tipo: String(a.tipo ?? "SOCIO") }))}
             activoId={activeAccionistaId}
             cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
@@ -15762,7 +15764,7 @@ Motivo (obligatorio):`, ""));
           )}
 
           {basculaVista === "tickets" && (
-            <BasculaCambios esAdmin={isAdmin} avisar={addToast}
+            <BasculaCambios esAdmin={canAnular} avisar={addToast}
               onCambio={() => Promise.all([refreshBasculaTickets(), refresh()]).catch(() => undefined)} />
           )}
           {(basculaVista === "tickets" || (basculaVista === "corregir" && !(accionistas.length > 1 && materiaPrimaEntries.length > 0))) && (
@@ -16077,7 +16079,7 @@ Motivo (obligatorio):`, ""));
                 </button>}
               </nav>
             </div>
-            {secadorasVista === "operacion" && isAdmin && (
+            {secadorasVista === "operacion" && canAnular && (
               <div style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "flex-end" }}>
                 <button type="button" onClick={() => setSecadoPasadoAbierto(true)}>🕒 Secado ya hecho (omitir combustible)</button>
               </div>
@@ -16103,7 +16105,7 @@ Motivo (obligatorio):`, ""));
                     </span>
                     <span style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                       {canEdit("Secadoras") && <button type="button" className="primary" onClick={() => abrirCompletarCombustible(p)}>⛽ Registrar combustible</button>}
-                      {isAdmin && <button type="button" onClick={() => { omitirCombustible(p).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo omitir", "error")); }}>🚫 Omitir</button>}
+                      {canAnular && <button type="button" onClick={() => { omitirCombustible(p).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo omitir", "error")); }}>🚫 Omitir</button>}
                     </span>
                   </div>
                 ))}
@@ -16483,15 +16485,15 @@ Motivo (obligatorio):`, ""));
                                   ✅ Finalizar este túnel
                                 </button>
                               )}
-                              {done && isAdmin && (
+                              {done && canAnular && (
                                 <button
                                   type="button"
                                   className="btnSecondary"
-                                  title="Solo administrador: vuelve el túnel a «en proceso» para corregir una finalización equivocada"
+                                  title="Vuelve el túnel a «en proceso» para corregir una finalización equivocada"
                                   style={{ flex: "1 1 160px", minHeight: 44, padding: "8px 16px", textAlign: "center", whiteSpace: "normal", borderRadius: 10, borderColor: "#f59e0b", color: "#b45309" }}
                                   onClick={() => reabrirTunel(rep).catch((error) => addToast(error.message, "error"))}
                                 >
-                                  ↩ Reabrir túnel (admin)
+                                  ↩ Reabrir túnel
                                 </button>
                               )}
                             </div>
@@ -16880,8 +16882,8 @@ Motivo (obligatorio):`, ""));
             })()}
 
             <DryingReportsPanel reports={dryingReports} onEdit={editDryingReport} onShare={compartirTunelWhatsApp} sharingId={tunelCompartiendoId}
-              onReabrir={isAdmin ? (r) => { reabrirTunel(r).catch((error) => addToast(error.message, "error")); } : undefined}
-              onCuadrillaFuera={isAdmin ? (r, fuera) => { cuadrillaPagadaFuera(r, fuera).catch((error) => addToast(error.message, "error")); } : undefined} />
+              onReabrir={canAnular ? (r) => { reabrirTunel(r).catch((error) => addToast(error.message, "error")); } : undefined}
+              onCuadrillaFuera={canAnular ? (r, fuera) => { cuadrillaPagadaFuera(r, fuera).catch((error) => addToast(error.message, "error")); } : undefined} />
 
             {/* Recibo de Secado OCULTO (fuera de pantalla): se renderiza para el
                 secado elegido en la lista y html2canvas lo captura como imagen para
@@ -18130,7 +18132,7 @@ Motivo (obligatorio):`, ""));
                     };
                     return (
                       <>
-                        {isAdmin && (
+                        {canAnular && (
                           <SoloSecadoAServicioCompleto avisar={(m, t) => addToast(m, t ?? "success")} confirmar={confirmar} onCambio={refresh} />
                         )}
                         <div>
@@ -18701,7 +18703,7 @@ Motivo (obligatorio):`, ""));
                             <strong style={{ fontSize: 18, color: "#1d4ed8" }}>{money(total)}</strong>
                           </div>
                           <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>{new Date(item.finished_at).toLocaleString("es-EC")} · registrado en Cuentas por Cobrar</div>
-                          {isAdmin && item.processing_batch_id && (
+                          {canAnular && item.processing_batch_id && (
                             <button type="button" onClick={() => anularProduccion(String(item.processing_batch_id), String(item.client_name ?? item.lot_code))}
                               title="Solo si se cerró con datos mal digitados (sin abonos al cobro)"
                               style={{ width: "100%", marginTop: 8, padding: "6px 0", borderRadius: 8, border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 12, background: "transparent", color: "#b91c1c" }}>
@@ -18749,7 +18751,7 @@ Motivo (obligatorio):`, ""));
                             style={{ width: "100%", padding: "8px 0", borderRadius: 8, border: "none", cursor: "pointer", fontWeight: 700, fontSize: 13, background: "#15803d", color: "#fff" }}>
                             👁️ Ver Gana
                           </button>
-                          {isAdmin && (
+                          {canAnular && (
                             <button type="button" onClick={() => anularProduccion(item.id, item.lot_code)}
                               title="Solo si se cerró con datos mal digitados: devuelve el arroz y deja el lote listo para pilar de nuevo"
                               style={{ width: "100%", marginTop: 6, padding: "6px 0", borderRadius: 8, border: "1px solid #fecaca", cursor: "pointer", fontWeight: 600, fontSize: 12, background: "transparent", color: "#b91c1c" }}>
@@ -19827,7 +19829,7 @@ Motivo (obligatorio):`, ""));
                                 📄 Guía
                               </button>
                             )}
-                            {isAdmin && s.sale_status !== "CANCELLED" && (() => {
+                            {canAnular && s.sale_status !== "CANCELLED" && (() => {
                               const ord = salesOrders.find((o) => o.sale_id === s.id);
                               return ord ? (
                                 <button type="button" className="anularChip" title="Anular esta venta despachada"
@@ -20571,7 +20573,7 @@ Motivo (obligatorio):`, ""));
                           </div>
                           <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                             <strong>{money(Number(c.total_amount))}</strong>
-                            {isAdmin && c.payment_type === "CASH" && c.status === "CONFIRMED" && (
+                            {canAnular && c.payment_type === "CASH" && c.status === "CONFIRMED" && (
                               <button type="button" className="btnSecondary" title="Fue a crédito: el dinero vuelve a la caja y la deuda queda en Por Pagar"
                                 onClick={() => { pasarCompraACredito(c).catch((e) => addToast(e.message, "error")); }}>💳 Pasar a crédito</button>
                             )}
@@ -23213,7 +23215,7 @@ Motivo (obligatorio):`, ""));
                               </button>
                             )}
                             {b.anulada && <span className="muted" style={{ fontSize: 12 }}>Anulada</span>}
-                            {isAdmin && b.anulada && (
+                            {canAnular && b.anulada && (
                               <button
                                 type="button"
                                 className="liqApplyBtn"
@@ -24072,7 +24074,7 @@ Motivo (obligatorio):`, ""));
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· quién te debe, agrupado por persona o entidad</span></h2>
                 <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
-                <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                <CruceSocios puedeAnular={canAnular} accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidas.length > 0 && (
@@ -24253,7 +24255,7 @@ Motivo (obligatorio):`, ""));
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
                 <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
                 <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
-                <CruceSocios accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                <CruceSocios puedeAnular={canAnular} accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidos.length > 0 && (
@@ -24445,7 +24447,7 @@ Motivo (obligatorio):`, ""));
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
                           <button type="button" className="btnGhost" onClick={() => loadPiladoReport(s.id).catch((err) => addToast(err.message, "error"))}>Ver informe</button>
                           {Number(s.saldo) > 0 && <button type="button" className="btnGhost" onClick={() => settlePilado(s.id).catch((err) => addToast(err.message, "error"))} style={{ marginLeft: 6 }}>Marcar pagado</button>}
-                          {isAdmin && s.externo && Number(s.saldo) > 0 && (
+                          {canAnular && s.externo && Number(s.saldo) > 0 && (
                             <button type="button" className="btnGhost" style={{ marginLeft: 6 }} title="Recalcular con la tarifa y el mínimo por rendimiento ((kg ÷ 100) + %) de Parámetros de planta"
                               onClick={() => aplicarMinimoPilado(s).catch((err) => addToast(err.message, "error"))}>⚖️ Aplicar mínimo</button>
                           )}
@@ -30490,7 +30492,7 @@ function DryingReportsPanel({
               )}
               <button type="button" onClick={() => onEdit(report)}>{done ? "Corregir" : "Editar"}</button>
               {done && !esTendal && onReabrir && (
-                <button type="button" title="Solo administrador: vuelve el túnel a «en proceso» para corregir una finalización equivocada"
+                <button type="button" title="Vuelve el túnel a «en proceso» para corregir una finalización equivocada"
                   style={{ color: "#b45309", borderColor: "#f59e0b" }} onClick={() => onReabrir(report)}>↩ Reabrir</button>
               )}
               {!esTendal && onCuadrillaFuera && (

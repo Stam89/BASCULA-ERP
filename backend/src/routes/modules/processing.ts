@@ -1717,7 +1717,7 @@ processingRouter.post("/:id/finish-production", asyncRoute(async (req, res) => {
 
 // ↩ Anular un proceso de producción YA CERRADO (solo administrador): deshace inventario, cuentas del servicio, sacos/empaque y
 // nómina del proceso, y deja el lote listo para volver a pilarse. Ver services/anular-produccion.ts (frenos y detalle).
-processingRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+processingRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras).").max(400) }).parse(req.body);
   const userId = (req as AuthenticatedRequest).user?.id ?? null;
   const result = await inTransaction((client) => anularProcesoProduccion(client, String(req.params.id), { motivo: body.motivo, userId }));

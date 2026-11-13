@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
@@ -1069,7 +1069,7 @@ campoRouter.post("/mantenimientos/nota", asyncRoute(async (req, res) => {
 // aplica a movimientos manuales y mantenimientos. Los registros ligados a
 // servicios, nomina, CxP, vales, transferencias o cierres tienen flujos propios
 // y se bloquean para no desajustar sus modulos de origen.
-campoRouter.post("/movimientos/:id/reversar", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.post("/movimientos/:id/reversar", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const mov = (await client.query(
@@ -1215,7 +1215,7 @@ campoRouter.post("/movimientos/:id/liquidar", asyncRoute(async (req, res) => {
 // Anular un vale MAL ENTREGADO (monto o persona equivocados): el dinero vuelve a la cuenta con un contra-movimiento y el vale
 // deja de aparecer en pendientes. Solo si sigue pendiente de rendir (uno ya rendido tiene su ajuste: se corrige rindiéndolo).
 // La naturaleza 'reversion_vale' no cuenta como gasto ni ingreso en los reportes (un vale pendiente tampoco era gasto).
-campoRouter.post("/movimientos/:id/anular-vale", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.post("/movimientos/:id/anular-vale", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const vale = (await client.query(
@@ -1487,7 +1487,7 @@ campoRouter.patch("/partes/:id", asyncRoute(async (req, res) => {
 }));
 
 // Anular (borrar) un parte. Solo si NO tiene cobro generado (sin servicio).
-campoRouter.delete("/partes/:id", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.delete("/partes/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT estado, operador_pagado_at FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
@@ -1506,7 +1506,7 @@ campoRouter.delete("/partes/:id", requireAdmin, asyncRoute(async (req, res) => {
 // Des-cobrar: revierte 'cobrado' → 'por_cobrar', borrando el servicio generado.
 // Solo si ese servicio NO tiene abonos (movimientos); si ya cobró algo, se rechaza
 // (primero hay que reversar los abonos en Caja/Servicios).
-campoRouter.post("/partes/:id/descobrar", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.post("/partes/:id/descobrar", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const row = await inTransaction(async (client) => {
     const parte = (await client.query("SELECT * FROM campo_partes WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!parte) throw new ApiError(404, "Parte no encontrado");
@@ -2192,7 +2192,7 @@ campoRouter.get("/nomina-operadores/pagos", asyncRoute(async (req, res) => {
 
 // Anular un pago de nómina: devuelve el dinero a la cuenta (contra-movimiento), deja los partes otra vez
 // «sin pagar» y devuelve los vales que ese pago había descontado. Conserva el historial (queda marcado anulado).
-campoRouter.post("/nomina-operadores/pagos/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.post("/nomina-operadores/pagos/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5).max(400) }).parse(req.body);
   const result = await inTransaction(async (client) => {
     const pago = (await client.query(
@@ -2722,7 +2722,7 @@ campoRouter.post("/cxp/:id/abono", asyncRoute(async (req, res) => {
   res.status(201).json(row);
 }));
 
-campoRouter.delete("/cxp/:id", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.delete("/cxp/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     const cxp = (await client.query("SELECT origen FROM campo_cxp WHERE id = $1 FOR UPDATE", [req.params.id])).rows[0];
     if (!cxp) throw new ApiError(404, "Cuenta por pagar no encontrada");
@@ -3082,7 +3082,7 @@ campoRouter.post("/saldos-iniciales/cobrar", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-campoRouter.delete("/saldos-iniciales/cobrar/:id", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.delete("/saldos-iniciales/cobrar/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   await inTransaction(async (client) => {
     const s = (await client.query("SELECT id FROM campo_servicios WHERE id = $1 AND origen_tipo = $2 FOR UPDATE", [req.params.id, ORIGEN_SALDO_INICIAL])).rows[0];
     if (!s) throw new ApiError(404, "Saldo inicial no encontrado.");
@@ -3134,7 +3134,7 @@ campoRouter.post("/saldos-iniciales/banco", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-campoRouter.delete("/saldos-iniciales/banco/:id", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.delete("/saldos-iniciales/banco/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const r = await pool.query("DELETE FROM campo_movimientos WHERE id = $1 AND naturaleza = $2", [req.params.id, ORIGEN_SALDO_INICIAL]);
   if (!r.rowCount) throw new ApiError(404, "Saldo inicial del banco no encontrado.");
   res.json({ ok: true });
@@ -3528,7 +3528,7 @@ campoRouter.patch("/documentos/:id", asyncRoute(async (req, res) => {
   res.json((await pool.query(`${SELECT_DOCS} WHERE d.id = $1`, [req.params.id])).rows[0]);
 }));
 
-campoRouter.delete("/documentos/:id", requireAdmin, asyncRoute(async (req, res) => {
+campoRouter.delete("/documentos/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const r = await pool.query("DELETE FROM campo_documentos WHERE id = $1", [req.params.id]);
   if (!r.rowCount) throw new ApiError(404, "Documento no encontrado");
   res.json({ ok: true });

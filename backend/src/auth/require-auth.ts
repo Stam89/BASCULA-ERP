@@ -488,7 +488,7 @@ async function aplicarPermisosDeEscritura(req: Request, _res: Response, next: Ne
  */
 type Permiso = "ANULAR" | "EDITAR_PRECIOS" | "SALDOS_INICIALES" | "FOMENTO_GASTO_ADM" | "FOMENTO_ELIMINAR";
 const SIN_PERMISO: Record<Permiso, string> = {
-  ANULAR: "Solo el administrador puede anular, eliminar o reabrir registros.",
+  ANULAR: "Para anular, eliminar o reabrir registros necesitas el permiso «Anular» (lo da el administrador en Usuarios → permisos especiales).",
   SALDOS_INICIALES: "No tienes permiso para cargar saldos iniciales en este accionista. Pide el permiso «Cargar Saldos iniciales» a un administrador.",
   EDITAR_PRECIOS: "No tienes permiso para editar precios y tarifas. Pide el permiso «Editar Precios y Tarifas» a un administrador.",
   FOMENTO_GASTO_ADM: "No tienes permiso para cambiar el gasto administrativo. Pide el permiso «Fomentos: cambiar gasto administrativo» a un administrador.",
@@ -510,8 +510,9 @@ export function requirePermiso(permiso: Permiso, alterno?: Permiso) {
     ).then((fresh) => {
       const row = fresh.rows[0];
       if (!row || !row.is_active) { next(new ApiError(401, "Tu usuario fue desactivado. Habla con un administrador.")); return; }
-      // Anular / eliminar / reabrir: SOLO el administrador (pedido del dueño 2026-10-21); el permiso especial ya no basta.
-      const tiene = (p?: Permiso) => !!p && p !== "ANULAR" && (row.allowed_modules ?? []).includes(`PERM:${p}`);
+      // Anular / eliminar / reabrir: el administrador o quien tenga el permiso especial «Anular» en este accionista
+      // (pedido del dueño 2026-11-13: «cada usuario con las mismas opciones que el administrador en sus permisos»).
+      const tiene = (p?: Permiso) => !!p && (row.allowed_modules ?? []).includes(`PERM:${p}`);
       if (row.role_name === "ADMINISTRADOR" || tiene(permiso) || tiene(alterno)) { next(); return; }
       next(new ApiError(403, SIN_PERMISO[permiso]));
     }, next);
@@ -533,6 +534,18 @@ export async function exigirModuloEn(req: Request, accionistaId: string, module:
   if (!(fila?.allowed_modules ?? []).includes(`EDIT:${module}`)) {
     throw new ApiError(403, `No tienes permiso de ${module} en ${fila?.name ?? "ese accionista"}. Pide acceso a un administrador.`);
   }
+}
+
+/** ¿Puede anular/reabrir en el accionista activo? Administrador o permiso especial «Anular» (lo mismo que requirePermiso). */
+export async function puedeAnular(req: Request): Promise<boolean> {
+  const user = (req as AuthenticatedRequest).user;
+  if (!user) return false;
+  if (user.role_name === "ADMINISTRADOR") return true;
+  const r = await pool.query(
+    "SELECT ua.allowed_modules FROM user_accionistas ua WHERE ua.user_id = $1 AND ua.accionista_id = $2",
+    [user.id, (req as AuthenticatedRequest).accionistaId ?? null]
+  );
+  return (r.rows[0]?.allowed_modules ?? []).includes("PERM:ANULAR");
 }
 
 export function requireAdmin(req: Request, _res: Response, next: NextFunction) {

@@ -366,7 +366,7 @@ saldosInicialesRouter.post("/anticipos", asyncRoute(async (req, res) => {
 }));
 
 // ── Anular una carga (mientras no tenga abonos ni se haya usado) ─────────────
-saldosInicialesRouter.post("/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+saldosInicialesRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const { accionistaId, userId } = contexto(req as AuthenticatedRequest);
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   const out = await inTransaction(async (client) => {

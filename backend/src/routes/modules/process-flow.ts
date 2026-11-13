@@ -9,7 +9,7 @@ import { nextCode } from "../../utils/codes.js";
 import { nextSequentialLotCode } from "../../utils/lot-code.js";
 import { repartirPorPeso } from "../../utils/money.js";
 import { groupDryingEntries, isLastActiveDryingTunnel, normalizeDryingOperationType } from "../../utils/drying-groups.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import {
   createLotProcessReport,
   findStageReportId,
@@ -682,7 +682,7 @@ processFlowRouter.get("/solo-secado/convertibles", asyncRoute(async (_req, res) 
   res.json(r.rows);
 }));
 
-processFlowRouter.post("/lots/:lotId/servicio-completo", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/lots/:lotId/servicio-completo", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const lotId = String(req.params.lotId);
   const user = (req as AuthenticatedRequest).user;
   const out = await inTransaction(async (client) => {
@@ -958,7 +958,7 @@ processFlowRouter.post("/drying/motor/:motor/finalizar-sin-combustible", asyncRo
 // aunque el túnel hoy esté ocupado con otro. Conserva sus fechas (no hereda las de la corrida en curso), genera la
 // cuadrilla y el jornal del secador con sus días, y omite el combustible: queda en su propio registro en $0, sin aviso de
 // pendiente. No toca la corrida que está en marcha. Con Reabrir se deshace.
-processFlowRouter.post("/drying/secado-pasado", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/drying/secado-pasado", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({
     entry_ids: z.array(z.string().uuid()).min(1),
     tunnel_number: z.number().int().min(1).max(3),
@@ -999,7 +999,7 @@ processFlowRouter.post("/drying/secado-pasado", requireAdmin, asyncRoute(async (
 }));
 
 // 🚫 OMITIR el combustible de una corrida (solo administrador): deja de salir como pendiente y se queda en $0.
-processFlowRouter.post("/drying/motor-fuel/:id/omitir", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/drying/motor-fuel/:id/omitir", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const r = await pool.query("UPDATE motor_fuel_records SET pendiente = false WHERE id = $1 AND pendiente RETURNING id", [req.params.id]);
   if (!r.rowCount) throw new ApiError(409, "Ese combustible ya no está pendiente.");
   res.json({ ok: true });
@@ -1060,7 +1060,7 @@ processFlowRouter.post("/drying/motor-fuel/:id/completar", asyncRoute(async (req
 // 🧺 «La cuadrilla ya se pagó por fuera» (solo administrador, pedido del dueño 2026-10-28): un secado registrado
 // después cuya cuadrilla se pagó en el Excel. Quita sus pagos de cuadrilla pendientes (llenado y botada) y el pago
 // automático no los vuelve a crear. Desmarcarlo los vuelve a generar. Lo ya pagado en el sistema no se toca (409).
-processFlowRouter.post("/drying/:dryingId/cuadrilla-fuera", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/drying/:dryingId/cuadrilla-fuera", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ fuera: z.boolean() }).parse(req.body);
   const dryingId = String(req.params.dryingId);
   const result = await inTransaction(async (client) => {
@@ -1085,7 +1085,7 @@ processFlowRouter.post("/drying/:dryingId/cuadrilla-fuera", requireAdmin, asyncR
   res.json(result);
 }));
 
-processFlowRouter.post("/drying/:dryingId/reabrir", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/drying/:dryingId/reabrir", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(5, "Escribe el motivo (mínimo 5 letras).").max(400) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const result = await inTransaction(async (client) => {
@@ -1962,7 +1962,7 @@ async function secadoMismoDuenoEnTunel(
 // 🗓️ RECALCULAR la jornada del secador de un rango de días con la regla vigente (el día es el de la HORA DE INICIO).
 // Para los días que ya se habían contado por la fecha de llenado. Solo toca jornadas PENDIENTES de secados; lo pagado
 // no se modifica. Un día que se quedó sin túneles iniciados vuelve a ser solo guardianía.
-processFlowRouter.post("/drying/secador/recalcular", requireAdmin, asyncRoute(async (req, res) => {
+processFlowRouter.post("/drying/secador/recalcular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/)

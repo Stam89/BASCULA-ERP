@@ -4,7 +4,7 @@ import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import {
   anularDineroEntreSocios, historialEntreSocios, registrarDineroEntreSocios, resumenCuentasEntreSocios
 } from "../../services/entre-socios.js";
@@ -58,7 +58,7 @@ entreSociosRouter.post("/dinero", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-entreSociosRouter.post("/dinero/:id/anular", requireAdmin, asyncRoute(async (req, res) => {
+entreSociosRouter.post("/dinero/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const r = req as AuthenticatedRequest;
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   await inTransaction((client) => anularDineroEntreSocios(client, { id: String(req.params.id), motivo, userId: r.user?.id ?? null }));

@@ -74,14 +74,16 @@ try {
     ["fijar meses de gasto administrativo", "PATCH", `/fomentos/${fake}/interes-fijo`, { activo: true, meses: 1 }],
     ["fijar meses por entrega", "PATCH", `/fomentos/${fake}/entregas/${fake}/interes-fijo`, { meses: 1 }],
     ["bloquear/desbloquear liquidaciones", "POST", "/liquidations/set-lock", { ids: [], locked: true }],
-    ["poner precio de venta en Gana", "PATCH", `/processing-batches/${fake}/precio-venta`, { producto: "blanco", precio: 30 }]
+    ["poner precio de venta en Gana", "PATCH", `/processing-batches/${fake}/precio-venta`, { producto: "blanco", precio: 30 }],
+    ["anular una producción (antes solo admin)", "POST", `/processing-batches/${fake}/anular`, { motivo: "prueba de permisos" }]
   ];
   for (const [n, m, p, b] of casos) {
     check(await st(caj, m, p, b) === 403, `C. SIN el permiso especial no puede: ${n}`);
     const s = await st(cajP, m, p, b);
-    // Desde 2026-10-21 anular / eliminar es SOLO del administrador: el permiso especial ya no alcanza.
-    const soloAdmin = /^(anular|eliminar)/.test(n);
-    check(soloAdmin ? s === 403 : s !== 403, soloAdmin ? `C. CON el permiso especial TAMPOCO puede (solo admin): ${n}` : `C. CON el permiso especial ya no le da 403: ${n}`, s);
+    // Desde 2026-11-13 el permiso «Anular» vuelve a valer (pedido del dueño). Eliminar en Fomentos tiene su propio
+    // permiso (FOMENTO_ELIMINAR), que este usuario no tiene: ahí sigue el 403.
+    const sinSuPermiso = /^eliminar/.test(n);
+    check(sinSuPermiso ? s === 403 : s !== 403, sinSuPermiso ? `C. CON «Anular» pero sin «Fomentos: eliminar» no puede: ${n}` : `C. CON el permiso especial ya no le da 403: ${n}`, s);
   }
   check(await st(caj, "PATCH", `/fomentos/${fake}`, { notes: "x" }) !== 403, "C. editar datos del fomento (sin tocar la tasa) no exige el permiso");
 

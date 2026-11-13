@@ -6,7 +6,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { avisarSobregiro } from "../../services/caja.js";
 import { resolverProveedor } from "../../services/proveedores.js";
 
@@ -217,7 +217,7 @@ purchasesRouter.post("/", asyncRoute(async (req, res) => {
 // POST pasar a CRÉDITO una compra registrada a contado (pedido del dueño 2026-11-12): el pago vuelve a la caja (si aún
 // no se anuló) y nace la Cuenta por Pagar al proveedor/agricultor; la compra y su inventario quedan igual. También
 // arregla una compra cuyo pago se anuló suelto en Caja (antes no quedaba ni dinero ni deuda). Solo admin.
-purchasesRouter.post("/:id/a-credito", requireAdmin, asyncRoute(async (req, res) => {
+purchasesRouter.post("/:id/a-credito", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
   const accionistaId = authReq.accionistaId ?? null;
   const body = z.object({
@@ -274,7 +274,7 @@ purchasesRouter.post("/:id/a-credito", requireAdmin, asyncRoute(async (req, res)
 }));
 
 // POST anular una compra por contra-asiento (nunca borrado fisico). Solo admin.
-purchasesRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
+purchasesRouter.post("/:id/cancel", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const authReq = req as AuthenticatedRequest;
   const accionistaId = authReq.accionistaId ?? null;
   const body = z.object({

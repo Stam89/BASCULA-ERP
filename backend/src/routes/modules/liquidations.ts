@@ -1152,7 +1152,7 @@ liquidationsRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(asyn
 // pura: la anulación ya revirtió todo (fomentos, anticipos, deuda inter-socios,
 // caja), así que aquí NO se re-disparan reversas ni se tocan saldos de fomentos
 // existentes; solo se borran la fila y sus referencias ya neutralizadas.
-liquidationsRouter.delete("/:id", requireAdmin, asyncRoute(async (req, res) => {
+liquidationsRouter.delete("/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const liqId = String(req.params.id);
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {

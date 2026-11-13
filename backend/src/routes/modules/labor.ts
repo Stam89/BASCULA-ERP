@@ -6,7 +6,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { estibadorBaseFromTulas } from "../../utils/money.js";
 import { diaSecadorSql, esDiaPagableSecador, fechasLaborablesDesdeLunes } from "../../utils/secador-workday.js";
 import { fechaEc } from "../../utils/fechas.js";
@@ -852,7 +852,7 @@ laborRouter.post("/advances", asyncRoute(async (req, res) => {
 }));
 
 // ── Ajustar descuento de un pago ───────────────────────────────────────────
-laborRouter.put("/payments/:id", requireAdmin, asyncRoute(async (req, res) => {
+laborRouter.put("/payments/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   await ensureLaborTables();
   const body = z.object({ discount: z.number().nonnegative() }).parse(req.body);
   const result = await pool.query(

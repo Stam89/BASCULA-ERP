@@ -1916,7 +1916,7 @@ cashRouter.post("/payables/prestamo-selectora/descontar", asyncRoute(async (req,
   })));
 }));
 
-cashRouter.post("/payables/prestamo-selectora/:lote/anular", requireAdmin, asyncRoute(async (req, res) => {
+cashRouter.post("/payables/prestamo-selectora/:lote/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const lote = z.string().uuid().parse(req.params.lote);
   res.json(await inTransaction((client) => anularDescuentoPrestamo(client, lote, (req as AuthenticatedRequest).user?.id ?? null)));
 }));

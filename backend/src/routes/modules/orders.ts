@@ -8,7 +8,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { exigirCajaAbiertaDelAccionista, fechaValidaDeCaja } from "../../services/caja.js";
 import { nextCode } from "../../utils/codes.js";
 import { round2 } from "../../utils/rice-formulas.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso, puedeAnular } from "../../auth/require-auth.js";
 import { crearVenta } from "./sales.js";
 import { cobrarEmpaqueAlDespachar } from "../../services/cargo-empaque.js";
 import { descontarSacosPedido, restaurarSacosPedido, type ResultadoSacos } from "../../services/sacos.js";
@@ -781,9 +781,9 @@ ordersRouter.patch("/:id/prepare", asyncRoute(async (req, res) => {
   }).parse(req.body);
   if (body.desde_piladora && body.alla_ya_llego) throw new ApiError(400, "Elige una sola opción: ya llegó de allá o sale de lo que se está pilando.");
   if (body.alla_ya_llego?.flete) validarFleteRegreso(body.alla_ya_llego.flete as FleteEnvejecido);
-  // ↩ Revertir una preparación devuelve arroz y sacos al inventario: solo el administrador (2026-10-21).
-  if (!body.prepared && (req as AuthenticatedRequest).user?.role_name !== "ADMINISTRADOR") {
-    throw new ApiError(403, "Solo el administrador puede revertir la preparación de un pedido.");
+  // ↩ Revertir una preparación devuelve arroz y sacos al inventario: administrador o permiso «Anular» (2026-11-13).
+  if (!body.prepared && !(await puedeAnular(req))) {
+    throw new ApiError(403, "Para revertir la preparación de un pedido necesitas el permiso «Anular».");
   }
 
   let sacos: ResultadoSacos | null = null;
@@ -1191,7 +1191,7 @@ ordersRouter.put("/:id/flete", asyncRoute(async (req, res) => {
   res.json({ ok: true, flete: out });
 }));
 
-ordersRouter.delete("/:id/flete", requireAdmin, asyncRoute(async (req, res) => {
+ordersRouter.delete("/:id/flete", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const out = await inTransaction(async (client) => {
     const order = (await client.query(
@@ -1212,7 +1212,7 @@ ordersRouter.delete("/:id/flete", requireAdmin, asyncRoute(async (req, res) => {
 //  · flete de Transporte y cargo de empaque entre socios: se quitan (si ya se cobraron → 409);
 //  · cuadrilla del despacho: se quita si aún no se pagó (si ya se pagó, queda: el trabajo se hizo).
 // El pedido queda CANCELLED con motivo, fecha y quién; la venta, sale_status CANCELLED. Nada se borra.
-ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, res) => {
+ordersRouter.post("/:id/anular-despacho", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const user = (req as AuthenticatedRequest).user;
   const body = z.object({
@@ -1342,7 +1342,7 @@ ordersRouter.post("/:id/anular-despacho", requireAdmin, asyncRoute(async (req, r
   res.json({ ok: true, ...out });
 }));
 
-ordersRouter.post("/:id/cancel", requireAdmin, asyncRoute(async (req, res) => {
+ordersRouter.post("/:id/cancel", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
   const result = await inTransaction(async (client) => {
     const order = await client.query(

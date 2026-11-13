@@ -5,7 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
-import { exigirEscrituraEn, exigirLecturaEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { exigirEscrituraEn, exigirLecturaEn, requireAdmin, requireAuth, resolveAccionista, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { exigirCajaAbiertaDelAccionista } from "../../services/caja.js";
 import { dentroDelCorteSql, fechaTicketSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../../utils/rice-formulas.js";
@@ -548,11 +548,11 @@ mobileTicketsRouter.post("/manual", requireAuth, resolveAccionista, exigirEscrit
 mobileTicketsRouter.get("/cambios-bascula", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (_req, res) => {
   res.json(await listarCambiosBascula(pool));
 }));
-mobileTicketsRouter.post("/:id/aplicar-cambio", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/aplicar-cambio", requireAuth, requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
   res.json(await inTransaction((client) => aplicarCambioBascula(client, String(req.params.id), user?.name ?? user?.username ?? null)));
 }));
-mobileTicketsRouter.post("/:id/descartar-cambio", requireAuth, requireAdmin, asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/descartar-cambio", requireAuth, requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const user = (req as AuthenticatedRequest).user;
   await inTransaction((client) => descartarCambioBascula(client, String(req.params.id), user?.name ?? user?.username ?? null));
   res.json({ ok: true });
@@ -614,7 +614,7 @@ mobileTicketsRouter.put("/corte", requireAuth, requireAdmin, asyncRoute(async (r
 
 // 🗑️ Quitar un ticket de los pendientes (se borró en la app de báscula, era de prueba o está repetido) y ↩️ restaurarlo.
 // No se borra: deja de contar como pendiente y sigue en «Todos». Solo si no se ingresó ni liquidó.
-mobileTicketsRouter.post("/:id/quitar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/quitar", requireAuth, requirePermiso("ANULAR"), resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const r = await pool.query(
@@ -626,7 +626,7 @@ mobileTicketsRouter.post("/:id/quitar", requireAuth, requireAdmin, resolveAccion
   if (!r.rowCount) throw new ApiError(409, "Ese ticket ya se ingresó, se liquidó o ya estaba quitado.");
   res.json({ ok: true, numero: r.rows[0].numero });
 }));
-mobileTicketsRouter.post("/:id/restaurar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/restaurar", requireAuth, requirePermiso("ANULAR"), resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const r = await pool.query(
     "UPDATE mobile_synced_tickets SET quitado_at = NULL, quitado_motivo = NULL, quitado_por = NULL WHERE id = $1 AND quitado_at IS NOT NULL RETURNING id",
     [req.params.id]
@@ -636,7 +636,7 @@ mobileTicketsRouter.post("/:id/restaurar", requireAuth, requireAdmin, resolveAcc
 }));
 
 // ↩️ Regresar a Báscula un ticket ingresado por error: vuelve a pendiente y su cáscara sale del inventario.
-mobileTicketsRouter.post("/:id/regresar", requireAuth, requireAdmin, resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
+mobileTicketsRouter.post("/:id/regresar", requireAuth, requirePermiso("ANULAR"), resolveAccionista, exigirEscrituraEn("tickets", ["Bascula"]), asyncRoute(async (req, res) => {
   const { motivo } = z.object({ motivo: z.string().trim().min(3).max(200) }).parse(req.body);
   const user = (req as AuthenticatedRequest).user;
   const r = await inTransaction((client) => regresarTicketABascula(client, { ticketId: String(req.params.id), motivo, userId: user?.id ?? null }));

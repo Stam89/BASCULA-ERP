@@ -7,7 +7,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { getMatrizId } from "../../services/matriz.js";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { registrarSacosRecuperados, revertirSacosRecuperados } from "../../services/sacos.js";
 import { armarRoster, canonico, evaluarNombre, type Evaluacion } from "../../services/bajada-nombres.js";
 import { numeroTicketSql } from "../../services/bascula-corte.js";
@@ -1026,7 +1026,7 @@ cuadrillaRouter.post("/pago-directo", asyncRoute(async (req, res) => {
   res.status(201).json(out);
 }));
 
-cuadrillaRouter.delete("/entries/:id", requireAdmin, asyncRoute(async (req, res) => {
+cuadrillaRouter.delete("/entries/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   // Los registros autogenerados NO se borran aquí: hacerlo descuadraría el
   // movimiento de origen. Se corrigen en Secadoras/Ventas según corresponda.
   const current = await pool.query("SELECT origen, tunnel_number, paid_at FROM cuadrilla_entries WHERE id = $1", [req.params.id]);

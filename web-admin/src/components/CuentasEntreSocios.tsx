@@ -23,7 +23,9 @@ const TITULO: Record<OpEntreSocios, string> = { pago: "🧾 Pagué algo de un so
 const tituloCon = (op: OpEntreSocios, n: string) => (op === "pago" ? `🧾 Pagué algo de ${n}` : op === "dar" ? `💵 Le di dinero a ${n}` : `💵 ${n} me dio dinero`);
 const TIPO_HIST: Record<Hist["tipo"], string> = { dinero: "💵 Dinero", pago: "🧾 Pago por su cuenta", gasto: "🧾 Gasto por su cuenta", cruce: "⇄ Cruce" };
 
-export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categoriasGasto, inicial, avisar, onCambio, onCerrar }: {
+export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categoriasGasto, inicial, avisar, onCambio, onCerrar, puedeAnular }: {
+  /** Administrador o permiso «Anular». */
+  puedeAnular?: boolean;
   accionistas: Acc[];
   activoId: string | null;
   /** Caja abierta del accionista activo (para «un gasto suyo»). */
@@ -38,7 +40,7 @@ export function CuentasEntreSocios({ accionistas, activoId, cajaAbiertaId, categ
 }) {
   const yo = accionistas.find((a) => a.id === activoId) ?? null;
   const otros = accionistas.filter((a) => a.id !== activoId);
-  const admin = esAdministrador();
+  const admin = puedeAnular ?? esAdministrador();
   const [pares, setPares] = useState<Par[] | null>(null);
   const [form, setForm] = useState<Form | null>(null);
   const [busy, setBusy] = useState(false);

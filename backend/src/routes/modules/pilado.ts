@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { requireAdmin, type AuthenticatedRequest } from "../../auth/require-auth.js";
+import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -179,7 +179,7 @@ piladoRouter.post("/services", asyncRoute(async (req, res) => {
 // ⚖️ Recalcular el cobro de una pilada a CLIENTE ya subida (pedido del dueño 2026-10-30): con la tarifa y el mínimo por
 // rendimiento vigentes en Parámetros de planta. Actualiza el servicio, su Por Cobrar (el saldo cambia por la diferencia),
 // la orden de maquila y el monto del servicio en el rendimiento (Costos). Solo el administrador.
-piladoRouter.post("/services/:id/aplicar-minimo", requireAdmin, asyncRoute(async (req, res) => {
+piladoRouter.post("/services/:id/aplicar-minimo", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ motivo: z.string().trim().min(3).max(200).optional() }).parse(req.body ?? {});
   const out = await inTransaction(async (tx) => {
     const s = (await tx.query(
