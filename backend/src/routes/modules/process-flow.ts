@@ -415,7 +415,10 @@ processFlowRouter.get("/drying/available-lots", asyncRoute(async (req, res) => {
      LEFT JOIN mobile_synced_tickets m ON m.weighing_ticket_id = w.id
      WHERE w.quintals IS NOT NULL AND w.quintals > 0
        AND w.lot_id IS NULL
-       AND w.accionista_id = $1
+       -- Los servicios (secado / secado+pilado) son siempre de la Matriz: salen también desde otro socio para
+       -- poder echarlos en una secadora que ya está en uso (pedido del dueño 2026-11-14). El dueño del registro
+       -- lo pone el propio ticket al guardar, no el socio activo.
+       AND (w.accionista_id = $1 OR COALESCE(w.operation_type, CASE WHEN w.is_maquila THEN 'SECADO_PILADO' ELSE 'COMPRA' END) <> 'COMPRA')
        -- 'Solo Servicio de Pilada' ya viene seco: NO pasa por secadoras.
        AND COALESCE(w.operation_type, 'COMPRA') <> 'PILADO'
        AND NOT EXISTS (
@@ -1895,6 +1898,11 @@ async function registrarPagoCuadrillaTendal(
 
 export async function createDryingBatch(client: PoolClient, body: z.infer<typeof dryingBodySchema>) {
   const compartir = body.dry_method !== "TENDAL" && Boolean(body.tunnel_number) && body.compartir_secadora;
+  // Una hora final sin hora de inicio no es un secado terminado (pedido del dueño 2026-11-14: el celular puso la hora del
+  // momento al elegir la fecha y el túnel quedó «ya terminó de secar», sin poder sumarle arroz).
+  if (body.dry_method !== "TENDAL" && body.dry_end_at && !body.dry_start_at) {
+    throw new ApiError(400, "Pusiste la hora final del secado sin la hora de inicio del motor: borra la hora final (se pone al terminar de secar) o escribe primero la hora de inicio.");
+  }
   if (body.dry_method !== "TENDAL" && body.tunnel_number) {
     await client.query("SELECT pg_advisory_xact_lock($1, $2)", [71_001, body.tunnel_number]);
     if (!compartir) await assertTunnelAvailable(client, body.tunnel_number);

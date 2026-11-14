@@ -40,7 +40,11 @@ try {
   const r1 = exigir(await llenar([a.id, b.id], socio.id, false), `A1. ${socio.name} llena la secadora 2 con sus 2 compras`);
   const sinCompartir = await llenar([s.id], matriz, false);
   check(sinCompartir.status === 409, "A2. sin «compartir», la secadora en uso sigue bloqueada", mostrar(sinCompartir));
-  const r2rep = exigir(await llenar([s.id], matriz, true), "A3. la Matriz suma el servicio en la MISMA secadora (compartida)");
+  // Pedido 2026-11-14: trabajando desde el SOCIO, el servicio de la Matriz también sale en la lista y se puede echar.
+  const libresSocio = exigir(await api("GET", "/process-flow/drying/available-lots", undefined, socio.id), "A2b. tickets libres vistos desde el socio");
+  check(libresSocio.some((e) => e.id === s.id), "A2c. desde el socio sale el servicio de la Matriz para echarlo en la secadora", libresSocio.length);
+  check(!libresSocio.some((e) => e.operation_type === "COMPRA" && e.accionista_id !== socio.id), "A2d. pero no las compras de otros dueños");
+  const r2rep = exigir(await llenar([s.id], socio.id, true), "A3. desde el socio se suma el servicio de la Matriz en la MISMA secadora (compartida)");
   const repServ = r2rep.reports[0], repSocio = r1.reports[0];
   const estado = exigir(await api("GET", "/process-flow/drying/tunnels-status"), "A4. estado de túneles");
   const del2 = estado.filter((x) => x.tunnel_number === tunel);

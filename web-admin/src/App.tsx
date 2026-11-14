@@ -11796,6 +11796,12 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
 
     // Candado: no se puede guardar nada en un túnel que está secando a otro
     // accionista (además del bloqueo visual del formulario).
+    // Hora final sin hora de inicio: el celular pone la hora del momento al elegir la fecha (pedido del dueño 2026-11-14).
+    const finSinInicio = conIngresos.find((s) => String(form.get(`dry_end_at_${tunelDeSecadora(s)}`) ?? "").trim() && !horaInicioMotor);
+    if (finSinInicio) {
+      addToast(`En ${finSinInicio} pusiste la «Hora secado final» sin la hora de inicio del motor. Bórrala (se pone al terminar de secar) o escribe primero la hora de inicio.`, "error");
+      return;
+    }
     const bloqueada = conIngresos.find((s) => occupiedTunnels[tunelDeSecadora(s)] && !secadoraCompartida[s]);
     if (bloqueada) {
       const t = tunelDeSecadora(bloqueada);
