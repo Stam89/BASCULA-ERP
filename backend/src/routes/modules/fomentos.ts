@@ -70,7 +70,7 @@ const fomentoSchema = z.object({
   cuadras:      z.number().positive(),
   inicio:       z.string().regex(/^\d{4}-\d{2}-\d{2}/),
   cosecha:      z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
-  renta:        z.number().min(0.001).max(1).default(0.07),
+  renta:        z.number().min(0).max(1).default(0.07),
   status:       z.enum(["ACTIVOS","NO ACTIVOS","APROBADOS"]).default("ACTIVOS"),
   notes:        z.string().optional(),
   // Informativos (NO alteran el cálculo del crédito, que sigue en cuadras*800).
@@ -320,7 +320,7 @@ const importRowSchema = z.object({
   cuadras: z.number().positive(),
   inicio: z.string().regex(/^\d{4}-\d{2}-\d{2}/),
   cosecha: z.string().regex(/^\d{4}-\d{2}-\d{2}/).optional(),
-  renta: z.number().min(0.001).max(1).default(0.07),
+  renta: z.number().min(0).max(1).default(0.07),
   status: z.enum(["ACTIVOS", "NO ACTIVOS", "APROBADOS"])
 });
 

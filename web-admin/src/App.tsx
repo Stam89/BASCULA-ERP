@@ -3908,6 +3908,8 @@ export function App() {
   const [confirmarEliminarFomento, setConfirmarEliminarFomento] = useState<{ id: string; nombre: string } | null>(null);
   const [borrandoFomento, setBorrandoFomento] = useState(false);
   const [fomentoEntregaForm, setFomentoEntregaForm] = useState({ fecha: hoyLocal(), valor: "", concepto: "", es_saldo_anterior: false, meses_interes_fijo: "1" });
+  // 🚫 Entrega sin gasto administrativo (báscula, flete, cosechadora): se le pone «interés hasta» = su propia fecha.
+  const [fomentoEntregaSinGasto, setFomentoEntregaSinGasto] = useState(false);
   // Confirmación de eliminación de una entrega (con su valor/fecha para el mensaje).
   const [confirmarEntrega, setConfirmarEntrega] = useState<{ fomentoId: string; entregaId: string; valor: number; fecha: string } | null>(null);
   const [borrandoEntrega, setBorrandoEntrega] = useState(false);
@@ -9843,13 +9845,20 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   async function submitFomentoEntrega(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!fomentoDetalle) return;
-    await apiPost(`/fomentos/${fomentoDetalle.id}/entregas`, {
+    const creada = await apiPost<{ id?: string; fecha?: string }>(`/fomentos/${fomentoDetalle.id}/entregas`, {
       fecha: fomentoEntregaForm.fecha,
       valor: Number(fomentoEntregaForm.valor),
       concepto: fomentoEntregaForm.concepto || undefined,
       cash_register_id: dashboard.current_cash_register?.id,
       ...cuerpoEntregaFomento()
     });
+    if (fomentoEntregaSinGasto && creada?.id) {
+      await apiOk(`/fomentos/${fomentoDetalle.id}/entregas/${creada.id}/interes-hasta`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fecha: String(creada.fecha ?? fomentoEntregaForm.fecha).slice(0, 10) })
+      }).catch((err) => addToast(`La entrega se registró, pero no se pudo quitar su gasto adm.: ${(err as Error).message}`, "error"));
+    }
+    setFomentoEntregaSinGasto(false);
     const aviso = fomentoPorTransferencia() ? avisoTransferenciaFomento() : null;
     reiniciarMedio();
     setFomentoTransferidoA("");
@@ -9942,8 +9951,10 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   }
 
   async function saveRenta(fomentoId: string) {
-    const renta = Number(fomentoRentaInput) / 100;
-    if (!renta || renta <= 0 || renta > 1) { addToast("Porcentaje inválido", "error"); return; }
+    // 0 % se permite (fomento sin gasto administrativo). Acepta coma o punto.
+    const texto = String(fomentoRentaInput ?? "").trim().replace(",", ".");
+    const renta = Number(texto) / 100;
+    if (texto === "" || !Number.isFinite(renta) || renta < 0 || renta > 1) { addToast("Porcentaje inválido (0 a 100)", "error"); return; }
     await apiOk(`/fomentos/${fomentoId}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ renta })
@@ -23412,6 +23423,32 @@ Motivo (obligatorio):`, ""));
                             <span>{f.cuadras} cuadras</span>
                             <span>Límite: {money(Number(f.monto_limite))}</span>
                             <span>Pedido: {money(Number(f.total_pedido))}</span>
+                            {fomentoEditingRenta === f.id && fomentoDetalle?.id !== f.id ? (
+                              <span onClick={(e) => e.stopPropagation()} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                                <input type="number" step="0.01" min="0" max="100" autoFocus value={fomentoRentaInput}
+                                  onChange={(e) => setFomentoRentaInput(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") { e.preventDefault(); saveRenta(f.id).catch((err) => addToast(err.message, "error")); }
+                                    if (e.key === "Escape") setFomentoEditingRenta(null);
+                                  }}
+                                  style={{ width: 62, padding: "1px 4px", borderRadius: 4, border: "1px solid #f59e0b", fontSize: 12 }} />%
+                                <button type="button" title="Guardar" onClick={() => saveRenta(f.id).catch((err) => addToast(err.message, "error"))}
+                                  style={{ border: "none", background: "var(--c-brand)", color: "#fff", borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontSize: 11, fontWeight: 700 }}>✓</button>
+                                <button type="button" title="Cancelar" onClick={() => setFomentoEditingRenta(null)}
+                                  style={{ border: "1px solid #d1d5db", background: "none", borderRadius: 4, padding: "1px 6px", cursor: "pointer", fontSize: 11 }}>✕</button>
+                              </span>
+                            ) : (
+                              <span title={canGastoAdmFomento && f.status !== "CERRADO_LIQUIDACION" ? "Toca para cambiar el % del gasto administrativo" : "Gasto administrativo mensual"}
+                                onClick={canGastoAdmFomento && f.status !== "CERRADO_LIQUIDACION" ? (e) => {
+                                  e.stopPropagation();
+                                  setFomentoEditingRenta(f.id);
+                                  setFomentoRentaInput(String(Math.round(Number(f.renta ?? 0) * 10000) / 100));
+                                } : undefined}
+                                style={{ color: "#b45309", fontWeight: 700, cursor: canGastoAdmFomento && f.status !== "CERRADO_LIQUIDACION" ? "pointer" : "default",
+                                  borderBottom: canGastoAdmFomento && f.status !== "CERRADO_LIQUIDACION" ? "1px dashed #f59e0b" : "none" }}>
+                                {(Number(f.renta ?? 0) * 100).enReal()}%{canGastoAdmFomento && f.status !== "CERRADO_LIQUIDACION" ? " ✏" : ""}
+                              </span>
+                            )}
                             {/* HABILITADO = aún le queda cupo para pedir (cuadras × $800 − lo pedido > 0). */}
                             <span className={`fomCupo ${habilitado ? "is-ok" : "is-agotado"}`} title={habilitado ? "Aún puede pedir: cuadras × $800 es mayor que lo pedido" : "Ya pidió todo su cupo (cuadras × $800)"}>{habilitado ? "Con cupo" : "Cupo agotado"}</span>
                           </div>
@@ -23490,7 +23527,7 @@ Motivo (obligatorio):`, ""));
                       <span style={{ fontSize: 12, fontWeight: 600 }}>Tasa de gasto administrativo:</span>
                       {fomentoEditingRenta === fomentoDetalle.id ? (
                         <>
-                          <input type="number" step="0.01" min="0.1" max="100" value={fomentoRentaInput}
+                          <input type="number" step="0.01" min="0" max="100" value={fomentoRentaInput}
                             onChange={e => setFomentoRentaInput(e.target.value)}
                             style={{ width: 70, padding: "3px 6px", borderRadius: 5, border: "1px solid #d1d5db", fontSize: 13 }}
                             placeholder="7" />
@@ -23509,7 +23546,7 @@ Motivo (obligatorio):`, ""));
                           <strong style={{ fontSize: 15, color: "#b45309" }}>{(Number(fomentoDetalle.renta) * 100).enReal()}%</strong>
                           <span style={{ fontSize: 10, color: "var(--c-muted)" }}>mensual</span>
                           {canGastoAdmFomento && (
-                            <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput((Number(fomentoDetalle.renta)*100).enReal()); }}
+                            <button type="button" onClick={() => { setFomentoEditingRenta(fomentoDetalle.id); setFomentoRentaInput(String(Math.round(Number(fomentoDetalle.renta ?? 0) * 10000) / 100)); }}
                               style={{ background: "none", border: "1px solid #fcd34d", borderRadius: 5, padding: "3px 8px", cursor: "pointer", fontSize: 11, color: "#92400e" }}>
                               ✏ Editar %
                             </button>
@@ -23662,7 +23699,7 @@ Motivo (obligatorio):`, ""));
                         {fomentoEntregaForm.valor && (
                           <div style={{ fontSize: 12, color: "var(--c-muted)", background: "#fffbeb", borderRadius: 6, padding: "4px 8px" }}>
                             {(() => {
-                              const renta = Number(fomentoDetalle.renta ?? 0.07);
+                              const renta = fomentoEntregaSinGasto ? 0 : Number(fomentoDetalle.renta ?? 0.07);
                               const valor = Number(fomentoEntregaForm.valor);
                               const dias = Math.max(0, Math.floor((Date.now() - new Date(fomentoEntregaForm.fecha).getTime()) / 86400000));
                               const interes = valor * renta / 30 * dias;
@@ -23675,6 +23712,19 @@ Motivo (obligatorio):`, ""));
                             onChange={e => setFomentoEntregaForm(p => ({...p, concepto: e.target.value}))}
                             style={{ display: "block", width: "100%", padding: "6px 8px", borderRadius: 6, border: "1px solid #d1d5db", marginTop: 2 }} placeholder="Opcional" />
                         </label>
+                        {canGastoAdmFomento && !fomentoEntregaForm.es_saldo_anterior && (
+                          <label style={{ fontSize: 12, display: "flex", alignItems: "flex-start", gap: 6, cursor: "pointer" }}>
+                            <input type="checkbox" checked={fomentoEntregaSinGasto} onChange={(e) => setFomentoEntregaSinGasto(e.target.checked)} style={{ marginTop: 2 }} />
+                            <span><b>Sin gasto adm.</b> <span className="muted">(báscula, flete, cosechadora: se le carga al cliente pero no cobra interés)</span>
+                              <span style={{ display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" }}>
+                                {["BÁSCULA", "FLETE", "COSECHADORA"].map((c) => (
+                                  <button key={c} type="button" className="btnGhost" style={{ padding: "1px 8px", fontSize: 11 }}
+                                    onClick={(e) => { e.preventDefault(); setFomentoEntregaSinGasto(true); setFomentoEntregaForm((p) => ({ ...p, concepto: c })); }}>{c}</button>
+                                ))}
+                              </span>
+                            </span>
+                          </label>
+                        )}
                         {cajaAdmiteTransferencia && (
                           <EntregaFomentoMedio medio={medioMostrado} onMedio={elegirMedio} mixta={cajaEsMixta}
                             transferidoA={fomentoTransferidoA} onTransferidoA={setFomentoTransferidoA}
