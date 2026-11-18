@@ -30515,8 +30515,63 @@ function DryingReportsPanel({
   onShare?: (report: DryingTunnelReport) => void;
   sharingId?: string | null;
 }) {
+  // 🧾 Al tocar la tarjeta de un secado se ven los pesos (tickets) que se secaron ahí (pedido del dueño 2026-11-18).
+  const [verPesos, setVerPesos] = useState<DryingTunnelReport | null>(null);
   return (
     <section className="tracePanel dryingReportsPanel">
+      {verPesos && (() => {
+        const r = verPesos;
+        const esTendalR = String(r.dry_method ?? "").toUpperCase() === "TENDAL" || (r.tunnel_number == null && !r.dryer_name);
+        const totKg = r.lots.reduce((s, l) => s + Number(l.net_weight_kg ?? 0), 0);
+        const totQq = r.lots.reduce((s, l) => s + Number(l.quintals ?? 0), 0);
+        const celda: React.CSSProperties = { padding: "6px 8px", borderBottom: "1px solid var(--c-border)" };
+        return (
+          <div className="modalOverlay" onClick={() => setVerPesos(null)}>
+            <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560, width: "94vw", maxHeight: "86vh", overflowY: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+                <div>
+                  <h3 style={{ margin: 0 }}>{esTendalR ? "☀️ Tendal" : `🌀 ${r.dryer_name ?? `Túnel ${r.tunnel_number}`}`} · pesos secados</h3>
+                  <div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>
+                    Llenado {fmtFechaHoraSecado(r.filled_at, "—")} · {r.rice_type === "CORRIENTE" ? "Corriente" : "0.11"} · {r.status === "COMPLETED" ? "Finalizado" : "En proceso"}
+                  </div>
+                </div>
+                <button type="button" onClick={() => setVerPesos(null)} aria-label="Cerrar" style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
+              </div>
+              {r.lots.length === 0 ? <p className="muted">Este secado no tiene pesos registrados.</p> : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, marginTop: 10 }}>
+                  <thead>
+                    <tr style={{ background: "var(--c-surface-2, #f1f5f9)", textAlign: "left" }}>
+                      <th style={celda}>#</th>
+                      <th style={celda}>Ticket</th>
+                      <th style={celda}>Agricultor</th>
+                      <th style={{ ...celda, textAlign: "right" }}>Kg neto</th>
+                      <th style={{ ...celda, textAlign: "right" }}>QQ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {r.lots.map((l, i) => (
+                      <tr key={`${l.lot_id}-${i}`}>
+                        <td style={celda}>{i + 1}</td>
+                        <td style={celda}>{String(l.lot_code ?? "").replace(/^Ticket\s*#?\s*/i, "") || "—"}</td>
+                        <td style={celda}>{l.farmer_name ?? "Sin agricultor"}{l.operation_type && l.operation_type !== "COMPRA" ? <small className="muted" style={{ display: "block" }}>servicio</small> : null}</td>
+                        <td style={{ ...celda, textAlign: "right" }}>{Number(l.net_weight_kg ?? 0).enReal(0, 0)}</td>
+                        <td style={{ ...celda, textAlign: "right", fontWeight: 600 }}>{Number(l.quintals ?? 0).enReal()}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ fontWeight: 800 }}>
+                      <td style={celda} colSpan={3}>Total · {r.lots.length} {r.lots.length === 1 ? "peso" : "pesos"}</td>
+                      <td style={{ ...celda, textAlign: "right" }}>{totKg.enReal(0, 0)}</td>
+                      <td style={{ ...celda, textAlign: "right" }}>{totQq.enReal()}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              )}
+            </div>
+          </div>
+        );
+      })()}
       <h2>Secados guardados</h2>
       {reports.length === 0 && <p className="muted">Aún no hay informes de secado guardados.</p>}
       {reports.map((report) => {
@@ -30529,7 +30584,8 @@ function DryingReportsPanel({
           ? report.lots.map((lot) => `${lot.farmer_name ?? "Sin agricultor"} · ${Number(lot.quintals ?? 0).enReal()} QQ`).join("  |  ")
           : "Sin lotes registrados";
         return (
-        <article className="dryingReportCard" key={report.id}>
+        <article className="dryingReportCard" key={report.id} style={{ cursor: "pointer" }} title="Toca para ver los pesos que se secaron aquí"
+          onClick={(e) => { if (!(e.target as HTMLElement).closest("button, a, input, select, label")) setVerPesos(report); }}>
           <div className="dryingReportTop">
             <div className="dryingReportIdentity">
               <div className="dryingReportBadges">
