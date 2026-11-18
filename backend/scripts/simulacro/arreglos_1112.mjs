@@ -100,7 +100,7 @@ try {
   } else check(true, "D. (sin bodega «allá» en la copia: se salta)");
 
   // ── E. Liquidar y pagar en el momento ──
-  const tickets = await q(`SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 3`);
+  const tickets = await q(`SELECT id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 ORDER BY id LIMIT 4`);
   const ingresos = [];
   for (const t of tickets) {
     await api("POST", `/tickets/${t.id}/link-farmer`, { farmer_id: farmer.id });
@@ -125,6 +125,20 @@ try {
       const n1 = (await q("SELECT count(*)::int n FROM liquidations WHERE weighing_ticket_id=$1 AND status<>'CANCELLED'", [ingresos[2].id]))[0].n;
       check(mucho.status === 409 && n0 === n1, "E5. si el pago supera lo que se le debe, no se guarda nada", mostrar(mucho));
     }
+    // E6 (2026-11-18): «¿Quién le paga?» = otro socio: sale de SU caja abierta y queda entre socios (como en Por Pagar).
+    const socio = (await q(`SELECT a.id, a.name, (SELECT r.id FROM cash_registers r WHERE r.accionista_id=a.id AND r.status='OPEN' LIMIT 1) caja
+                             FROM accionistas a WHERE a.is_active AND a.tipo='SOCIO' ORDER BY a.name LIMIT 1`))[0];
+    if (socio && !socio.caja) socio.caja = (await api("POST", "/cash/registers/open", { name: "Caja sim socio", tipo: "EFECTIVO", opening_balance_cash: 500 }, socio.id)).data?.id;
+    const sinQuien = await api("POST", "/liquidations/lote", { lineas: [linea(ingresos[3] ?? ingresos[0])], pago: { todo: true } }, matriz, { "x-confirmar": "QQ_EXCEDE" });
+    check(sinQuien.status === 400, "E6a. sin caja ni «quién paga» no se guarda", mostrar(sinQuien));
+    if (socio?.caja && ingresos[3]) {
+      const sumSocio = async () => Number((await q("SELECT COALESCE(sum(CASE WHEN movement='INCOME' THEN amount ELSE -amount END),0)::float s FROM cash_movements WHERE cash_register_id=$1", [socio.caja]))[0].s);
+      const s0s = await sumSocio(); const c3 = await saldoCaja();
+      const L3 = exigir(await api("POST", "/liquidations/lote", { lineas: [linea(ingresos[3])], pago: { monto: 15, pagado_por: socio.id, medio_pago: "EFECTIVO" } }, matriz, { "x-confirmar": "QQ_EXCEDE" }), `E6b. liquidar y que ${socio.name} abone $15`);
+      const apL3 = (await q("SELECT balance::float b, amount::float a FROM accounts_payable WHERE liquidation_id=$1 AND reference_type IS NULL", [L3[0].id]))[0];
+      check(apL3 && r2(apL3.a - apL3.b) === 15 && r2(s0s - await sumSocio()) === 15 && r2(await saldoCaja()) === r2(c3),
+        "E6c. el abono sale de la caja del socio (no de la Matriz) y baja lo que se le debe al agricultor", { ap: apL3, socio: r2(s0s - await sumSocio()) });
+    } else check(true, "E6b. (sin socio con caja abierta o sin 4.º ticket en la copia: se salta)");
   } else check(true, "E. (sin tickets para liquidar en la copia: se salta)");
 
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla) && !/compra a contado vigente/i.test(x.regla));

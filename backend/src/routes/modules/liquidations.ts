@@ -267,9 +267,12 @@ liquidationsRouter.post("/lote", asyncRoute(async (req, res) => {
       // Sin monto (o con `todo`) = paga todo lo que la liquidación le deja por cobrar al agricultor.
       monto: z.number().positive().transform(round2).optional(),
       todo: z.boolean().optional(),
-      cash_register_id: z.string().uuid(),
+      // Sin `pagado_por`: sale de la caja abierta de quien liquida. Con `pagado_por` (otro socio): de SU caja abierta,
+      // igual que en Por Pagar (pagarCuentasEnGrupo deja el cruce entre socios).
+      cash_register_id: z.string().uuid().optional(),
+      pagado_por: z.string().uuid().optional(),
       medio_pago: z.enum(["EFECTIVO", "BANCO"]).optional()
-    }).optional()
+    }).refine((p) => !!p.cash_register_id || !!p.pagado_por, { message: "Elige quién le paga (o abre la caja)." }).optional()
   }).parse(req.body);
   await avisarQuintalesDeMas(lineas, req);
   const result = await inTransaction(async (client) => {
@@ -290,7 +293,7 @@ liquidationsRouter.post("/lote", asyncRoute(async (req, res) => {
       if (pago.medio_pago) await client.query("SELECT set_config('app.medio_pago', $1, true)", [pago.medio_pago]);
       const pagado = await pagarCuentasEnGrupo(client, req as AuthenticatedRequest, {
         payable_ids: cuentas.map((c) => String(c.id)), cash_register_id: pago.cash_register_id, amount: monto,
-        medio_pago: pago.medio_pago, comentario: "Pagado al liquidar"
+        pagado_por: pago.pagado_por, medio_pago: pago.medio_pago, comentario: "Pagado al liquidar"
       });
       return hechas.map((h, i) => (i === 0 ? { ...h, pago_inmediato: { pagado: monto, queda: round2(debe - monto), detalle: pagado } } : h));
     }

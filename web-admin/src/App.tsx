@@ -14496,7 +14496,9 @@ Motivo (obligatorio):`, ""));
   }
 
   // 💵 Pagar o abonar al liquidar (pedido del dueño 2026-11-12). «No» = queda en Por Pagar, como siempre.
-  const [liqPago, setLiqPago] = useState<{ modo: "NO" | "TODO" | "ABONO"; monto: string; medio: "" | "EFECTIVO" | "BANCO" }>({ modo: "NO", monto: "", medio: "" });
+  // Nada elegido por defecto (pedido del dueño 2026-11-18): hay que decir si se paga, quién paga y cómo.
+  // pagador: "" = sin elegir · "YO" = la caja abierta de quien liquida · id = otro socio (sale de SU caja).
+  const [liqPago, setLiqPago] = useState<{ modo: "" | "NO" | "TODO" | "ABONO"; monto: string; medio: "" | "EFECTIVO" | "BANCO"; pagador: string }>({ modo: "", monto: "", medio: "", pagador: "" });
   async function submitLiquidations() {
     const validLines = liqLines.filter((l) => l.lot_id && l.price);
     if (!liqFarmerId || validLines.length === 0) {
@@ -14583,15 +14585,19 @@ Motivo (obligatorio):`, ""));
           : undefined,
         batch_id: batchId
     }));
-    let pago: { todo?: boolean; monto?: number; cash_register_id: string; medio_pago?: "EFECTIVO" | "BANCO" } | undefined;
+    let pago: { todo?: boolean; monto?: number; cash_register_id?: string; pagado_por?: string; medio_pago?: "EFECTIVO" | "BANCO" } | undefined;
+    if (!liqPago.modo) throw new Error("Elige en «¿Se le paga ahora?»: no, pagar todo o abonar una parte.");
     if (liqPago.modo !== "NO") {
       const caja = dashboard.current_cash_register;
-      if (!caja?.id) throw new Error("Para pagar ahora abre la caja (o elige «No, queda en Por Pagar»).");
-      if (caja.tipo === "MIXTO" && !liqPago.medio) throw new Error("Elige cómo se le paga: 💵 Efectivo o 🏦 Transferencia.");
+      if (!liqPago.pagador) throw new Error("Elige quién le paga (o quién abona) esa plata.");
+      const otro = liqPago.pagador !== "YO" ? liqPago.pagador : "";
+      if (!otro && !caja?.id) throw new Error("Para pagar ahora abre la caja (o elige «No, queda en Por Pagar»).");
+      const pideMedio = !!otro || caja?.tipo === "MIXTO";
+      if (pideMedio && !liqPago.medio) throw new Error("Elige cómo se le paga: 💵 Efectivo o 🏦 Transferencia.");
       const monto = round2(Number(liqPago.monto));
       if (liqPago.modo === "ABONO" && !(monto > 0)) throw new Error("Escribe cuánto se le abona ahora.");
-      pago = { cash_register_id: caja.id, ...(liqPago.modo === "TODO" ? { todo: true } : { monto }),
-        ...(caja.tipo === "MIXTO" && liqPago.medio ? { medio_pago: liqPago.medio } : {}) };
+      pago = { ...(otro ? { pagado_por: otro } : { cash_register_id: caja!.id }), ...(liqPago.modo === "TODO" ? { todo: true } : { monto }),
+        ...(pideMedio && liqPago.medio ? { medio_pago: liqPago.medio } : {}) };
     }
     const resultados = await apiPost<Array<LiqApiResult & { pago_inmediato?: { pagado: number; queda: number } }>>("/liquidations/lote", { lineas: cuerpos, pago });
     const pagoHecho = resultados[0]?.pago_inmediato;
@@ -14629,7 +14635,7 @@ Motivo (obligatorio):`, ""));
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): ${money(fomentoCruceSocios)}`;
     if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por ${money(saldoContraMonto)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     if (pagoHecho) cruceMsg += ` · 💵 Pagado ahora ${money(pagoHecho.pagado)}${pagoHecho.queda > 0.005 ? ` · queda ${money(pagoHecho.queda)} en Por Pagar` : " (pagado completo)"}`;
-    setLiqPago({ modo: "NO", monto: "", medio: "" });
+    setLiqPago({ modo: "", monto: "", medio: "", pagador: "" });
     setMessage(`${resultItems.length} lote(s) liquidado(s)${cruceMsg}`);
     await refresh();
     if (pagoHecho && dashboard.current_cash_register?.id) await refreshCaja(dashboard.current_cash_register.id);
@@ -23088,23 +23094,46 @@ Motivo (obligatorio):`, ""));
 
                   {/* 💵 ¿Se le paga ahora? Sale de la caja abierta y baja lo que se le debe (lo que quede, a Por Pagar). */}
                   <div className="liqPagoAhora">
-                    <span className="liqPagoAhora__t">💵 ¿Se le paga ahora?</span>
-                    <div className="sacxForm__seg" role="group" aria-label="Pago al liquidar">
-                      <button type="button" className={liqPago.modo === "NO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "NO" })}>No, queda en Por Pagar</button>
-                      <button type="button" className={liqPago.modo === "TODO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "TODO" })}>Pagar todo</button>
-                      <button type="button" className={liqPago.modo === "ABONO" ? "on in" : ""} onClick={() => setLiqPago({ ...liqPago, modo: "ABONO" })}>Abonar una parte</button>
-                    </div>
+                    <label><span className="liqPagoAhora__t">💵 ¿Se le paga ahora?</span>
+                      <select value={liqPago.modo} aria-label="Pago al liquidar"
+                        onChange={(e) => setLiqPago({ ...liqPago, modo: e.target.value as typeof liqPago.modo })}>
+                        <option value="">— Elige —</option>
+                        <option value="NO">No, queda en Por Pagar</option>
+                        <option value="TODO">Pagar todo</option>
+                        <option value="ABONO">Abonar una parte</option>
+                      </select>
+                    </label>
+                    {(liqPago.modo === "TODO" || liqPago.modo === "ABONO") && (
+                      <label><span>¿Quién le paga (quién abona esa plata)?</span>
+                        <select value={liqPago.pagador} onChange={(e) => setLiqPago({ ...liqPago, pagador: e.target.value, medio: "" })}>
+                          <option value="">— Elige —</option>
+                          <option value="YO">{(accionistas.find((a) => a.id === activeAccionistaId)?.name ?? "Yo")} · sale de esta caja</option>
+                          {accionistas.filter((a) => a.id !== activeAccionistaId && (a.tipo === "MATRIZ" || a.tipo === "SOCIO")).map((a) => (
+                            <option key={a.id} value={a.id}>{a.tipo === "MATRIZ" ? `${a.name} (Matriz)` : a.name} · sale de su caja</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
                     {liqPago.modo === "ABONO" && (
                       <label><span>¿Cuánto se le abona? ($)</span>
                         <input type="number" min="0" step="0.01" inputMode="decimal" value={liqPago.monto} placeholder="0.00"
                           onChange={(e) => setLiqPago({ ...liqPago, monto: e.target.value })} />
                       </label>
                     )}
-                    {liqPago.modo !== "NO" && dashboard.current_cash_register?.tipo === "MIXTO" && (
-                      <MedioPagoSelector value={liqPago.medio || null} onChange={(m) => setLiqPago({ ...liqPago, medio: m })} pregunta="¿En efectivo o por transferencia?" />
+                    {(liqPago.modo === "TODO" || liqPago.modo === "ABONO") && liqPago.pagador
+                      && (liqPago.pagador !== "YO" || dashboard.current_cash_register?.tipo === "MIXTO") && (
+                      <label><span>¿En efectivo o por transferencia?</span>
+                        <select value={liqPago.medio} onChange={(e) => setLiqPago({ ...liqPago, medio: e.target.value as typeof liqPago.medio })}>
+                          <option value="">— Elige —</option>
+                          <option value="EFECTIVO">💵 Efectivo</option>
+                          <option value="BANCO">🏦 Banco / transferencia</option>
+                        </select>
+                      </label>
                     )}
-                    {liqPago.modo !== "NO" && (
-                      <small className="muted">{dashboard.current_cash_register
+                    {(liqPago.modo === "TODO" || liqPago.modo === "ABONO") && liqPago.pagador && (
+                      <small className="muted">{liqPago.pagador !== "YO"
+                        ? `Sale de la caja abierta de ${accionistas.find((a) => a.id === liqPago.pagador)?.name ?? "ese socio"}; queda como cuenta entre socios (como en Por Pagar).${liqPago.modo === "ABONO" ? " Lo que falte queda en Por Pagar." : ""}`
+                        : dashboard.current_cash_register
                         ? `Sale de la caja abierta${dashboard.current_cash_register.tipo === "BANCO" ? " (banco)" : dashboard.current_cash_register.tipo === "EFECTIVO" ? " (efectivo)" : ""} en el mismo momento.${liqPago.modo === "ABONO" ? " Lo que falte queda en Por Pagar." : ""}`
                         : "⚠️ No hay caja abierta: ábrela para pagar ahora."}</small>
                     )}
