@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Tutorial BASCULA-ERP</title>
+<style>
+  @page { size: A4; margin: 16mm 15mm 18mm 15mm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 10.6pt; line-height: 1.45; color: #1d2420; margin: 0; }
+  h1, h2, h3 { font-family: "Segoe UI Semibold", "Segoe UI", Arial, sans-serif; line-height: 1.2; margin: 0; }
+  h2 { font-size: 17pt; color: #128000; border-bottom: 2.5px solid #39c41a; padding-bottom: 4px; margin: 0 0 10px; page-break-after: avoid; }
+  h3 { font-size: 12pt; margin: 14px 0 5px; color: #0b3d16; page-break-after: avoid; }
+  p { margin: 0 0 7px; }
+  ul, ol { margin: 0 0 8px; padding-left: 20px; }
+  li { margin: 0 0 3px; }
+  .cap { page-break-before: always; }
+  .portada { height: 255mm; display: flex; flex-direction: column; justify-content: center; gap: 14px; }
+  .portada .marca { font-size: 11pt; letter-spacing: .18em; text-transform: uppercase; color: #8a6a2f; font-weight: 700; }
+  .portada h1 { font-size: 38pt; color: #07130b; }
+  .portada .sub { font-size: 15pt; color: #128000; font-weight: 600; }
+  .portada .barra { height: 8px; width: 120px; background: #39ff14; border-radius: 4px; }
+  .portada .pie { margin-top: 40px; color: #5a665f; font-size: 10pt; }
+  .indice ol { columns: 2; column-gap: 28px; font-size: 11pt; }
+  .indice li { margin-bottom: 5px; break-inside: avoid; }
+  .caja { border: 1px solid #d9ded8; border-left: 4px solid #39c41a; background: #f3f9f1; padding: 8px 11px; border-radius: 6px; margin: 8px 0 10px; break-inside: avoid; }
+  .ojo { border-left-color: #c98a00; background: #fdf6e6; }
+  .no { border-left-color: #b3262a; background: #fbeceb; }
+  .caja b.t { display: block; margin-bottom: 3px; }
+  .btn { display: inline-block; border: 1px solid #b9c4bb; border-radius: 4px; padding: 0 5px; background: #fff; font-weight: 600; font-size: .95em; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; margin: 6px 0 10px; font-size: 9.8pt; break-inside: avoid; }
+  th, td { border: 1px solid #d9ded8; padding: 5px 7px; text-align: left; vertical-align: top; }
+  th { background: #e8f3e4; font-weight: 700; }
+  .flujo { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 6px 0 10px; font-size: 9.6pt; }
+  .flujo span { border: 1px solid #39c41a; background: #f0fbec; border-radius: 12px; padding: 2px 9px; font-weight: 600; }
+  .flujo i { color: #128000; font-style: normal; font-weight: 700; }
+  .formula { font-family: Consolas, monospace; background: #f4f4f1; padding: 5px 9px; border-radius: 5px; display: inline-block; margin: 2px 0 8px; }
+</style>
+</head>
+<body>
+
+<section class="portada">
+  <div class="marca">CEYRO Piladora · ERP de planta</div>
+  <div class="barra"></div>
+  <h1>Tutorial de uso<br>BASCULA-ERP</h1>
+  <div class="sub">Cómo usar toda la aplicación correctamente, módulo por módulo</div>
+  <p class="pie">Versión de noviembre de 2026 · Para el administrador, los socios y los operadores.<br>
+  Los nombres de botones y pestañas están escritos tal como aparecen en la pantalla.</p>
+</section>
+
+<section class="cap indice">
+  <h2>Contenido</h2>
+  <ol>
+    <li>Ideas básicas antes de empezar</li>
+    <li>Entrar al sistema y moverse</li>
+    <li>El recorrido del arroz (mapa general)</li>
+    <li>Báscula: ingresar materia prima</li>
+    <li>Secadoras</li>
+    <li>Producción (pilado)</li>
+    <li>Selección / envejecido</li>
+    <li>Inventario y sacos</li>
+    <li>Ventas, pedidos y despachos</li>
+    <li>Compras</li>
+    <li>Caja (el corazón del día)</li>
+    <li>Por Cobrar y Por Pagar</li>
+    <li>Cuentas entre socios</li>
+    <li>Liquidaciones a agricultores</li>
+    <li>Fomentos y anticipos</li>
+    <li>Agricultores</li>
+    <li>Nómina, cuadrilla y bajada de carro</li>
+    <li>Transporte y Cosechadora</li>
+    <li>Costos, Estados Financieros y Reportes</li>
+    <li>Configuración, usuarios y permisos</li>
+    <li>Impresión de documentos</li>
+    <li>Trabajo sin internet y desde el celular</li>
+    <li>Cierre de mes</li>
+    <li>Corregir errores y avisos</li>
+    <li>Rutina diaria recomendada</li>
+    <li>Reglas de oro</li>
+  </ol>
+</section>
+
+<!-- 1 -->
+<section class="cap">
+  <h2>1. Ideas básicas antes de empezar</h2>
+  <h3>Matriz y socios (accionistas)</h3>
+  <p>El sistema maneja varios <b>accionistas</b>. <b>CEYRO</b> es la <b>Matriz</b>: dueña de la planta, la cuadrilla y la Caja Principal. Los <b>socios</b>, como STALYN y ROVINSON, compran su propio arroz y usan la piladora pagando tarifas. Cada uno tiene su propia caja, inventario, cuentas, fomentos y liquidaciones.</p>
+  <div class="caja"><b class="t">Lo primero siempre: ¿con quién estoy trabajando?</b>
+  Arriba se elige el <b>accionista activo</b>. Todo lo que registres queda a nombre de ese accionista: una venta, un gasto o una compra. Revísalo antes de guardar.</div>
+
+  <h3>Arroz propio vs. servicio</h3>
+  <ul>
+    <li><b>Propio (Compra / Producción Propia):</b> el arroz es del accionista. Entra a su inventario y luego se liquida al agricultor.</li>
+    <li><b>Servicio:</b> el arroz es de un cliente que paga por secar o pilar. No entra al inventario propio, solo genera el cobro del servicio. Hay tres tipos: Solo Secado, Servicio Completo (Secada + Pilada) y Solo Pilada.</li>
+  </ul>
+
+  <h3>La unidad es el quintal (QQ)</h3>
+  <p>Las cantidades de arroz, ventas y pedidos se escriben <b>siempre en QQ</b>. La presentación del saco, por ejemplo 100 lb o 50 lb, solo sirve para calcular los bultos en la Guía de Remisión.</p>
+  <span class="formula">QQ = (Peso neto en kg × 2.2) ÷ calificación</span>
+
+  <h3>Efectivo o banco</h3>
+  <p>Algunas cajas son <b>mixtas</b>, con gaveta de efectivo y cuenta de banco. Por ejemplo, la Caja Principal de CEYRO. En esas cajas, cada cobro o pago te pide elegir <b>💵 Efectivo</b> o <b>🏦 Banco / transferencia</b>, y no viene nada marcado por defecto. Elige bien: así la gaveta cuadra con el dinero que cuentas.</p>
+
+  <h3>Nada se borra: se anula</h3>
+  <p>El dinero y el inventario no se borran. Se <b>anulan</b> o se <b>reversan</b> con un contra-asiento, y la historia queda guardada. Solo el administrador anula, salvo los permisos especiales que él asigne.</p>
+</section>
+
+<!-- 2 -->
+<section class="cap">
+  <h2>2. Entrar al sistema y moverse</h2>
+  <h3>Dónde se abre</h3>
+  <ul>
+    <li><b>En la PC del local o en la red wifi del local:</b> la dirección del servidor en el puerto 4000.</li>
+    <li><b>Desde el celular, con datos o con cualquier wifi:</b> <b>https://erp.ceyroerp.com</b>. La PC del local debe estar encendida. Se apaga sola de 00:00 a 06:00.</li>
+  </ul>
+  <h3>Usuario y clave</h3>
+  <ul>
+    <li>Cada persona entra con su propio usuario. <b>No compartas la clave</b>: todo lo que registras queda a tu nombre.</li>
+    <li>Si aparece «Agrega un correo de recuperación», agrégalo. Así recuperas la clave con <span class="btn">¿Olvidaste tu clave?</span>.</li>
+    <li>El administrador tiene una verificación extra con un código que llega al correo.</li>
+  </ul>
+  <h3>La pantalla de inicio</h3>
+  <ul>
+    <li><b>Hoy</b> muestra las tareas pendientes en tres niveles: <b>Urgente</b> (hazlo ya), <b>Atención</b> (hoy mismo) y <b>Para saber</b>. Toca una tarea y te lleva a la pantalla donde se resuelve.</li>
+    <li>Más abajo están los botones grandes de tu trabajo diario. Solo ves las pantallas que tienes permitidas.</li>
+    <li><span class="btn">🔎 Buscar</span> (en computadora, <b>Ctrl+K</b>) encuentra tickets, placas, agricultores y lotes.</li>
+    <li><span class="btn">↻ Actualizar</span> vuelve a traer los datos.</li>
+    <li><span class="btn">🎨</span>, al pie del menú, cambia los colores. El cambio se guarda en cada equipo.</li>
+  </ul>
+  <h3>El menú</h3>
+  <table>
+    <tr><th>Grupo</th><th>Pantallas</th></tr>
+    <tr><td>Principal</td><td>Panel Integral (inicio)</td></tr>
+    <tr><td>Operación</td><td>Báscula, Secadoras, Producción, Gana, Inventario, Selección, Transporte / Cosechadora</td></tr>
+    <tr><td>Comercial</td><td>Ventas, Compras, Caja, Mostrador (tablet solo para venta al detalle)</td></tr>
+    <tr><td>Cuentas</td><td>Por Cobrar, Por Pagar</td></tr>
+    <tr><td>Finanzas</td><td>Liquidaciones, Fomentos, Agricultores, Nómina</td></tr>
+    <tr><td>Contabilidad</td><td>Costos Operativos, Estados Financieros</td></tr>
+    <tr><td>Sistema</td><td>Reportes, Configuración</td></tr>
+  </table>
+</section>
+
+<!-- 3 -->
+<section class="cap">
+  <h2>3. El recorrido del arroz (mapa general)</h2>
+  <h3>Arroz propio</h3>
+  <div class="flujo"><span>Ticket de báscula</span><i>→</i><span>Ingresar materia prima (lote)</span><i>→</i><span>Secadora</span><i>→</i><span>Producción (pilado)</span><i>→</i><span>Inventario</span><i>→</i><span>Pedido / Venta</span><i>→</i><span>Despacho</span><i>→</i><span>Caja o Por Cobrar</span></div>
+  <p>En paralelo, el agricultor que vendió el arroz se <b>liquida</b>:</p>
+  <div class="flujo"><span>Lotes del agricultor</span><i>→</i><span>Precio por QQ</span><i>→</i><span>Descuentos (flete, cosechadora, secado)</span><i>→</i><span>Anticipos y fomento</span><i>→</i><span>Neto</span><i>→</i><span>Pago o Por Pagar</span></div>
+  <h3>Servicio a terceros</h3>
+  <div class="flujo"><span>Ticket (Solo Secado o Secada + Pilada)</span><i>→</i><span>Secado</span><i>→</i><span>Cobro del servicio (Por Cobrar)</span><i>→</i><span>Pilado opcional</span><i>→</i><span>Cobro</span></div>
+  <h3>Dinero</h3>
+  <div class="flujo"><span>Abrir caja</span><i>→</i><span>Ingresos y egresos en el momento</span><i>→</i><span>Cuadre del día</span><i>→</i><span>Cerrar caja</span></div>
+  <div class="caja"><b class="t">Por qué importa el orden</b>
+  Cada paso usa lo que guardó el anterior. Si un ticket no se ingresa, no se puede secar. Si no se seca, no se pila. Si no se pila, no hay producto para vender. Cuando una pantalla «no muestra» algo, casi siempre falta el paso anterior.</div>
+</section>
+
+<!-- 4 -->
+<section class="cap">
+  <h2>4. Báscula: ingresar materia prima</h2>
+  <p>La báscula pesa en la tablet y los tickets llegan solos al ERP cada 3 minutos.</p>
+  <h3>Pasos</h3>
+  <ol>
+    <li>Toca <span class="btn">Ingresar materia prima</span>. Se abre la lista de tickets <b>Pendientes</b>.</li>
+    <li>Si el ticket dice <b>Sin vincular</b>, toca <span class="btn">Vincular cliente</span> y elige al agricultor. Antes de crear uno nuevo, búscalo para no repetirlo.</li>
+    <li>Toca <span class="btn">Ingresar materia prima</span> en el ticket.</li>
+    <li>Elige el <b>tipo de arroz</b> (0.11 o Corriente).</li>
+    <li>Elige el <b>destino</b>:
+      <ul>
+        <li>Compra / Producción Propia</li>
+        <li>Solo Servicio de Secado</li>
+        <li>Servicio Completo (Secada + Pilada)</li>
+        <li>Solo Servicio de Pilada (ya viene seco)</li>
+      </ul></li>
+    <li>Revisa que el <b>accionista</b> sea el correcto y guarda.</li>
+  </ol>
+  <h3>Otras pestañas de Báscula</h3>
+  <ul>
+    <li><b>Corregir accionista:</b> para cambiar el ticket al socio correcto.</li>
+    <li><b>Sincronización:</b> trae los tickets si tardan en llegar.</li>
+  </ul>
+  <h3>Ingreso manual (emergencia)</h3>
+  <p>Úsalo <b>solo</b> si la báscula no envió el ticket. Hay dos formas:</p>
+  <ul>
+    <li>Con el número que dio la tablet. El sistema te avisa.</li>
+    <li>Sin tablet. Usa la serie 900 001 en adelante.</li>
+  </ul>
+  <p>Solo el administrador puede anular un ticket.</p>
+  <div class="caja ojo"><b class="t">Cuidado</b>
+  Elige bien el destino. Si un arroz de servicio se ingresa como propio, se infla el inventario y aparece una compra que nunca se hizo.</div>
+</section>
+
+<!-- 5 -->
+<section class="cap">
+  <h2>5. Secadoras</h2>
+  <h3>Llenar un túnel</h3>
+  <ol>
+    <li>Abre la secadora y agrega los ingresos (tickets) que entran a ese túnel.</li>
+    <li>Completa los datos:
+      <ul>
+        <li>La <b>fecha de llenado</b>, que es la fecha que le pagan a la cuadrilla.</li>
+        <li>La <b>hora de inicio</b>.</li>
+        <li>El <b>secador</b>, que cobra según la hora de inicio.</li>
+      </ul></li>
+    <li>Toca <span class="btn">💾 Guardar informe completo</span>.</li>
+    <li>Si los túneles del mismo motor arrancaron juntos, toca <span class="btn">📌 Aplicar al motor</span> para copiar el horario a todos.</li>
+  </ol>
+  <h3>Terminar el secado</h3>
+  <ol>
+    <li>Abre el túnel y toca <span class="btn">✅ Finalizar túnel</span>. Pon la hora final.</li>
+    <li>Si es el último túnel del motor, te pide el <b>combustible</b>:
+      <ul>
+        <li>La bombona de gas al inicio y al final, en %.</li>
+        <li>Los cilindros usados.</li>
+      </ul></li>
+  </ol>
+  <div class="caja"><b class="t">El gas se reparte por tiempo</b>
+  El combustible se calcula por motor y se reparte entre los túneles según las horas que el quemador estuvo prendido para cada uno. Si las horas están mal, el costo de secado de cada lote también.</div>
+  <h3>Casos especiales</h3>
+  <ul>
+    <li><b>Secadora compartida:</b> si el arroz de dos dueños se echó en la misma secadora, usa «🤝 Mi arroz se echó en esta misma secadora». Los dos arroces se separan antes de pilar.</li>
+    <li><b>Ver los pesos de un secado:</b> toca la tarjeta del secado. Muestra los tickets, kg, QQ y total.</li>
+    <li><b>Guardia semanal:</b> es la pestaña del pago de guardianía del secador. Se paga de lunes a viernes; el fin de semana no genera.</li>
+    <li><b>Solo secado → servicio completo:</b> si el cliente decide pilar un arroz que vino solo a secar, el administrador lo convierte en Producción con «🔁 Solo secado ya secos».</li>
+  </ul>
+</section>
+
+<!-- 6 -->
+<section class="cap">
+  <h2>6. Producción (pilado)</h2>
+  <ol>
+    <li>Elige el lote que ya salió de la secadora.</li>
+    <li>Escribe lo que salió del pilado, en QQ: <b>arroz pilado</b>, <b>arrocillo</b> y <b>polvillo</b>. La merma se calcula sola.</li>
+    <li>Si vas a terminar después, toca <span class="btn">💾 Guardar Proceso</span>.
+      <ul>
+        <li>Lo guardado <b>ya suma al inventario</b> y crea el pago de nómina, sin duplicar.</li>
+        <li>Lo retomas desde «Procesos guardados».</li>
+      </ul></li>
+    <li>Cuando termines, toca <span class="btn">✅ Finalizar Lote</span>. El inventario queda con lo real.</li>
+  </ol>
+  <ul>
+    <li><b>Descartar</b> un proceso guardado retira lo que había sumado.</li>
+    <li>El <b>estibador</b> cobra por tulas.</li>
+    <li>El <b>pilador</b> cobra por QQ.</li>
+  </ul>
+  <div class="caja ojo"><b class="t">Servicio (maquila)</b>
+  El arroz pilado de un cliente de servicio no entra al inventario propio. Los subproductos sí entran, como el polvillo que queda en la planta.</div>
+  <h3>Gana</h3>
+  <p>Es la pantalla de seguimiento de la producción. La usa el encargado de planta.</p>
+</section>
+
+<!-- 7 -->
+<section class="cap">
+  <h2>7. Selección / envejecido</h2>
+  <p>Es el arroz que se manda a seleccionar o a envejecer afuera. Tiene tres pestañas: <b>Nuevo Envío</b>, <b>En Proceso</b> y <b>Historial / Completados</b>.</p>
+  <ol>
+    <li><b>Nuevo Envío:</b> elige el producto y los QQ que salen. Se descuentan del inventario.</li>
+    <li><b>En Proceso:</b> cuando vuelve, registra lo recibido y los productos que salieron. Lo que se queda «allá» sigue siendo del accionista.</li>
+    <li>Puede volver más de lo enviado. Se guarda con merma negativa y un aviso amarillo.</li>
+  </ol>
+  <ul>
+    <li>Las tarifas son <b>$1.25/QQ</b> de selección y <b>$3.50/QQ</b> de envejecido.</li>
+    <li>Si el servicio es de afuera, queda como Por Pagar del socio.</li>
+    <li>Lo que quedó allá ya se puede vender. Al preparar el pedido se elige si sale de allá o de la piladora.</li>
+    <li><b>Selectora de la piladora:</b> se paga a $0.70/QQ y se descuenta de la tarifa del socio.</li>
+  </ul>
+</section>
+
+<!-- 8 -->
+<section class="cap">
+  <h2>8. Inventario y sacos</h2>
+  <ul>
+    <li><b>Existencias:</b> lo que hay de cada producto por accionista, en bodega y «allá».
+      <ul>
+        <li>No se edita a mano: sale de los movimientos de compras, producción, ventas y selección.</li>
+        <li>Muestra también lo que está <b>por despachar</b>.</li>
+      </ul></li>
+    <li><b>Sacos:</b> son los sacos vacíos. Al empacar se descuentan. Cuando la Matriz despacha, cobra a los socios el empaque <b>por bulto</b>, según el tamaño del saco (≤10, ≤25 o ≤50 lb).</li>
+    <li><b>Repuestos de planta:</b> lo que hay de repuestos.</li>
+  </ul>
+  <div class="caja"><b class="t">Solo la compra mueve el inventario propio</b>
+  Un servicio no cambia el inventario del accionista; los subproductos sí. Si las existencias no te cuadran, revisa primero si algún ticket se ingresó con el destino equivocado.</div>
+</section>
+
+<!-- 9 -->
+<section class="cap">
+  <h2>9. Ventas, pedidos y despachos</h2>
+  <h3>Nuevo Pedido</h3>
+  <ol>
+    <li>Elige el cliente, el producto, la <b>cantidad en QQ</b> y el precio.</li>
+    <li>Elige la fecha en que lo retiran y la forma de pago: contado o crédito.</li>
+    <li>Guarda. El pedido pasa a la <b>Cola de Despachos</b>.</li>
+  </ol>
+  <h3>Cola de Despachos</h3>
+  <ul>
+    <li>Cada pedido es una fila con su punto verde o amarillo y su fecha: Hoy, Mañana o atrasado. Tócala para abrir la tarjeta.</li>
+    <li><b>Preparar pedido:</b> si hay arroz «allá», elige de dónde sale:
+      <ul>
+        <li>de allá;</li>
+        <li>de la piladora;</li>
+        <li>«⚙️ Sale de aquí (se está pilando)».</li>
+      </ul></li>
+    <li><span class="btn">Despachar</span>:
+      <ul>
+        <li>Pregunta «📅 ¿Qué día salió el camión?». La venta, el cobro y la cuadrilla quedan con ese día.</li>
+        <li>Con un carro de Transporte, el <b>flete</b> queda aparte: Transporte lo cobra y lo paga quien vende.</li>
+      </ul></li>
+    <li><b>Despacho parcial:</b> si el camión no lleva todo, se cobra el pedido <b>completo</b>. El resto queda como entrega pendiente ya cobrada (PED-…-S1). Cuando se entrega, no se vuelve a cobrar.</li>
+  </ul>
+  <h3>Guías de Remisión e Historial</h3>
+  <p>La guía muestra los bultos según la presentación del saco. El historial muestra las ventas hechas, que se pueden reimprimir o anular (solo el administrador).</p>
+  <h3>Venta al detalle (desde Caja o el Mostrador)</h3>
+  <ul>
+    <li>Son las ventas pequeñas de mostrador.</li>
+    <li>Si no sabes de qué socio es el arroz, usa <b>«Decidir después»</b>. Se asigna al cierre a quien tenga el arroz.</li>
+    <li>Si la venta es fiada o con pago parcial, la Por Cobrar queda a nombre del dueño del arroz.</li>
+  </ul>
+  <h3>Cobro por transferencia</h3>
+  <p>Si un cliente transfirió y la plata llegó a la cuenta de CEYRO, en Caja › Transferencias por confirmar toca <span class="btn">🏦 Llegó a CEYRO</span>.</p>
+</section>
+
+<!-- 10 -->
+<section class="cap">
+  <h2>10. Compras</h2>
+  <ol>
+    <li>Elige el proveedor o agricultor y el producto.</li>
+    <li>Escribe los QQ y el precio.</li>
+    <li><b>Elige el tipo de pago</b>, que no viene marcado:
+      <ul>
+        <li><b>Contado:</b> sale de la caja abierta. En caja mixta elige efectivo o banco.</li>
+        <li><b>Crédito:</b> queda en Por Pagar.</li>
+      </ul></li>
+    <li>Guarda. Lo comprado entra al inventario del accionista activo.</li>
+  </ol>
+  <div class="caja ojo"><b class="t">Una compra pagada mal</b>
+  El pago de una compra no se anula suelto en Caja. Si debía quedar a crédito, el administrador usa <span class="btn">💳 Pasar a crédito</span> en la lista de compras. El dinero vuelve a la caja y nace la Por Pagar.</div>
+</section>
+
+<!-- 11 -->
+<section class="cap">
+  <h2>11. Caja (el corazón del día)</h2>
+  <h3>Abrir</h3>
+  <p>Al empezar el día, abre la caja con el dinero que <b>realmente</b> hay en la gaveta. Si la caja es mixta, pon también el saldo del banco. Solo puede haber una caja abierta por accionista.</p>
+  <h3>Registrar en el momento</h3>
+  <ul>
+    <li><b>Ingresos y egresos:</b> cada uno con su <b>categoría</b> y una descripción clara (quién, qué, para qué).</li>
+    <li><b>Hoja de movimientos:</b> se escribe como en la hoja de Excel. El sistema reconoce la categoría por lo escrito.</li>
+    <li><b>Arroz en cáscara:</b> compras pequeñas de cáscara y anticipos en arroz.</li>
+    <li><b>Venta Detalle:</b> las ventas de mostrador, explicadas en la sección 9.</li>
+    <li><b>Fomentos:</b> las entregas al agricultor.</li>
+    <li><b>Sacos</b> y <b>Mantenimiento de equipos</b>.</li>
+    <li><b>¿Cuándo se hizo?:</b> busca cuándo y quién registró algo.</li>
+  </ul>
+  <h3>Casos que confunden</h3>
+  <table>
+    <tr><th>Situación</th><th>Cómo se registra</th></tr>
+    <tr><td>Gasto que es de un socio, pero lo pagó esta caja</td><td>Gasto <b>por cuenta de</b> ese socio. Nace la deuda entre socios sola.</td></tr>
+    <tr><td>Gasto de Transporte o de la Cosechadora pagado por CEYRO</td><td>Con la opción de Transporte. Queda por cobrar a Transporte, que es un negocio aparte.</td></tr>
+    <tr><td>Movimiento que no es efectivo (cruce, transferencia)</td><td>Márcalo <b>«no es efectivo»</b> para que no descuadre la gaveta.</td></tr>
+    <tr><td>Pasar plata del banco a la gaveta o al revés</td><td>Traspaso entre efectivo y banco de la caja mixta. No es ingreso ni gasto.</td></tr>
+    <tr><td>Adelanto a un trabajador</td><td>Anticipo de nómina. Se descuenta el viernes.</td></tr>
+    <tr><td>Anticipo a un agricultor</td><td>Anticipo. Se descuenta al liquidarlo.</td></tr>
+  </table>
+  <h3>Cerrar</h3>
+  <ol>
+    <li>Revisa el <b>cuadre del día</b>.</li>
+    <li>Cuenta el dinero.</li>
+    <li>Cierra la caja con lo contado. Si hay diferencia, escribe el motivo.</li>
+  </ol>
+  <div class="caja ojo"><b class="t">«La caja quedará en −$…»</b>
+  El gasto es mayor que lo que hay en la caja. Acepta solo si estás seguro. Lo normal es que falte registrar un ingreso.</div>
+</section>
+
+<!-- 12 -->
+<section class="cap">
+  <h2>12. Por Cobrar y Por Pagar</h2>
+  <h3>Por Cobrar</h3>
+  <p>Aquí está lo que te deben: ventas a crédito, servicios de secado y pilado, fletes y deudas de socios.</p>
+  <ol>
+    <li>Elige una o varias cuentas del mismo cliente.</li>
+    <li>Toca Cobrar y escribe el monto.</li>
+    <li>En caja mixta, elige efectivo o banco.</li>
+    <li>Guarda. El dinero entra a la caja abierta.</li>
+  </ol>
+  <p>Si el pago llegó a otro socio, elige <b>quién recibió</b>. Queda la cuenta entre socios.</p>
+  <h3>Por Pagar</h3>
+  <ul>
+    <li>Es lo que tú debes: compras a crédito, liquidaciones sin pagar, selección, servicios y préstamos.</li>
+    <li>Se paga igual que un cobro. También puedes elegir que pague <b>otro socio</b> desde su caja: queda el cruce entre los dos.</li>
+    <li><b>Agricultores mes a mes:</b> lo que se le debe a cada agricultor por mes.</li>
+    <li><b>Préstamos del banco:</b> cuotas y saldos.</li>
+  </ul>
+  <div class="caja"><b class="t">Saldar = mover dinero</b>
+  Pagar o cobrar una cuenta siempre mueve una caja, salvo que sea un cruce. No bajes un saldo «a mano». Si la cuenta se pagó por otro lado, regístralo como pago o cruce para que las dos partes queden iguales.</div>
+</section>
+
+<!-- 13 -->
+<section class="cap">
+  <h2>13. Cuentas entre socios</h2>
+  <ul>
+    <li>Entre la Matriz y cada socio hay <b>un solo saldo</b> por pareja. Lo que uno debe al otro se ve igual en los dos lados.</li>
+    <li>Nace solo cuando:
+      <ul>
+        <li>una caja paga un gasto o un anticipo <b>por cuenta de</b> otro;</li>
+        <li>un socio cobra o paga por otro;</li>
+        <li>la Matriz cobra las tarifas de pilado, secado y empaque.</li>
+      </ul></li>
+    <li><b>Cruzar:</b> compensa lo que uno debe con lo que el otro debe, sin mover dinero. Los conceptos de la deuda solo se juntan con «Cruzar».</li>
+    <li><b>Pagar entre socios</b> con dinero mueve <b>las dos cajas</b>: sale de una y entra a la otra.</li>
+  </ul>
+  <div class="caja"><b class="t">Ejemplo</b>
+  CEYRO pagó $70 de flete que era anticipo de STALYN a un agricultor. En la caja de CEYRO es un gasto «por cuenta de STALYN». El agricultor queda con un anticipo de STALYN que se descuenta al liquidarlo, y STALYN le debe $70 a CEYRO.</div>
+</section>
+
+<!-- 14 -->
+<section class="cap">
+  <h2>14. Liquidaciones a agricultores</h2>
+  <ol>
+    <li>Ve a <b>Nueva liquidación</b> y elige el agricultor. Aparecen sus lotes (tickets) sin liquidar del accionista activo.</li>
+    <li>Marca los lotes y escribe el <b>precio por QQ</b>.</li>
+    <li>Revisa los descuentos: flete, cosechadora, secado y otros. Los partes de Transporte y Cosechadora ya llegan solos.</li>
+    <li>El sistema descuenta los <b>anticipos</b> y el <b>fomento</b> de ese mismo accionista.</li>
+    <li>En <b>💵 ¿Se le paga ahora?</b> elige una opción:
+      <ul>
+        <li><b>No, queda en Por Pagar</b></li>
+        <li><b>Pagar todo</b></li>
+        <li><b>Abonar una parte</b>, con el monto</li>
+      </ul></li>
+    <li>Si se paga, elige <b>¿Quién le paga?</b>:
+      <ul>
+        <li>Tú (sale de esta caja).</li>
+        <li>Otro socio (sale de su caja y queda la cuenta entre socios).</li>
+      </ul></li>
+    <li>Elige <b>¿En efectivo o por transferencia?</b> cuando lo pida.</li>
+    <li>Liquida e imprime.</li>
+  </ol>
+  <div class="caja ojo"><b class="t">Avisos</b>
+  «Estás liquidando más quintales de los que pesó la báscula»: revisa los QQ. Los anticipos de otro socio no se descuentan aquí. Cada accionista liquida lo suyo.</div>
+  <p>En <b>Liquidaciones realizadas</b> se ven, reimprimen o anulan (solo el administrador).</p>
+</section>
+
+<!-- 15 -->
+<section class="cap">
+  <h2>15. Fomentos y anticipos</h2>
+  <h3>Fomentos (financiar la siembra)</h3>
+  <ul>
+    <li>Crea el fomento del agricultor y registra cada <b>entrega</b>: dinero, insumos o pagos a terceros.</li>
+    <li>Las entregas por transferencia o «fangueada» no tocan la gaveta.</li>
+    <li>Las entregas que <b>no llevan gasto administrativo</b> se marcan al registrarlas: báscula, flete y cosechadora.</li>
+    <li>El <b>gasto administrativo</b> (%) se cambia desde la lista. Necesita el permiso «Fomentos: cambiar gasto administrativo».</li>
+    <li>Al liquidar la cosecha, el fomento se descuenta del neto.</li>
+    <li><span class="btn">Cerrar cosecha</span> congela el gasto, archiva y pasa el saldo a un fomento nuevo como «Saldo anterior», sin tocar la caja. <span class="btn">Reabrir cosecha</span> lo deshace.</li>
+  </ul>
+  <h3>Anticipos</h3>
+  <ul>
+    <li>Son adelantos sueltos a un agricultor, que se descuentan al liquidar.</li>
+    <li>Son <b>por accionista</b>.</li>
+    <li>Si otra caja lo entregó, regístralo «por cuenta de» el dueño del anticipo.</li>
+  </ul>
+</section>
+
+<!-- 16 -->
+<section class="cap">
+  <h2>16. Agricultores</h2>
+  <ul>
+    <li>Es un catálogo único para todos los accionistas.</li>
+    <li><b>Busca antes de crear.</b> El sistema avisa si el nombre se parece a uno que ya existe y guarda los <b>alias</b>.</li>
+    <li>Desde el agricultor se ven sus tickets, liquidaciones, anticipos y fomentos.</li>
+  </ul>
+</section>
+
+<!-- 17 -->
+<section class="cap">
+  <h2>17. Nómina, cuadrilla y bajada de carro</h2>
+  <table>
+    <tr><th>Pestaña</th><th>Para qué</th></tr>
+    <tr><td>Pagos</td><td>El pago semanal (viernes): planta, secador, cuadrilla y descuentos de anticipos.</td></tr>
+    <tr><td>Secadora</td><td>Secada y guardianía del secador, que sale de los túneles.</td></tr>
+    <tr><td>Cuadrilla</td><td>Carga y descarga por actividad y cantidad. <b>Solo la Matriz (CEYRO)</b>.</td></tr>
+    <tr><td>Bajada de carro</td><td>Quién bajó cada carro de báscula. Sin nombre no se paga.</td></tr>
+    <tr><td>Historial de Pagos</td><td>Lo ya pagado.</td></tr>
+    <tr><td>Sueldo Administrativo</td><td>El personal fijo.</td></tr>
+  </table>
+  <ul>
+    <li><b>Anticipo a un trabajador:</b> el dinero sale de la caja abierta. Al pagar, se descuenta y sale solo el resto.</li>
+    <li>El pago semanal pide confirmar el <b>neto</b> antes de pagar.</li>
+    <li>Lo ya pagado no se edita. Para corregirlo, el administrador anula el pago en Caja.</li>
+    <li>Cuando «Hoy» avise «tickets sin quién bajó el carro», completa los nombres.</li>
+  </ul>
+</section>
+
+<!-- 18 -->
+<section class="cap">
+  <h2>18. Transporte y Cosechadora</h2>
+  <p>Es un <b>negocio aparte</b> de CEYRO, con su propia caja (efectivo y banco), clientes, cuentas y estado de resultados.</p>
+  <table>
+    <tr><th>Pestaña</th><th>Para qué</th></tr>
+    <tr><td>Partes Diarios</td><td>El trabajo de cada carro o cosechadora (viajes, horas, cliente). Se convierte en cobro y en descuento de la liquidación.</td></tr>
+    <tr><td>Caja</td><td>Los ingresos y gastos de Transporte.</td></tr>
+    <tr><td>Nómina Operadores</td><td>Elige el periodo y la cuenta, revisa cada fila y toca <span class="btn">Procesar Nómina en Lote</span>. Si una fila falla, no se paga ninguna. <span class="btn">Anular</span> devuelve todo.</td></tr>
+    <tr><td>Cuentas por Cobrar / por Pagar</td><td>Lo que deben a Transporte y lo que Transporte debe.</td></tr>
+    <tr><td>Vales por Rendir</td><td>El dinero entregado a operadores que se descuenta.</td></tr>
+    <tr><td>Configuración</td><td>Flota, tarifas y talleres. La <b>nota del taller</b> puede tener varios renglones; cada uno va a la hoja de vida del equipo.</td></tr>
+    <tr><td>Estado de Resultados / Reportes</td><td>Cuánto ganó Transporte en el periodo.</td></tr>
+  </table>
+  <div class="caja"><b class="t">Gasto de Transporte pagado por CEYRO</b>
+  Se registra como gasto de Transporte. Queda <b>por cobrar</b> a Transporte o se cruza, y lo que se paga por banco va a la cuenta de banco de Transporte.</div>
+</section>
+
+<!-- 19 -->
+<section class="cap">
+  <h2>19. Costos, Estados Financieros y Reportes</h2>
+  <ul>
+    <li><b>Costos Operativos</b>:
+      <ul>
+        <li><b>Registro por corrida</b> y <b>Consolidado Mensual</b>.</li>
+        <li><b>Resultado mensual</b> (CEYRO): el costo real frente al estimado.</li>
+      </ul></li>
+    <li><b>Estados Financieros</b>:
+      <ul>
+        <li>Balance, estado de resultados, flujo de caja e indicadores por accionista, con exportación a Excel.</li>
+        <li><span class="btn">📸 Cerrar mes</span>: ver la sección 23.</li>
+      </ul></li>
+    <li><b>Reportes</b>:
+      <ul>
+        <li>Resumen, Ventas, Liquidaciones, Gastos, Producción, <b>Combustible</b> (gas por secado), Por cobrar, Lotes guardados y Servicios (solo la Matriz).</li>
+        <li>Elige las fechas y exporta o imprime.</li>
+      </ul></li>
+  </ul>
+  <div class="caja"><b class="t">Lo que sale «a la fecha» y lo que sale «a hoy»</b>
+  Caja, bancos e inventario salen <b>a la fecha</b> que elijas. Por Cobrar, Por Pagar y anticipos salen con el saldo <b>de hoy</b>. Por eso el balance del mes se saca el mismo último día.</div>
+</section>
+
+<!-- 20 -->
+<section class="cap">
+  <h2>20. Configuración, usuarios y permisos</h2>
+  <p>Esta sección es solo para el administrador.</p>
+  <ul>
+    <li><b>Empresa, secuencias y tarifas:</b> las tarifas de pilado, secado y empaque por socio, y los pagos al personal (son cosas distintas).</li>
+    <li><b>Usuarios y permisos</b> por accionista:
+      <ul>
+        <li>Cada pantalla puede ser <b>Ver</b> o <b>Editar</b>.</li>
+        <li>Se pueden limitar las sub-pestañas.</li>
+        <li>Hay <b>permisos especiales</b>: «Anular y corregir», «Editar precios y tarifas», «Cargar Saldos iniciales» y «Fomentos: cambiar gasto administrativo / eliminar».</li>
+        <li>Si no se marca nada, el usuario no tiene acceso.</li>
+      </ul></li>
+    <li><b>📥 Saldos iniciales:</b> CxC, CxP, inventario y anticipos al arranque.</li>
+    <li><b>Contabilidad:</b> el precio de referencia por QQ, el capital y la fecha de inicio.</li>
+    <li><b>Control de integridad:</b> revisa más de 60 reglas, por ejemplo que las cajas, el inventario y las cuentas entre socios estén iguales en los dos lados. Debe decir <b>0 problemas</b>.</li>
+    <li><b>Respaldo y restauración</b> de la base de datos.</li>
+  </ul>
+  <div class="caja no"><b class="t">Seguridad</b>
+  No compartas usuarios. Da a cada persona solo las pantallas que necesita. Quita el acceso a quien deja de trabajar.</div>
+</section>
+
+<!-- 21 -->
+<section class="cap">
+  <h2>21. Impresión de documentos</h2>
+  <ul>
+    <li>Cada <b>equipo</b> (PC, celular, tablet) guarda su propia impresora para cada documento: tickets, guías, liquidaciones, recibos y otros.</li>
+    <li>Hay tres formas de salida:
+      <ul>
+        <li>ventana del navegador;</li>
+        <li><b>RawBT</b>, la impresora térmica Bluetooth en el celular;</li>
+        <li><b>directa</b> a la Epson de la PC por medio del servidor.</li>
+      </ul></li>
+    <li>Cada documento tiene su papel (A4, Carta, 15×21, térmico) y su orientación.</li>
+    <li>«Al imprimir» puede ser <b>Imprimir</b> directo o <b>Vista previa</b>. <span class="btn">🧪 Prueba</span> siempre muestra la vista previa.</li>
+  </ul>
+</section>
+
+<!-- 22 -->
+<section class="cap">
+  <h2>22. Trabajo sin internet y desde el celular</h2>
+  <ul>
+    <li>Ventas y pedidos funcionan aunque se corte la luz o la conexión. Se guardan en el celular y se envían solos cuando vuelve el servidor.</li>
+    <li>Para eso, abre la app <b>con conexión al menos una vez</b> antes. Así el celular guarda productos, inventario y clientes.</li>
+    <li>La tablet de la báscula trabaja sin red y envía después.</li>
+    <li>El celular entra por <b>erp.ceyroerp.com</b> desde cualquier lugar, siempre que la PC del local esté encendida (de 06:00 a 00:00).</li>
+  </ul>
+</section>
+
+<!-- 23 -->
+<section class="cap">
+  <h2>23. Cierre de mes</h2>
+  <p>Los cortes van del día 1 al último día de cada mes.</p>
+  <h3>Antes del primer cierre (una sola vez)</h3>
+  <ol>
+    <li>Saldos iniciales de cada accionista.</li>
+    <li>Precio de referencia por QQ, capital y fecha de inicio contable en Configuración › Contabilidad.</li>
+  </ol>
+  <h3>El último día del mes</h3>
+  <ol>
+    <li>Registra todo lo del día: ventas, cobros, pagos, gastos, nómina y liquidaciones.</li>
+    <li>En <b>Configuración › Control de integridad</b> deben quedar 0 problemas.</li>
+    <li>Revisa Por Cobrar y Por Pagar de cada accionista. Las deudas entre socios deben ser iguales en los dos lados.</li>
+    <li>Cierra la caja.</li>
+    <li>En <b>Estados Financieros</b> toca <span class="btn">📸 Cerrar mes</span> (solo el administrador).
+      <ul>
+        <li>Guarda la foto de todos los socios, y lo cerrado ya no cambia.</li>
+        <li>Para corregir, usa «Anular este cierre» con un motivo y vuelve a cerrar.</li>
+      </ul></li>
+    <li>Si quieres, exporta a Excel: Estados Financieros, Resultado mensual, resultados de Transporte e Intereses de fomentos.</li>
+  </ol>
+</section>
+
+<!-- 24 -->
+<section class="cap">
+  <h2>24. Corregir errores y avisos</h2>
+  <table>
+    <tr><th>Qué ves</th><th>Qué hacer</th></tr>
+    <tr><td>«No tienes permiso…» o «solo lectura»</td><td>No es una falla. Pide el permiso al administrador.</td></tr>
+    <tr><td>La pantalla no carga o los datos no cambian</td><td>Toca ↻ Actualizar. Si sigue igual, espera un minuto (el sistema se reinicia solo). Si no se arregla, avisa: la PC del local debe estar encendida.</td></tr>
+    <tr><td>«Ya se pagó: no se puede editar / borrar»</td><td>Es una protección, porque ese dinero ya salió. El administrador anula el pago y luego se corrige.</td></tr>
+    <tr><td>Registraste algo mal</td><td><b>No lo registres de nuevo encima.</b> Avisa al administrador: él reabre el túnel, anula la liquidación o reversa el movimiento de caja.</td></tr>
+    <tr><td>No encuentras un ticket, agricultor o lote</td><td>Usa 🔎 Buscar (Ctrl+K) con el número, la placa o el nombre.</td></tr>
+    <tr><td>Un ticket de la báscula no aparece</td><td>Espera unos minutos. Si no llega, usa Sincronización o el ingreso manual de emergencia, y avisa.</td></tr>
+    <tr><td>«La caja quedará en −$…»</td><td>Revisa si falta un ingreso. Acepta solo si estás seguro.</td></tr>
+    <tr><td>La caja no cuadra con la hoja</td><td>Revisa el cuadre del día: efectivo o banco mal elegido, un «no es efectivo» sin marcar, o un movimiento con fecha de otro día.</td></tr>
+  </table>
+</section>
+
+<!-- 25 -->
+<section class="cap">
+  <h2>25. Rutina diaria recomendada</h2>
+  <table>
+    <tr><th>Momento</th><th>Qué hacer</th></tr>
+    <tr><td>Al llegar</td><td>Abrir la caja con lo contado. Mirar «Hoy» y atender lo urgente.</td></tr>
+    <tr><td>Durante el día</td><td>Ingresar la materia prima a medida que llegan los tickets. Llenar y finalizar túneles con sus horas. Registrar la producción. Despachar pedidos con su fecha. Registrar cada ingreso y gasto en el momento.</td></tr>
+    <tr><td>Al terminar</td><td>Completar la bajada de carro y la cuadrilla. Revisar el cuadre del día. Contar y cerrar la caja.</td></tr>
+    <tr><td>Viernes</td><td>Pagar la nómina semanal: revisar el neto y descontar anticipos.</td></tr>
+    <tr><td>Fin de mes</td><td>Seguir la sección 23.</td></tr>
+  </table>
+</section>
+
+<!-- 26 -->
+<section class="cap">
+  <h2>26. Reglas de oro</h2>
+  <ol>
+    <li><b>Revisa el accionista activo</b> antes de guardar cualquier cosa.</li>
+    <li><b>Registra en el momento y con la fecha real.</b> Si algo es de otro día, usa la pregunta de fecha.</li>
+    <li><b>Las cantidades van en QQ.</b></li>
+    <li><b>Elige bien efectivo o banco</b> en las cajas mixtas.</li>
+    <li><b>Propio o servicio:</b> decide bien el destino del ticket.</li>
+    <li><b>Busca antes de crear</b> agricultores, clientes y proveedores.</li>
+    <li><b>No corrijas encima:</b> pide que se anule y vuelve a registrar.</li>
+    <li><b>Saldar una cuenta siempre mueve una caja o es un cruce.</b> Nunca se baja un saldo a mano.</li>
+    <li><b>Una clave por persona.</b> No la compartas.</li>
+    <li><b>Ante la duda, pregunta antes de registrar.</b> Corregir cuesta más que preguntar.</li>
+  </ol>
+</section>
+
+</body>
+</html>
