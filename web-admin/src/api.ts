@@ -149,7 +149,8 @@ const lecturasEnCamino = new Map<string, Promise<Response>>();
 
 // 📴 Lecturas que se guardan en el celular (pedido del dueño 2026-10-22): lo que se necesita para TOMAR PEDIDOS y ver
 // la cola cuando el servidor no responde (apagón o PC hibernando). Si no hay conexión se devuelve la última copia.
-const SE_GUARDA_SIN_CONEXION = /^\/(customers|inventory\/|products|productos|orders|sacks|settings|catalogs|receivable|farmers|fomentos|dashboard|notificaciones|cash\/registers\/current)/;
+// «sales» también: la pantalla de Ventas la pide junto con los clientes (pedido del dueño 2026-11-18, cortes de luz).
+const SE_GUARDA_SIN_CONEXION = /^\/(customers|inventory\/|products|productos|orders|sales(\?|$|\/)|sacks|settings|catalogs|receivable|farmers|fomentos|dashboard|notificaciones|cash\/registers\/current)/;
 
 export async function apiGet<T>(path: string, opts?: OpcionesApi): Promise<T> {
   const url = `${API_URL}/api/v1${path}`;

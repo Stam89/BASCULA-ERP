@@ -42,6 +42,7 @@ import { BannerConexion, PanelPedidosPendientes, useSincronizarPedidos } from ".
 import {
   clientesTemporales, enviarPendientes, ES_CLIENTE_TEMPORAL, guardarClienteTemporal, guardarPedidoPendiente, nuevaLlave, type ResultadoEnvio
 } from "./offline/pedidosPendientes";
+import { estadoConexion } from "./offline/conexion";
 import { SalesSessionSwitcher } from "./components/SalesSessionSwitcher";
 import { VentaDetalleCard, type PersonaVentaDetalle, type ProductoDetalle, type VentaDetalleRegistro } from "./components/VentaDetalleCard";
 import { formatoCantidad, formatoPrecio, precioAplicadoDetalle, DESCUENTO_QQ_DEFECTO, LIBRAS_POR_QQ } from "./ventaDetalle";
@@ -5094,9 +5095,9 @@ export function App() {
     try {
       const online = await checkHealth();
       setApiOnline(online);
-      if (!online) return;
+      // Sin servidor se sigue: cada lectura usa la copia guardada en el celular (pedidos en apagones).
 
-      const [
+      const [[
         dash,
         farmerRows,
         productRows,
@@ -5109,7 +5110,7 @@ export function App() {
         liqRows,
         pendingEntryRows,
         dryStorageRows
-      ] = await Promise.all([
+      ], erroresCarga] = await cadaUnoPorSuLado([
         apiGet<Dashboard>("/dashboard"),
         apiGet<Farmer[]>("/farmers"),
         apiGet<Product[]>("/inventory/products"),
@@ -5125,18 +5126,20 @@ export function App() {
         apiGet<Lot[]>("/lots/dry-in-storage")
       ]);
 
-      setDashboard(dash);
-      setFarmers(farmerRows);
-      setProducts(productRows);
-      setWarehouses(warehouseRows);
-      setLots(lotRows);
-      setDryStorageLots(dryStorageRows);
-      setAvailableDryingLots(dryingLotRows);
-      setDryingReports(dryingReportRows);
-      setLiquidacionesList(liqRows);
-      setPendingEntries(pendingEntryRows);
-      setStock(stockRows);
-      setInsumos(supplyRows);
+      if (dash !== undefined) setDashboard(dash);
+      if (farmerRows !== undefined) setFarmers(farmerRows);
+      if (productRows !== undefined) setProducts(productRows);
+      if (warehouseRows !== undefined) setWarehouses(warehouseRows);
+      if (lotRows !== undefined) setLots(lotRows);
+      if (dryStorageRows !== undefined) setDryStorageLots(dryStorageRows);
+      if (dryingLotRows !== undefined) setAvailableDryingLots(dryingLotRows);
+      if (dryingReportRows !== undefined) setDryingReports(dryingReportRows);
+      if (liqRows !== undefined) setLiquidacionesList(liqRows);
+      if (pendingEntryRows !== undefined) setPendingEntries(pendingEntryRows);
+      if (stockRows !== undefined) setStock(stockRows);
+      if (supplyRows !== undefined) setInsumos(supplyRows);
+      // Con servidor, un error de verdad se sigue mostrando; sin servidor ya lo dice el aviso rojo «Sin conexión».
+      if (online && erroresCarga.length) throw erroresCarga[0];
     } finally {
       setLoading(false);
     }
@@ -8335,7 +8338,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   }
 
   async function refreshCustomersAndSales() {
-    const [custs, sls, ar, ords, cola] = await Promise.all([
+    // Cada lectura por su lado: sin servidor, los clientes (guardados en el celular) llegan aunque «ventas» no tenga copia.
+    const [[custs, sls, ar, ords, cola], errores] = await cadaUnoPorSuLado([
       apiGet<Customer[]>("/customers"),
       apiGet<Sale[]>("/sales"),
       apiGet<AccountsReceivable[]>("/receivable"),
@@ -8343,15 +8347,16 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
       // Cola de Despachos GLOBAL (todos los socios). null = no disponible → la del activo.
       apiGet<SalesOrder[]>("/orders/cola-global").catch(() => null)
     ]);
-    setCustomers(custs);
+    if (custs !== undefined) setCustomers(custs);
     apiGet<{ descuento_qq_defecto: number }>("/products/venta-detalle-config")
       .then((c) => setDescuentoQqDefecto(Number(c.descuento_qq_defecto)))
       .catch(() => undefined);
-    setSales(sls);
-    setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
-    setSalesOrders(ords);
-    setColaGlobal(cola);
+    if (sls !== undefined) setSales(sls);
+    if (ar !== undefined) setAccountsReceivable(ar.filter(a => a.status !== "PAID"));
+    if (ords !== undefined) setSalesOrders(ords);
+    if (cola !== undefined) setColaGlobal(cola);
     loadGuias().catch(() => undefined);
+    if (errores.length && !estadoConexion().sinConexion) throw errores[0];
   }
 
   async function loadGuias() {
@@ -30495,6 +30500,20 @@ function DryingLotSelector({
       ))}
     </section>
   );
+}
+
+/**
+ * Como Promise.all, pero cada lectura va por su lado: la que falla queda en `undefined` y las demás sí se usan.
+ * Sin servidor (apagón) hay lecturas con copia en el celular y otras sin ella; antes UNA sin copia dejaba la pantalla
+ * vacía. Devuelve también los errores para avisarlos cuando sí hay conexión.
+ */
+async function cadaUnoPorSuLado<T extends readonly unknown[]>(
+  lecturas: { [K in keyof T]: Promise<T[K]> }
+): Promise<[{ [K in keyof T]: T[K] | undefined }, unknown[]]> {
+  const r = await Promise.allSettled(lecturas as unknown as Promise<unknown>[]);
+  const valores = r.map((x) => (x.status === "fulfilled" ? x.value : undefined)) as unknown as { [K in keyof T]: T[K] | undefined };
+  const errores = r.filter((x): x is PromiseRejectedResult => x.status === "rejected").map((x) => x.reason);
+  return [valores, errores];
 }
 
 function DryingReportsPanel({
