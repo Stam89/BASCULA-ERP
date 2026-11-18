@@ -14,6 +14,7 @@ import { avisarSobregiro, exigirCajaAbiertaDelAccionista, medioParaCaja } from "
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { nombreNormalSql } from "../../services/agricultor-nombres.js";
 import { calcularLimiteFomento } from "../../services/fomento-limite.js";
+import { cerrarCosechaFomento, reabrirCosechaFomento } from "../../services/fomento-liquidacion.js";
 import { hoyEc } from "../../utils/fechas.js";
 import { cruzarGastoPorSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 import { registrarCobroEnBanco, registrarPagoConBanco } from "../../services/pagado-con-banco.js";
@@ -971,6 +972,24 @@ fomentosRouter.patch("/:id/entregas/:entregaId/interes-hasta", requirePermiso("F
   });
   const full = await pool.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
   res.json(full.rows[0]);
+}));
+
+// 📦 Cerrar la cosecha a mano (sin liquidación): congela el gasto adm., archiva el fomento y, si se pide, pasa el saldo
+// pendiente a un fomento nuevo como «Saldo anterior» (pedido del dueño 2026-11-18). ↩ Reabrir lo deshace.
+fomentosRouter.post("/:id/cerrar-cosecha", requirePermiso("FOMENTO_GASTO_ADM", "EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const body = z.object({ pasar_saldo: z.boolean().default(true) }).parse(req.body ?? {});
+  const user = (req as AuthenticatedRequest).user;
+  const r = await inTransaction((client) => cerrarCosechaFomento(client, {
+    fomentoId: String(req.params.id), accionistaId, pasarSaldo: body.pasar_saldo, usuario: user?.name ?? user?.username ?? null
+  }));
+  res.json(r);
+}));
+
+fomentosRouter.post("/:id/reabrir-cosecha", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+  const accionistaId = getAccionistaId(req);
+  const r = await inTransaction((client) => reabrirCosechaFomento(client, { fomentoId: String(req.params.id), accionistaId }));
+  res.json(r);
 }));
 
 fomentosRouter.delete("/:id", requirePermiso("FOMENTO_ELIMINAR"), asyncRoute(async (req, res) => {

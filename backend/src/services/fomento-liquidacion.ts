@@ -364,3 +364,79 @@ export async function revertirPagosFomentoDeLiquidacion(client: PoolClient, liqu
   }
   return { abonos: pagos.length, saldo_contra_eliminado: contras.length };
 }
+
+// ── 📦 CERRAR COSECHA A MANO (pedido del dueño 2026-11-18) ───────────────────
+// Archiva un fomento sin liquidación: congela el gasto administrativo a la fecha de cierre (liquidado_at) y lo pasa a
+// «Archivados» con toda su libreta. Si queda deuda y se pide, el saldo se traspasa a un fomento NUEVO del mismo socio
+// como «Saldo anterior» (igual que la renovación de una liquidación). No toca caja. Se puede deshacer con
+// reabrirCosechaFomento mientras el fomento nuevo no tenga movimientos.
+export const CONCEPTO_TRASPASO_CIERRE = "Traspaso a fomento nuevo (cierre de cosecha)";
+
+export async function cerrarCosechaFomento(
+  client: PoolClient,
+  input: { fomentoId: string; accionistaId: string; pasarSaldo: boolean; usuario?: string | null }
+): Promise<{ saldo: number; nuevo_fomento_id: string | null }> {
+  const f = (await client.query(
+    `SELECT id, farmer_name, farmer_id, renta, variedad, status, accionista_id FROM fomentos
+      WHERE id = $1 AND accionista_id = $2 FOR UPDATE`,
+    [input.fomentoId, input.accionistaId]
+  )).rows[0];
+  if (!f) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+  if (f.status === "CERRADO_LIQUIDACION") throw new ApiError(409, "Esta cosecha ya está cerrada (está en Archivados).");
+  // Primero se cierra (congela el gasto adm. a hoy) y con eso se calcula el saldo.
+  await client.query(
+    `UPDATE fomentos SET status = 'CERRADO_LIQUIDACION', liquidado_at = now(),
+            notes = left(btrim(COALESCE(notes, '') || ' ' || $2), 2000)
+      WHERE id = $1`,
+    [f.id, `[Cosecha cerrada a mano el ${new Date().toLocaleDateString("es-EC", { timeZone: "America/Guayaquil" })}${input.usuario ? ` por ${input.usuario}` : ""}]`]
+  );
+  const saldo = await saldoFomento(client, f.id);
+  let nuevoId: string | null = null;
+  if (input.pasarSaldo && saldo > 0.005) {
+    await client.query(
+      "INSERT INTO fomento_pagos (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
+      [f.id, saldo, CONCEPTO_TRASPASO_CIERRE]
+    );
+    const nuevo = (await client.query(
+      `INSERT INTO fomentos (farmer_name, farmer_id, cuadras, inicio, renta, variedad, status, accionista_id, notes, limite_credito, fomento_origen_id)
+       VALUES ($1, $2, 0, CURRENT_DATE, $3, $4, 'ACTIVOS', $5, $6, $7, $8) RETURNING id`,
+      [f.farmer_name, f.farmer_id ?? null, Number(f.renta) || 0, f.variedad ?? null, f.accionista_id,
+       `Saldo de la cosecha anterior (cierre de cosecha) - Fomento anterior #${f.id}`, saldo, f.id]
+    )).rows[0];
+    await client.query(
+      "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto, es_saldo_anterior) VALUES ($1, CURRENT_DATE, $2, $3, true)",
+      [nuevo.id, saldo, "Saldo anterior (cosecha pasada)"]
+    );
+    nuevoId = nuevo.id;
+  }
+  return { saldo, nuevo_fomento_id: nuevoId };
+}
+
+// ↩ Deshace un cierre de cosecha hecho a mano (no uno de liquidación). El fomento nuevo con el saldo se borra solo si no
+// tiene más movimientos que esa fila de saldo anterior.
+export async function reabrirCosechaFomento(client: PoolClient, input: { fomentoId: string; accionistaId: string }): Promise<{ fomento_nuevo_borrado: boolean }> {
+  const f = (await client.query(
+    "SELECT id, status FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [input.fomentoId, input.accionistaId]
+  )).rows[0];
+  if (!f) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+  if (f.status !== "CERRADO_LIQUIDACION") throw new ApiError(409, "Esta cosecha no está cerrada.");
+  const porLiquidacion = await client.query("SELECT 1 FROM fomento_pagos WHERE fomento_id = $1 AND liquidation_id IS NOT NULL LIMIT 1", [f.id]);
+  if (porLiquidacion.rowCount) throw new ApiError(409, "Esta cosecha se cerró con una liquidación: para reabrirla anula esa liquidación.");
+  const nuevos = (await client.query("SELECT id FROM fomentos WHERE fomento_origen_id = $1 AND origen_liquidation_id IS NULL FOR UPDATE", [f.id])).rows;
+  for (const n of nuevos) {
+    const mov = (await client.query(
+      `SELECT (SELECT count(*) FROM fomento_entregas WHERE fomento_id = $1)::int AS entregas,
+              (SELECT count(*) FROM fomento_entregas WHERE fomento_id = $1 AND NOT es_saldo_anterior)::int AS normales,
+              (SELECT count(*) FROM fomento_pagos WHERE fomento_id = $1)::int AS pagos`,
+      [n.id]
+    )).rows[0];
+    if (mov.normales > 0 || mov.pagos > 0 || mov.entregas > 1) {
+      throw new ApiError(409, "La cosecha nueva (con el saldo anterior) ya tiene entregas o pagos: no se puede reabrir esta.");
+    }
+    await client.query("DELETE FROM fomento_entregas WHERE fomento_id = $1", [n.id]);
+    await client.query("DELETE FROM fomentos WHERE id = $1", [n.id]);
+  }
+  await client.query("DELETE FROM fomento_pagos WHERE fomento_id = $1 AND concepto = $2 AND liquidation_id IS NULL", [f.id, CONCEPTO_TRASPASO_CIERRE]);
+  await client.query("UPDATE fomentos SET status = 'ACTIVOS', liquidado_at = NULL WHERE id = $1", [f.id]);
+  return { fomento_nuevo_borrado: nuevos.length > 0 };
+}

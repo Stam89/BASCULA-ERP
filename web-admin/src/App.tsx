@@ -1728,6 +1728,7 @@ type FomentoPago = {
   valor: number;
   concepto: string | null;
   created_at: string;
+  liquidation_id?: string | null;
 };
 
 type FomentoLiquidacionRef = { liquidation_number: string; created_at: string; gross_amount: number; quintals: number; price_per_quintal: number; flete: number; cosechadora: number; bascula: number; abono_fomento: number };
@@ -8956,6 +8957,37 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     setSackMovForm(p => ({ ...p, cantidad: "", concepto: "" }));
     addToast(`${sackMovForm.movement === "ENTRADA" ? "Entrada" : "Salida"} de sacos registrada`, "success");
     await refreshSacks();
+  }
+
+  // 📦 Cerrar la cosecha a mano (pedido del dueño 2026-11-18): congela el gasto adm., archiva y pasa el saldo a la nueva.
+  async function cerrarCosechaFomento(f: FomentoDetalle) {
+    const deuda = Math.max(0, Number(f.deuda_total ?? 0));
+    const ok = await confirmar(`📦 Cerrar la cosecha de ${f.farmer_name}\n\n` +
+      "• El gasto administrativo se congela a HOY (ya no sube).\n" +
+      "• El fomento pasa a «Archivados» con toda su libreta (se puede ver e imprimir).\n" +
+      (deuda > 0.005
+        ? `• Queda debiendo ${money(deuda)}: se pasa a un fomento NUEVO como «Saldo anterior» (ítem 1 de la próxima cosecha).\n`
+        : "• No queda deuda pendiente.\n") +
+      "\nNo mueve la caja. ¿Cerrar la cosecha?");
+    if (!ok) return;
+    try {
+      const r = await apiPost<{ saldo: number; nuevo_fomento_id: string | null }>(`/fomentos/${f.id}/cerrar-cosecha`, { pasar_saldo: true });
+      addToast(r.nuevo_fomento_id
+        ? `Cosecha cerrada. El saldo de ${money(r.saldo)} pasó a su fomento nuevo («Saldo anterior»).`
+        : "Cosecha cerrada y archivada.", "success");
+      await refreshFomentos();
+      await loadFomentoDetalle(r.nuevo_fomento_id ?? f.id);
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo cerrar la cosecha", "error"); }
+  }
+  async function reabrirCosechaFomento(f: FomentoDetalle) {
+    const ok = await confirmar(`↩ Reabrir la cosecha de ${f.farmer_name}\n\nVuelve a «Activos», el gasto administrativo vuelve a correr y se quita el fomento nuevo con el saldo anterior (si no tiene movimientos). ¿Reabrir?`);
+    if (!ok) return;
+    try {
+      await apiPost(`/fomentos/${f.id}/reabrir-cosecha`, {});
+      addToast("Cosecha reabierta", "success");
+      await refreshFomentos();
+      await loadFomentoDetalle(f.id);
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo reabrir", "error"); }
   }
 
   async function loadFomentoDetalle(id: string) {
@@ -23506,6 +23538,20 @@ Motivo (obligatorio):`, ""));
                         <button type="button" onClick={() => setFomentoInteresFijoModalOpen(true)}
                           style={{ background: "#fff", color: "#92400e", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
                           ⚙️ Gasto adm. por entrega
+                        </button>
+                      )}
+                      {canGastoAdmFomento && fomentoDetalle.status !== "CERRADO_LIQUIDACION" && (
+                        <button type="button" onClick={() => { cerrarCosechaFomento(fomentoDetalle).catch(() => undefined); }}
+                          title="Congela el gasto adm., pasa el fomento a Archivados y lleva el saldo a la próxima cosecha"
+                          style={{ background: "#fff", color: "#374151", border: "1px solid #6b7280", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          📦 Cerrar cosecha
+                        </button>
+                      )}
+                      {canAnular && fomentoDetalle.status === "CERRADO_LIQUIDACION" && !(fomentoDetalle.pagos ?? []).some((p) => p.liquidation_id) && (
+                        <button type="button" onClick={() => { reabrirCosechaFomento(fomentoDetalle).catch(() => undefined); }}
+                          title="Deshace el cierre de cosecha hecho a mano"
+                          style={{ background: "#fff", color: "#b45309", border: "1px solid #f59e0b", borderRadius: 8, padding: "7px 12px", cursor: "pointer", fontWeight: 700, fontSize: 12, whiteSpace: "nowrap" }}>
+                          ↩ Reabrir cosecha
                         </button>
                       )}
                       {canEliminarFomento && (
