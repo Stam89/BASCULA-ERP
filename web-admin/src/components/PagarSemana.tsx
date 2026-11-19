@@ -16,7 +16,7 @@ export type PersonaSemana = {
   anticipos: number;
   neto: number;
   registros: number;
-  /** `grupo|rol|nombre`; la bajada de carro va toda junta (`bajada`). */
+  /** `grupo|rol|nombre` (también la bajada de carro, por persona). */
   clave?: string;
   staff_id?: string;
   pago_dia?: number;
@@ -24,7 +24,7 @@ export type PersonaSemana = {
 };
 /** Lo elegido en la lista: a quién no se le paga hoy y los días de cada sueldo semanal. */
 export type EleccionSemana = { excluir: string[]; dias: Record<string, number>; neto: number };
-const claveDe = (p: PersonaSemana) => p.clave ?? (p.grupo === "bajada" ? "bajada" : `${p.grupo}|${p.rol}|${p.nombre}`);
+const claveDe = (p: PersonaSemana) => p.clave ?? `${p.grupo}|${p.rol}|${p.nombre}`;
 export type SemanaVista = {
   hasta: string;
   hasta_sugerido: string;
@@ -193,13 +193,10 @@ export function PagarSemana({ vista, cargando, hasta, onHasta, cajaAbierta, onAb
               {GRUPOS.map((g) => {
                 const filas = vista.personas.filter((p) => p.grupo === g.id);
                 if (filas.length === 0) return null;
-                const bajadaJunta = g.id === "bajada";
                 return (
                   <div key={g.id} className="semana-grupo">
                     <div className="semana-grupo-head">
-                      {bajadaJunta ? (
-                        <label className="semana-check"><input type="checkbox" checked={!fuera.has("bajada")} onChange={() => alternar("bajada")} /> {g.icono} {g.titulo} <small className="muted">(se paga toda junta)</small></label>
-                      ) : <span>{g.icono} {g.titulo}</span>}
+                      <span>{g.icono} {g.titulo}</span>
                       <b>{money(filas.filter(marcada).reduce((a, p) => a + netoDe(p), 0))}</b>
                     </div>
                     {filas.map((p) => {
@@ -207,13 +204,13 @@ export function PagarSemana({ vista, cargando, hasta, onHasta, cajaAbierta, onAb
                       return (
                         <div key={`${g.id}-${p.rol}-${p.nombre}`} className={`semana-fila${on ? "" : " semana-fila--fuera"}`}>
                           <span className="semana-check">
-                            {!bajadaJunta && <input type="checkbox" aria-label={`Pagar a ${p.nombre}`} checked={!fuera.has(claveDe(p))} onChange={() => alternar(claveDe(p))} />}
+                            <input type="checkbox" aria-label={`Pagar a ${p.nombre}`} checked={!fuera.has(claveDe(p))} onChange={() => alternar(claveDe(p))} />
                             <span>{p.nombre}{p.grupo !== "sueldo" && nombreRol(p) && <small> · {nombreRol(p)}</small>}{p.anticipos > 0 && <small className="neg"> · anticipo −{money(p.anticipos)}</small>}
                               {p.grupo === "sueldo" && p.staff_id && (
                                 <small> · {p.rol.toLowerCase()} · <input type="number" min="0" max="7" step="0.5" className="semana-dias" aria-label={`Días de ${p.nombre}`}
                                   value={dias[p.staff_id] ?? String(p.dias ?? p.registros)} onChange={(e) => setDias((cur) => ({ ...cur, [p.staff_id!]: e.target.value }))} /> día(s) × {money(p.pago_dia ?? 0)}</small>
                               )}
-                              {!on && <small className="muted"> · queda pendiente</small>}
+                              {!on && <small className="muted"> · queda pendiente{p.grupo === "bajada" ? " (sale la próxima semana)" : ""}</small>}
                             </span>
                           </span>
                           <b>{money(netoDe(p))}</b>

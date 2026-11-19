@@ -1733,7 +1733,7 @@ cuadrillaRouter.get("/bajadas/recibo", asyncRoute(async (req, res) => {
 // null = no hay bajadas pendientes. Lo comparten la ruta y el cierre semanal.
 export async function pagarBajadasPendientes(
   client: PoolClient,
-  p: { cashRegisterId: string; hasta?: string | null; userId: string | null },
+  p: { cashRegisterId: string; hasta?: string | null; userId: string | null; excluirTrabajadores?: string[] },
   ejecutar = true
 ) {
   await sincronizarBajadas(client);
@@ -1743,8 +1743,9 @@ export async function pagarBajadasPendientes(
   }
   const pendientes = await client.query(
     `SELECT id FROM cuadrilla_entries WHERE origen = 'BASCULA' AND paid_at IS NULL
-        AND ($1::date IS NULL OR work_date <= $1::date) ${ejecutar ? "FOR UPDATE" : ""}`,
-    [p.hasta ?? null]
+        AND ($1::date IS NULL OR work_date <= $1::date)
+        AND NOT (worker_name = ANY($2::text[])) ${ejecutar ? "FOR UPDATE" : ""}`,
+    [p.hasta ?? null, p.excluirTrabajadores ?? []]
   );
   if (!pendientes.rowCount) return null;
   const ids = pendientes.rows.map((r: { id: string }) => r.id);

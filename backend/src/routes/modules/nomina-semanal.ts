@@ -42,9 +42,11 @@ export type PersonaSemana = {
   dias?: number;
 };
 
-/** Clave de una persona en la lista del viernes. La bajada de carro se paga toda junta. */
-export const claveSemana = (grupo: PersonaSemana["grupo"], rol: string, nombre: string) =>
-  grupo === "bajada" ? "bajada" : `${grupo}|${rol}|${nombre}`;
+/** Clave de una persona en la lista del viernes. Desde 2026-11-19 la bajada de carro también va por persona
+ *  (pedido del dueño: si a alguien no se le paga, su bajada queda pendiente y sale la semana siguiente).
+ *  `bajada` a secas (versión vieja de la pantalla) sigue dejando fuera toda la bajada. */
+export const claveSemana = (grupo: PersonaSemana["grupo"], rol: string, nombre: string) => `${grupo}|${rol}|${nombre}`;
+export const ROL_BAJADA = "BAJADA DE CARRO";
 export type ResumenSemana = {
   personas: PersonaSemana[];
   totales: { ganado: number; anticipos: number; neto: number; personas: number };
@@ -110,10 +112,16 @@ export async function procesarSemana(
     if (r) personas.push({ grupo: "cuadrilla", rol: "CUADRILLA", nombre: w.worker_name, ganado: r.gross, anticipos: r.anticipos, neto: r.paid, registros: r.count, clave });
   }
 
+  // Bajada de carro por persona: al pagar, los desmarcados no se tocan (siguen pendientes y salen la próxima semana).
+  const prefijoBajada = `bajada|${ROL_BAJADA}|`;
+  const bajadaFuera = [...fuera].filter((k) => k.startsWith(prefijoBajada)).map((k) => k.slice(prefijoBajada.length));
   const conBajada = !(ejecutar && fuera.has("bajada"));
-  const bajada = conBajada ? await pagarBajadasPendientes(client, { cashRegisterId: p.cashRegisterId, hasta: p.hasta, userId: p.userId }, pagarA("bajada")) : null;
+  const bajada = conBajada
+    ? await pagarBajadasPendientes(client, { cashRegisterId: p.cashRegisterId, hasta: p.hasta, userId: p.userId, excluirTrabajadores: ejecutar ? bajadaFuera : [] }, ejecutar)
+    : null;
   for (const b of bajada?.por_trabajador ?? []) {
-    personas.push({ grupo: "bajada", rol: "BAJADA DE CARRO", nombre: b.trabajador, ganado: b.monto, anticipos: 0, neto: b.monto, registros: b.tickets, clave: "bajada" });
+    const clave = claveSemana("bajada", ROL_BAJADA, b.trabajador);
+    personas.push({ grupo: "bajada", rol: ROL_BAJADA, nombre: b.trabajador, ganado: b.monto, anticipos: 0, neto: b.monto, registros: b.tickets, clave });
   }
 
   // 🗓️ Sueldos SEMANALES de la Matriz (la cocinera…): pago por día × días, la semana del corte, si aún no cobró.
