@@ -7169,3 +7169,8 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .histVentaFiltro button { padding: 6px 10px; border-radius: 8px; cursor: pointer; }
 .histVentas__cliente input { min-width: 200px; }
 @media (max-width: 640px) { .histVentas__cliente, .histVentas__cliente input { width: 100%; min-width: 0; } }
+
+/* Bajada de carro: lo de semanas anteriores aún sin pagar, arriba en la misma tabla (pedido del dueño 2026-11-19). */
+.cajaTable tr.bajSeccion td { background: #f1f5f9; font-weight: 700; font-size: 12.5px; color: #334155; padding: 6px 10px; }
+.cajaTable tr.bajAnterior td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
+.bajAnterior-tag { color: #b45309; font-weight: 600; }

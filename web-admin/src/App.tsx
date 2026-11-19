@@ -613,6 +613,8 @@ type BajadaData = {
   /** Último número de ticket de la báscula (ayuda al elegir). */
   ultimo_numero?: number | null;
   filas: BajadaFila[];
+  /** Vista por semana: tickets de semanas anteriores aún sin pagar (por pagar o sin nombre). */
+  anteriores?: BajadaFila[];
   arrastre: Array<{ trabajador: string; tickets: number; monto: number }>;
 };
 
@@ -25778,7 +25780,11 @@ Motivo (obligatorio):`, ""));
               const conMonto = filas.filter((f) => f.entry_id);
               const totalSemana = round2(conMonto.reduce((a, f) => a + Number(f.monto ?? 0), 0));
               const pendienteSemana = round2(conMonto.filter((f) => !f.paid_at).reduce((a, f) => a + Number(f.monto ?? 0), 0));
-              const sinNombre = filas.filter((f) => !f.entry_id && f.bajada_manual !== "__NO__" && !(f.antes_del_corte ?? (d?.desde && f.fecha < d.desde)));
+              // Pedido del dueño 2026-11-19: lo de semanas anteriores aún sin pagar sale arriba, en la misma tabla.
+              const anteriores = bajadaTodo ? [] : (d?.anteriores ?? []);
+              const idsAnteriores = new Set(anteriores.map((f) => f.ticket_id));
+              const filasTabla = [...anteriores, ...filas];
+              const sinNombre = filasTabla.filter((f) => !f.entry_id && f.bajada_manual !== "__NO__" && !(f.antes_del_corte ?? (d?.desde && f.fecha < d.desde)));
               const arrastreTotal = round2((d?.arrastre ?? []).reduce((a, r) => a + Number(r.monto), 0));
               const porTrabajador = new Map<string, { tickets: number; qq: number; monto: number; pendiente: number }>();
               for (const f of conMonto) {
@@ -25832,15 +25838,21 @@ Motivo (obligatorio):`, ""));
                   <table className="cajaTable enTarjetas">
                     <thead><tr><th>Fecha</th><th>Ticket</th><th>Cliente</th><th>Placa</th><th className="num">QQ</th><th>Bajó el carro</th><th className="num">Monto</th><th>Estado</th></tr></thead>
                     <tbody>
-                      {filas.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>{bajadaTodo ? "No hay tickets de báscula desde esa fecha." : "No hay tickets de báscula en esta semana."}</td></tr>}
-                      {filas.map((f) => {
+                      {filasTabla.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: "center", padding: 14 }}>{bajadaTodo ? "No hay tickets de báscula desde esa fecha." : "No hay tickets de báscula en esta semana."}</td></tr>}
+                      {filasTabla.map((f, i) => {
                         const antesDeInicio = !!(f.antes_del_corte ?? (d.desde && f.fecha < d.desde));
                         const noSePaga = f.bajada_manual === "__NO__";
                         const actual = noSePaga ? "" : (f.bajada_manual ?? f.bajada_bascula ?? "");
                         const pagado = !!f.paid_at;
+                        const anterior = idsAnteriores.has(f.ticket_id);
+                        const titulo = anteriores.length > 0 && (i === 0 || i === anteriores.length)
+                          ? (i === 0 ? `⏳ De semanas anteriores, todavía sin pagar (${anteriores.length})` : "📅 Esta semana")
+                          : null;
                         return (
-                          <tr key={f.ticket_id} style={!f.entry_id && !noSePaga && !antesDeInicio ? { background: "#fffbeb" } : undefined}>
-                            <td style={{ whiteSpace: "nowrap" }}>{fmtDia(f.fecha)}</td>
+                          <React.Fragment key={f.ticket_id}>
+                          {titulo && <tr className="bajSeccion"><td colSpan={8} data-label="">{titulo}</td></tr>}
+                          <tr className={anterior ? "bajAnterior" : undefined} style={!f.entry_id && !noSePaga && !antesDeInicio ? { background: "#fffbeb" } : undefined}>
+                            <td style={{ whiteSpace: "nowrap" }}>{fmtDia(f.fecha)}{anterior && <small className="bajAnterior-tag"> · semana anterior</small>}</td>
                             <td style={{ fontWeight: 600 }}>#{f.numero ?? "—"}</td>
                             <td>{f.cliente ?? "—"}</td>
                             <td>{f.placa || "—"}</td>
@@ -25925,6 +25937,7 @@ Motivo (obligatorio):`, ""));
                                 : <span className="chip bad">Sin nombre</span>}
                             </td>
                           </tr>
+                          </React.Fragment>
                         );
                       })}
                     </tbody>

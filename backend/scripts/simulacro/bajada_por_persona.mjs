@@ -29,6 +29,11 @@ try {
   const v2 = exigir(await api("GET", `/nomina-semanal/vista?hasta=2026-11-27`, undefined, matriz), "8. lista de la semana siguiente (27/11)");
   const sigue = v2.personas.find((p) => p.grupo === "bajada" && p.nombre === uno.nombre);
   check(sigue && sigue.neto >= uno.neto - 0.001, "9. la bajada pendiente aparece en la semana siguiente", sigue);
+  // La pantalla Bajada de carro, en la semana siguiente, muestra arriba los tickets anteriores aún sin pagar.
+  const bs = exigir(await api("GET", "/cuadrilla/bajadas?semana=2026-11-23", undefined, matriz), "11. Bajada de carro, semana siguiente");
+  const ant = bs.anteriores ?? [];
+  check(ant.some((f) => f.trabajador === uno.nombre && !f.paid_at) && !ant.some((f) => f.paid_at), "12. salen los tickets anteriores sin pagar (y ninguno pagado)", ant.map((f) => [f.numero, f.trabajador, f.paid_at]));
+  check(!ant.some((f) => f.trabajador === dos.nombre), "13. los ya pagados no salen como anteriores");
   // Compatibilidad: «bajada» a secas deja fuera toda la bajada.
   const todos = v2.personas.filter((p) => p.grupo !== "bajada").map((p) => p.clave);
   const nada = await api("POST", "/nomina-semanal/pagar", { hasta: "2026-11-27", cash_register_id: caja.id, confirmar_neto: 0, excluir: [...todos, "bajada"] }, matriz);

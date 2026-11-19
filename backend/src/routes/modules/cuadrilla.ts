@@ -1583,8 +1583,7 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
   const ini = modoTodo ? (desdeFecha && desdeFecha <= hoy ? desdeFecha : inicioSemana(hoy)) : inicioSemana(q.semana ?? hoy);
   const fin = modoTodo ? sumarDias(inicioSemana(hoy), 6) : sumarDias(ini, 6);
   const act = await actividadBajada(pool);
-  const filas = (await pool.query(
-    `SELECT t.id AS ticket_id, t.raw_payload->>'numeroTicket' AS numero, (${FECHA_TICKET})::text AS fecha,
+  const SELECT_FILA = `SELECT t.id AS ticket_id, t.raw_payload->>'numeroTicket' AS numero, (${FECHA_TICKET})::text AS fecha,
             t.raw_payload->>'fecha' AS fecha_hora, t.farmer_name AS cliente, t.raw_payload->>'placa' AS placa,
             t.quintals::float AS qq, NULLIF(btrim(t.raw_payload->>'bajadaX'), '') AS bajada_bascula,
             NULLIF(btrim(t.bajada_manual), '') AS bajada_manual, t.bajada_qq::float AS bajada_qq,
@@ -1592,10 +1591,19 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
             e.paid_at, NOT ${CORTE_BAJADA} AS antes_del_corte
        FROM mobile_synced_tickets t
        JOIN bajada_carro_config c ON c.id = 1
-       LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id
-      WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} BETWEEN $1::date AND $2::date
-      ORDER BY ${FECHA_TICKET}, NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint NULLS LAST`,
+       LEFT JOIN cuadrilla_entries e ON e.origen = 'BASCULA' AND e.referencia_id = t.id`;
+  const ORDEN = `ORDER BY ${FECHA_TICKET}, NULLIF(regexp_replace(coalesce(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '')::bigint NULLS LAST`;
+  const filas = (await pool.query(
+    `${SELECT_FILA} WHERE ${TICKET_ELEGIBLE} AND ${FECHA_TICKET} BETWEEN $1::date AND $2::date ${ORDEN}`,
     [ini, fin]
+  )).rows;
+  // Pedido del dueño 2026-11-19: en la vista por semana salen también, en la misma tabla, los tickets de semanas
+  // ANTERIORES que todavía no se pagaron (con nombre y por pagar, o sin nombre), para ponerles nombre o verlos sin
+  // cambiar de semana. Los pagados, los «no se paga» y los de antes del inicio no salen.
+  const anteriores = modoTodo ? [] : (await pool.query(
+    `${SELECT_FILA} WHERE ${TICKET_ELEGIBLE} AND ${CORTE_BAJADA} AND ${FECHA_TICKET} < $1::date
+        AND ((e.id IS NOT NULL AND e.paid_at IS NULL) OR (e.id IS NULL AND COALESCE(btrim(t.bajada_manual), '') <> $2)) ${ORDEN}`,
+    [ini, BAJADA_NO]
   )).rows;
   const arrastre = (await pool.query(
     `SELECT worker_name AS trabajador, COUNT(*)::int AS tickets, COALESCE(SUM(subtotal), 0)::float AS monto
@@ -1605,10 +1613,12 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
   )).rows;
   // Nombre dudoso: solo si lo escribió la báscula (uno corregido a mano ya está confirmado) y no está pagado.
   const roster = await cargarRosterBajada(pool);
-  const filasConAviso = filas.map((f) => ({
+  const conAviso = (f: Record<string, any>) => ({
     ...f,
     nombre_revisar: (!f.bajada_manual && !f.paid_at && f.bajada_bascula ? evaluarNombre(f.bajada_bascula, roster) : null) as Evaluacion | null
-  }));
+  });
+  const filasConAviso = filas.map(conAviso);
+  const anterioresConAviso = anteriores.map(conAviso);
   res.json({
     semana: { inicio: ini, fin, actual: inicioSemana(hoy) === ini },
     modo: modoTodo ? "todo" : "semana",
@@ -1618,7 +1628,8 @@ cuadrillaRouter.get("/bajadas", asyncRoute(async (req, res) => {
     tarifa: act ? Number(act.unit_rate) : null,
     actividad: act?.name ?? null,
     filas: filasConAviso,
-    por_revisar: filasConAviso.filter((f) => f.nombre_revisar).length,
+    anteriores: anterioresConAviso,
+    por_revisar: [...filasConAviso, ...anterioresConAviso].filter((f) => f.nombre_revisar).length,
     arrastre
   });
 }));
