@@ -4014,6 +4014,12 @@ export function App() {
   const [descuentoQqDefecto, setDescuentoQqDefecto] = useState<number>(DESCUENTO_QQ_DEFECTO);
   const [nuevoDescCli, setNuevoDescCli] = useState({ id: "", monto: "" });
   const [sales, setSales] = useState<Sale[]>([]);
+  // Ventas › Historial: filtro por cliente (pedido del dueño 2026-11-19). "" = todos.
+  const [histVentaCliente, setHistVentaCliente] = useState("");
+  const ventasHist = useMemo(() => {
+    const q = histVentaCliente.trim().toLowerCase();
+    return !q ? sales : sales.filter((s) => (s.customer_name ?? "Sin cliente").toLowerCase().includes(q));
+  }, [sales, histVentaCliente]);
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
   const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "ventas">("ventas");
   // Modal "Estado de cuenta" por deudor: guarda la clave del grupo; los ítems se
@@ -19843,6 +19849,23 @@ Motivo (obligatorio):`, ""));
             {sales.length > 0 && (
               <div style={{ gridColumn: "1 / -1", border: "1px solid #e5e7eb", borderRadius: 10, padding: 16 }}>
                 <h3 style={{ marginTop: 0, marginBottom: 12 }}>📊 Ventas realizadas <small className="muted" style={{ fontWeight: 600 }}>· {activeAccionista?.name}</small></h3>
+                {(() => {
+                  const clientesHist = [...new Set(sales.map((s) => s.customer_name ?? "Sin cliente"))].sort((a, b) => a.localeCompare(b, "es"));
+                  const filtradas = ventasHist;
+                  const vigentes = filtradas.filter((s) => s.sale_status !== "CANCELLED");
+                  return (
+                    <div className="histVentaFiltro">
+                      <label>
+                        <span>🔎 Cliente</span>
+                        <input list="histVentaClientes" value={histVentaCliente} placeholder="Todos los clientes · escribe para buscar"
+                          onChange={(e) => setHistVentaCliente(e.target.value)} />
+                        <datalist id="histVentaClientes">{clientesHist.map((c) => <option key={c} value={c} />)}</datalist>
+                      </label>
+                      {histVentaCliente && <button type="button" onClick={() => setHistVentaCliente("")}>✕ Ver todos</button>}
+                      <small className="muted">{filtradas.length} venta{filtradas.length === 1 ? "" : "s"} · {money(round2(vigentes.reduce((a, s) => a + Number(s.total_amount), 0)))}{vigentes.length !== filtradas.length ? " (sin anuladas)" : ""}</small>
+                    </div>
+                  );
+                })()}
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                     <thead>
@@ -19857,7 +19880,10 @@ Motivo (obligatorio):`, ""));
                       </tr>
                     </thead>
                     <tbody>
-                      {sales.map((s, i) => {
+                      {ventasHist.length === 0 && (
+                        <tr><td colSpan={7} style={{ padding: 10, textAlign: "center" }} className="muted">No hay ventas de un cliente con «{histVentaCliente}».</td></tr>
+                      )}
+                      {ventasHist.map((s, i) => {
                         // Pedido despachado asociado a esta venta (si vino de un pedido): habilita la guía.
                         const order = salesOrders.find((o) => o.status === "DELIVERED" && o.sale_id === s.id);
                         return (
