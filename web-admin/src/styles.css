@@ -7164,3 +7164,5 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .histVentaFiltro label { display: flex; flex-direction: column; gap: 3px; flex: 1 1 260px; max-width: 420px; font-weight: 600; font-size: 13px; }
 .histVentaFiltro input { padding: 7px 9px; border: 1px solid var(--c-border-strong); border-radius: 8px; width: 100%; }
 .histVentaFiltro button { padding: 6px 10px; border-radius: 8px; cursor: pointer; }
+.histVentas__cliente input { min-width: 200px; }
+@media (max-width: 640px) { .histVentas__cliente, .histVentas__cliente input { width: 100%; min-width: 0; } }

@@ -40,7 +40,14 @@ export function HistorialVentas({ socios, activo }: { socios: Array<{ id: string
   }, [desde, hasta]);
   useEffect(() => { void cargar(); }, [cargar]);
 
-  const visibles = useMemo(() => ventas.filter((v) => v.accionista_id === socio), [ventas, socio]);
+  // Filtro por cliente (pedido del dueño 2026-11-19): escribir parte del nombre o elegirlo de la lista.
+  const [cliente, setCliente] = useState("");
+  const delSocio = useMemo(() => ventas.filter((v) => v.accionista_id === socio), [ventas, socio]);
+  const clientes = useMemo(() => [...new Set(delSocio.map((v) => v.customer_name ?? "Sin cliente"))].sort((a, b) => a.localeCompare(b, "es")), [delSocio]);
+  const visibles = useMemo(() => {
+    const q = cliente.trim().toLowerCase();
+    return q ? delSocio.filter((v) => (v.customer_name ?? "Sin cliente").toLowerCase().includes(q)) : delSocio;
+  }, [delSocio, cliente]);
   const resumen = useMemo(() => {
     const vigentes = visibles.filter((v) => v.sale_status !== "CANCELLED");
     return {
@@ -60,6 +67,11 @@ export function HistorialVentas({ socios, activo }: { socios: Array<{ id: string
         <div className="histVentas__fechas">
           <label><span>Desde</span><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
           <label><span>Hasta</span><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+          <label className="histVentas__cliente"><span>🔎 Cliente</span>
+            <input list="histVentasClientes" value={cliente} placeholder="Todos · escribe para buscar" onChange={(e) => setCliente(e.target.value)} />
+            <datalist id="histVentasClientes">{clientes.map((c) => <option key={c} value={c} />)}</datalist>
+          </label>
+          {cliente && <button type="button" className="btnSecondary" title="Quitar el filtro de cliente" onClick={() => setCliente("")}>✕</button>}
           <button type="button" className="btnSecondary" onClick={() => void cargar()} disabled={cargando}>{cargando ? "Cargando…" : "↻"}</button>
         </div>
       </div>
@@ -78,7 +90,7 @@ export function HistorialVentas({ socios, activo }: { socios: Array<{ id: string
         <div><small>Fletes</small><b>{money(resumen.flete)}</b></div>
       </div>
       {error && <p className="cfgAviso">{error}</p>}
-      {!cargando && visibles.length === 0 && <p className="muted">No hay ventas en esas fechas{socio ? " para este socio" : ""}.</p>}
+      {!cargando && visibles.length === 0 && <p className="muted">No hay ventas en esas fechas{socio ? " para este socio" : ""}{cliente ? ` de un cliente con «${cliente}»` : ""}.</p>}
       {visibles.length > 0 && (
         <div style={{ overflowX: "auto" }}>
           <table className="histVentas__tabla">
