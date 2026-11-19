@@ -107,7 +107,7 @@ export function HistorialVentas({ socios, activo }: { socios: Array<{ id: string
                 return (
                   <Fragment key={v.id}>
                     <tr className={`${anulada ? "is-anulada" : ""} ${open ? "is-open" : ""}`} onClick={() => setAbierta(open ? null : v.id)}>
-                      <td>{new Date(v.created_at).toLocaleDateString("es-EC")}</td>
+                      <td>{new Date(v.created_at).toLocaleDateString("es-EC")}<span className="histVentas__clienteMovil">{v.customer_name ?? "Sin cliente"}</span></td>
                       <td><span className="histVentas__chip">{v.accionista_name}</span></td>
                       <td><strong>{v.sale_number.replace(/^VEN-\d{8}/, "VEN-")}</strong>{v.order_number ? <small className="muted"> · {v.order_number.replace(/^PED-\d{8}/, "PED-")}</small> : null}</td>
                       <td>{v.customer_name ?? "Sin cliente"}</td>
