@@ -6,6 +6,17 @@ import { lanAddresses } from "./utils/red.js";
 import { iniciarProgramadorResumenDiario } from "./services/resumen-diario.js";
 
 
+// Auditoría 2026-11-19: el vigilante levantó el ERP ~50 veces en dos semanas sin dejar el motivo. Una promesa
+// rechazada sin catch tumba Node (v15+): se anota con hora y el servidor sigue. Un error no atrapado sí deja el
+// proceso inestable: se anota y se sale para que el vigilante lo levante limpio.
+process.on("unhandledRejection", (motivo) => {
+  console.error(`[${new Date().toISOString()}] Promesa rechazada sin manejar (el servidor sigue):`, motivo);
+});
+process.on("uncaughtException", (err) => {
+  console.error(`[${new Date().toISOString()}] Error no atrapado, el servidor se reinicia:`, err);
+  process.exit(1);
+});
+
 // Escucha en 0.0.0.0 para aceptar conexiones de otras PCs de la red local.
 app.listen(env.port, "0.0.0.0", () => {
   console.log(`\nBASCULA ERP escuchando en el puerto ${env.port}`);

@@ -803,8 +803,8 @@ export function CajaHoja({
                 )}
                 {mixto && (
                   <select value={medio} onChange={(e) => setMedio(e.target.value as "EFECTIVO" | "BANCO")} aria-label="Efectivo o banco">
-                    <option value="EFECTIVO">💵</option>
-                    <option value="BANCO">🏦</option>
+                    <option value="EFECTIVO">💵 Efectivo</option>
+                    <option value="BANCO">🏦 Banco</option>
                   </select>
                 )}
                 <button type="button" className="cjh-guardar" onClick={() => { guardar(); }}>Guardar ↵</button>
@@ -869,7 +869,7 @@ export function CajaHoja({
               <td colSpan={2}>TOTALES DE LA SESIÓN</td>
               <td className="num cjh-entra">{money(totEntradas)}</td>
               <td className="num cjh-sale">{money(totSalidas)}</td>
-              <td className="num"><b>{money(saldoFinal)}</b></td>
+              <td className="num cjh-saldo"><b>{money(saldoFinal)}</b></td>
               <td />
             </tr>
           </tfoot>
