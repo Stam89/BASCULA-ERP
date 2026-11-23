@@ -51,7 +51,7 @@ const SQL_MATRIZ = `
    WHERE ap.accionista_id = $1 AND ap.reference_type = 'gasto_credito' AND ap.status <> 'CANCELLED'
      AND NOT (ap.categoria = 'MANTENIMIENTO_EQUIPO' AND EXISTS (SELECT 1 FROM equipment_maintenance em WHERE em.payable_id = ap.id))
   UNION ALL
-  SELECT 'MANTENIMIENTO', em.id, em.created_at, 'Mantenimiento' || COALESCE(' · ' || em.maintenance_type, ''),
+  SELECT 'MANTENIMIENTO', em.id, COALESCE((em.fecha_trabajo + time '12:00') AT TIME ZONE 'America/Guayaquil', em.created_at), 'Mantenimiento' || COALESCE(' · ' || em.maintenance_type, ''),
          em.section, COALESCE(e.name, em.maquina), em.area,
          concat_ws(' · ', NULLIF(em.description, ''), NULLIF(em.reported_failure, ''), NULLIF(em.work_done, '')),
          em.provider, em.invoice_number, COALESCE(em.amount, 0)::float, 'Mantenimiento de planta'

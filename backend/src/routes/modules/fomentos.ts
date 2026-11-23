@@ -18,6 +18,7 @@ import { cerrarCosechaFomento, reabrirCosechaFomento } from "../../services/fome
 import { hoyEc } from "../../utils/fechas.js";
 import { cruzarGastoPorSocio, validarSocioDelGasto } from "../../services/gasto-por-socio.js";
 import { registrarCobroEnBanco, registrarPagoConBanco } from "../../services/pagado-con-banco.js";
+import { dinero, notificar } from "../../services/notificaciones.js";
 
 export const fomentosRouter = Router();
 
@@ -108,7 +109,7 @@ const pagoSchema = z.object({
   pagado_con_banco: z.boolean().optional()
 });
 
-const SELECT_FOMENTO = `
+export const SELECT_FOMENTO = `
   SELECT
     f.*,
     ROUND(f.cuadras * 16, 2)  AS paradas,
@@ -154,7 +155,7 @@ fomentosRouter.get("/", asyncRoute(async (req, res) => {
 }));
 
 /** Accionistas que el usuario puede ver (el administrador, todos los activos). */
-async function accionistasVisibles(req: Request): Promise<string[]> {
+export async function accionistasVisibles(req: Request): Promise<string[]> {
   const r = req as AuthenticatedRequest;
   if (r.user?.role_name === "ADMINISTRADOR") {
     return (await pool.query("SELECT id FROM accionistas WHERE is_active = true")).rows.map((x) => x.id as string);
@@ -168,7 +169,8 @@ async function esMatriz(db: { query: PoolClient["query"] }, accionistaId: string
 
 // 💸 Caja › Fomentos (pedido del dueño 2026-10-22): la caja de la MATRIZ también entrega fomentos de los SOCIOS (la plata
 // sale de la caja de la Matriz, la entrega queda en el fomento del socio y el socio se la debe a la Matriz). Por eso, si el
-// accionista activo es la Matriz, la lista trae los fomentos ACTIVOS suyos y los de los socios que el usuario puede ver.
+// accionista activo es la Matriz, la lista trae los fomentos ACTIVOS suyos y los de los socios que el usuario puede ver
+// (y las cuentas APROBADAS en cero, que esperan su primera entrega).
 fomentosRouter.get("/para-caja", asyncRoute(async (req, res) => {
   const accionistaId = getAccionistaId(req);
   const ids = (await esMatriz(pool, accionistaId))
@@ -176,7 +178,7 @@ fomentosRouter.get("/para-caja", asyncRoute(async (req, res) => {
     : [accionistaId];
   const result = await pool.query(
     `SELECT x.*, a.name AS accionista_nombre, (x.accionista_id <> $2) AS es_de_otro_socio
-       FROM (${SELECT_FOMENTO} WHERE f.accionista_id = ANY($1::uuid[]) AND f.status = 'ACTIVOS') x
+       FROM (${SELECT_FOMENTO} WHERE f.accionista_id = ANY($1::uuid[]) AND f.status IN ('ACTIVOS', 'APROBADOS') AND f.liquidado_at IS NULL) x
        JOIN accionistas a ON a.id = x.accionista_id
       ORDER BY (x.accionista_id <> $2), x.farmer_name`,
     [ids, accionistaId]
@@ -1095,6 +1097,9 @@ fomentosRouter.post("/:id/entregas", asyncRoute(async (req, res) => {
        data.es_saldo_anterior ? (data.meses_interes_fijo ?? null) : null]
     );
 
+    // Cuenta aprobada en cero: con su primera entrega ya está activa.
+    await client.query("UPDATE fomentos SET status = 'ACTIVOS' WHERE id = $1 AND status = 'APROBADOS'", [fomentoId]);
+
     // Un saldo ARRASTRADO no es un desembolso nuevo de caja: no genera egreso.
     if (data.cash_register_id && !data.es_saldo_anterior) {
       const agricultor = fomentoBloqueado.rows[0]?.farmer_name ?? "agricultor";
@@ -1181,15 +1186,25 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
   const data = pagoSchema.parse(req.body);
 
   const result = await inTransaction(async (client) => {
-    const bloqueado = await client.query(
-      "SELECT id FROM fomentos WHERE id = $1 AND accionista_id = $2 FOR UPDATE",
-      [fomentoId, accionistaId]
+    const bloqueado = await client.query<{ id: string; farmer_name: string; accionista_id: string | null }>(
+      "SELECT id, farmer_name, accionista_id FROM fomentos WHERE id = $1 FOR UPDATE",
+      [fomentoId]
     );
     if (!bloqueado.rowCount) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+    // 🌾 Devolución de un fomento de OTRO socio (2026-11-23): solo la recibe la caja de la Matriz. La plata entra a su caja,
+    // la cuenta del agricultor baja en el fomento del socio y la Matriz se la debe (cobro_por_socio), como un cobro suyo.
+    const duenoId = bloqueado.rows[0].accionista_id;
+    const socio = duenoId !== accionistaId
+      ? await (async () => {
+        if (!duenoId || !data.cash_register_id || !(await esMatriz(client, accionistaId))) throw new ApiError(404, "Fomento no encontrado o no pertenece al accionista activo");
+        if (!(await accionistasVisibles(req)).includes(duenoId)) throw new ApiError(403, "No tienes acceso a los fomentos de ese socio.");
+        return validarSocioDelGasto(client, accionistaId, duenoId);
+      })()
+      : null;
 
     // Un pago manual solo puede cubrir la deuda vigente. Impide saldos negativos
     // y conserva el excedente de una liquidación fuera de este fomento.
-    const cuenta = await client.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, accionistaId]);
+    const cuenta = await client.query(`${SELECT_FOMENTO} WHERE f.id = $1 AND f.accionista_id = $2`, [fomentoId, duenoId]);
     const deuda = Math.max(0, Math.round(Number(cuenta.rows[0]?.deuda_total ?? 0) * 100) / 100);
     if (deuda < 0.01) throw new ApiError(409, "Este fomento ya está saldado.");
     if (data.valor > deuda + 0.005) {
@@ -1211,18 +1226,35 @@ fomentosRouter.post("/:id/pagos", asyncRoute(async (req, res) => {
 
     // Si hay caja, registrar el ingreso
     if (data.cash_register_id) {
-      const fomento = await client.query(
-        "SELECT farmer_name FROM fomentos WHERE id = $1",
-        [fomentoId]
-      );
-      const descripcion = `Pago de fomento de ${fomento.rows[0]?.farmer_name ?? "agricultor"}${transferencia ? " · Transferencia" : ""}`;
+      const agricultor = bloqueado.rows[0].farmer_name ?? "agricultor";
+      const descripcion = `Pago de fomento de ${agricultor}${socio ? ` para ${socio.name} (se lo debes)` : ""}${transferencia ? " · Transferencia" : ""}`;
       const ingreso = await client.query<{ id: string }>(
         `INSERT INTO cash_movements
          (cash_register_id, movement, category, reference_type, reference_id, amount, description, medio)
-         VALUES ($1, 'INCOME', 'PAGO_FOMENTO', 'fomento_pagos', $2, $3, $4, $5) RETURNING id`,
+         VALUES ($1, 'INCOME', $6, 'fomento_pagos', $2, $3, $4, $5) RETURNING id`,
         [data.cash_register_id, pago.rows[0].id, data.valor, descripcion,
-         medioParaCaja(tipoCaja ?? "EFECTIVO", transferencia ? "BANCO" : data.medio_pago)]
+         medioParaCaja(tipoCaja ?? "EFECTIVO", transferencia ? "BANCO" : data.medio_pago), socio ? "COBRO_POR_SOCIO" : "PAGO_FOMENTO"]
       );
+      if (socio) {
+        const yo = (await client.query("SELECT name FROM accionistas WHERE id = $1", [accionistaId])).rows[0]?.name ?? "la Matriz";
+        const movId = ingreso.rows[0].id;
+        await client.query(
+          `INSERT INTO accounts_receivable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [socio.id, movId, `${yo} recibió la devolución del fomento de ${agricultor}`, data.valor]
+        );
+        await client.query(
+          `INSERT INTO accounts_payable (accionista_id, reference_type, reference_id, description, amount, balance, status)
+           VALUES ($1, 'cobro_por_socio', $2, $3, $4, $4, 'CONFIRMED')`,
+          [accionistaId, movId, `Recibiste la devolución del fomento de ${agricultor}, de ${socio.name}`, data.valor]
+        );
+        await notificar(client, {
+          accionistaId: socio.id, tipo: "COBRO",
+          titulo: `${agricultor} devolvió fomento`,
+          mensaje: `${agricultor} devolvió ${dinero(data.valor)} en la caja de ${yo}: bajó de su fomento contigo y ${yo} te lo debe (Por Cobrar).`,
+          monto: data.valor, referenciaTipo: "cash_movements", referenciaId: movId
+        });
+      }
       if (transferencia && tipoCaja === "EFECTIVO") {
         await registrarCobroEnBanco(client, {
           cajaId: data.cash_register_id, ingresoId: ingreso.rows[0].id, monto: data.valor, concepto: descripcion,

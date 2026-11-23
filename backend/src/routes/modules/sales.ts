@@ -119,6 +119,8 @@ const retailSaleInputSchema = z.object({
   // 🌾 A cuenta de la persona (sin caja): AGRICULTOR = se descuenta de lo que se le debe (o en su próxima liquidación);
   // FOMENTO = se suma a su fomento. Siempre en las cuentas del dueño del arroz.
   a_cuenta: z.enum(["AGRICULTOR", "FOMENTO"]).optional(),
+  // Caja del día: el arroz ya se entregó. Si al dueño no le alcanza, queda en negativo (como «Decidir después»).
+  permitir_negativo: z.boolean().optional(),
   product_name: z.string().trim().min(1).max(180),
   buyer: z.object({
     full_name: z.string().trim().min(2).max(180),
@@ -166,7 +168,7 @@ async function ventaDetalleACuenta(client: PoolClient, req: AuthenticatedRequest
   } else {
     fomento = (await client.query(
       `SELECT id, farmer_name FROM fomentos
-        WHERE accionista_id = $1 AND status = 'ACTIVOS' AND liquidado_at IS NULL
+        WHERE accionista_id = $1 AND status IN ('ACTIVOS', 'APROBADOS') AND liquidado_at IS NULL
           AND (($2::uuid IS NOT NULL AND farmer_id = $2) OR upper(trim(farmer_name)) = upper(trim($3)))
         ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
       [duenoId, body.buyer.farmer_id ?? null, cliente.full_name]
@@ -179,7 +181,7 @@ async function ventaDetalleACuenta(client: PoolClient, req: AuthenticatedRequest
     sack_weight_lb: 100,
     description: `Venta detalle ${nombres} · ${cliente.full_name} (a ${body.a_cuenta === "AGRICULTOR" ? "su cuenta de agricultor" : "su fomento"})`,
     items: itemsDe(lineas)
-  });
+  }, { permitirNegativo: body.permitir_negativo });
   const total = round2(Number(venta.total_amount));
   const concepto = `Arroz ${nombres} (venta ${venta.sale_number})`;
   if (farmerId) {
@@ -189,9 +191,10 @@ async function ventaDetalleACuenta(client: PoolClient, req: AuthenticatedRequest
     destino = { tipo: "AGRICULTOR", aplicado, anticipo: round2(total - aplicado) };
   } else {
     await client.query(
-      "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, CURRENT_DATE, $2, $3)",
-      [fomento!.id, total, concepto]
+      "INSERT INTO fomento_entregas (fomento_id, fecha, valor, concepto) VALUES ($1, COALESCE($4::date, CURRENT_DATE), $2, $3)",
+      [fomento!.id, total, concepto, body.fecha ?? null]
     );
+    await client.query("UPDATE fomentos SET status = 'ACTIVOS' WHERE id = $1 AND status = 'APROBADOS'", [fomento!.id]);
     destino = { tipo: "FOMENTO", fomento: fomento!.farmer_name };
   }
   if (dueno) {
@@ -368,6 +371,18 @@ salesRouter.post("/retail/por-asignar/asignar", asyncRoute(async (req, res) => {
         }
         throw e;
       }
+      // La venta y su salida de inventario son del día en que se entregó, no del día en que se decidió de quién era
+      // (2026-11-23). Si ese mes del dueño ya está cerrado, quedan hoy.
+      await client.query(
+        `WITH abierto AS (
+           SELECT 1 WHERE NOT EXISTS (
+             SELECT 1 FROM cierres_mes c WHERE c.accionista_id = $3 AND c.anulado_at IS NULL
+                AND make_date(c.anio, c.mes, 1) = date_trunc('month', $2::timestamptz AT TIME ZONE 'America/Guayaquil')::date)),
+         venta AS (UPDATE sales SET created_at = $2 WHERE id = $1 AND created_at = now() AND EXISTS (SELECT 1 FROM abierto))
+         UPDATE inventory_movements SET created_at = $2
+          WHERE reference_type = 'sales' AND reference_id = $1 AND created_at = now() AND EXISTS (SELECT 1 FROM abierto)`,
+        [venta.id, v.created_at, dueno.id]
+      );
       const monto = esFiada ? round2(Number(v.pagado)) : round2(Number(v.total));
       if (esFiada) {
         fiado = round2(fiado + Number(v.total) - monto);

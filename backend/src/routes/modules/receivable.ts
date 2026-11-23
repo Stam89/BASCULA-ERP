@@ -18,9 +18,9 @@ import { registrarPrestamoPersona } from "../../services/prestamo-persona.js";
 export const receivableRouter = Router();
 
 // GET cuentas por cobrar pendientes
-receivableRouter.get("/", asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const result = await pool.query(
+/** Por Cobrar vigentes de un accionista, con el nombre de quien debe (también las usa la Caja del día). */
+export async function listarPorCobrar(db: { query: typeof pool.query }, accionistaId: string | null | undefined) {
+  const result = await db.query(
     `SELECT ar.*,
             -- Nombre de QUIEN DEBE, resuelto según el origen de la cuenta:
             --  · venta            -> el cliente (customers)
@@ -79,7 +79,11 @@ receivableRouter.get("/", asyncRoute(async (req, res) => {
      ORDER BY ar.created_at DESC`,
     [accionistaId]
   );
-  res.json(result.rows);
+  return result.rows;
+}
+
+receivableRouter.get("/", asyncRoute(async (req, res) => {
+  res.json(await listarPorCobrar(pool, (req as AuthenticatedRequest).accionistaId));
 }));
 
 // ── CRUCE DE CUENTAS ENTRE ACCIONISTAS ───────────────────────────────────────

@@ -7,6 +7,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { errorHandler, notFound } from "./http/error-handler.js";
 import { medioPagoMiddleware } from "./http/medio-pago.js";
+import { cajaContextoMiddleware } from "./http/caja-contexto.js";
 import { routes } from "./routes/index.js";
 import { basculaSyncRouter } from "./routes/modules/bascula-sync.js";
 import { sesionVigente } from "./auth/require-auth.js";
@@ -42,6 +43,8 @@ app.use(cors(env.corsOrigins.length > 0
 app.use(express.json({ limit: "2mb" }));
 // Efectivo o banco de la operación (cobros, pagos, ventas): ver http/medio-pago.ts.
 app.use(medioPagoMiddleware);
+// Renglón de la Caja del día que acompaña a un guardado: ver http/caja-contexto.ts.
+app.use(cajaContextoMiddleware);
 app.use(morgan("dev"));
 
 // Asegurar charset UTF-8 solo en respuestas de la API (no en archivos estáticos)

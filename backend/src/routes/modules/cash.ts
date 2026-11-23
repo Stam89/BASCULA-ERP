@@ -24,6 +24,7 @@ import { anularPagoConBanco, registrarPagoConBanco, REF_PAGADO_CON_BANCO } from 
 import { revertirMovimientoDePrestamo } from "./prestamos.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { anularDescuentoPrestamo, consultarPrestamo, descontarPrestamo, exigirFondoSinDescuentos } from "../../services/prestamo-selectora.js";
+import { fechaEc } from "../../utils/fechas.js";
 import type { PoolClient } from "pg";
 
 export const cashRouter = Router();
@@ -670,31 +671,31 @@ cashRouter.get("/registers/:id/creditos", asyncRoute(async (req, res) => {
 
 // Anular un egreso A CRÉDITO (solo admin): se cancela su Cuenta por Pagar. Si ya
 // tiene abonos, primero hay que anular esos pagos en Caja.
+export async function anularGastoACredito(client: PoolClient, o: { id: string; accionistaId: string | null | undefined; reason: string }) {
+  const ap = await client.query(
+    `SELECT * FROM accounts_payable WHERE id = $1 AND accionista_id = $2 AND reference_type = 'gasto_credito' FOR UPDATE`,
+    [o.id, o.accionistaId ?? null]
+  );
+  if (!ap.rows[0]) throw new ApiError(404, "Egreso a crédito no encontrado para el accionista activo");
+  const a = ap.rows[0];
+  if (a.status === "CANCELLED") throw new ApiError(409, "Ese egreso a crédito ya está anulado.");
+  if (Number(a.balance) < Number(a.amount) - 0.005) {
+    throw new ApiError(409, `Ya tiene abonos por $${(Number(a.amount) - Number(a.balance)).toFixed(2)}: anula primero esos pagos en Caja.`);
+  }
+  const upd = await client.query(
+    `UPDATE accounts_payable SET status = 'CANCELLED', balance = 0, description = description || $2 WHERE id = $1 RETURNING *`,
+    [a.id, ` · ANULADO: ${o.reason}`]
+  );
+  // Si era una compra de repuestos a crédito, lo que entró al stock se retira.
+  const repuestosRevertidos = await reversarEntradaRepuestosDeCredito(client, a.id);
+  // Y lo cargado a la hoja de vida de una máquina (uso inmediato, materiales) sale.
+  await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE payable_id = $1", [a.id]);
+  return { ...upd.rows[0], repuestos_revertidos: repuestosRevertidos };
+}
 cashRouter.post("/creditos/:id/anular", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
   const body = z.object({ reason: z.string().trim().min(3) }).parse(req.body);
   const accionistaId = (req as AuthenticatedRequest).accionistaId;
-  const out = await inTransaction(async (client) => {
-    const ap = await client.query(
-      `SELECT * FROM accounts_payable WHERE id = $1 AND accionista_id = $2 AND reference_type = 'gasto_credito' FOR UPDATE`,
-      [req.params.id, accionistaId]
-    );
-    if (!ap.rows[0]) throw new ApiError(404, "Egreso a crédito no encontrado para el accionista activo");
-    const a = ap.rows[0];
-    if (a.status === "CANCELLED") throw new ApiError(409, "Ese egreso a crédito ya está anulado.");
-    if (Number(a.balance) < Number(a.amount) - 0.005) {
-      throw new ApiError(409, `Ya tiene abonos por $${(Number(a.amount) - Number(a.balance)).toFixed(2)}: anula primero esos pagos en Caja.`);
-    }
-    const upd = await client.query(
-      `UPDATE accounts_payable SET status = 'CANCELLED', balance = 0, description = description || $2 WHERE id = $1 RETURNING *`,
-      [a.id, ` · ANULADO: ${body.reason}`]
-    );
-    // Si era una compra de repuestos a crédito, lo que entró al stock se retira.
-    const repuestosRevertidos = await reversarEntradaRepuestosDeCredito(client, a.id);
-    // Y lo cargado a la hoja de vida de una máquina (uso inmediato, materiales) sale.
-    await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE payable_id = $1", [a.id]);
-    return { ...upd.rows[0], repuestos_revertidos: repuestosRevertidos };
-  });
-  res.json(out);
+  res.json(await inTransaction((client) => anularGastoACredito(client, { id: String(req.params.id), accionistaId, reason: body.reason })));
 }));
 
 // ── Anular un movimiento (contra-asiento, solo administradores) ──────────────
@@ -769,264 +770,315 @@ async function reversarEntradaSacosDeCaja(client: PoolClient, cashMovementId: st
   return count;
 }
 
-cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
-  await ensureCashColumns();
-  const body = z.object({ reason: z.string().min(3) }).parse(req.body);
-  const user = (req as AuthenticatedRequest).user;
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+// Anular el movimiento de una entrega o devolución de fomento la quita de la cuenta del agricultor. Si a ese fomento ya se
+// le hizo la cuenta, no se deja: su interés ya está cerrado.
+export async function quitarDeFomento(client: PoolClient, m: { reference_type: string; reference_id: string }): Promise<void> {
+  const tabla = m.reference_type === "fomento_entregas" ? "fomento_entregas" : "fomento_pagos";
+  const fila = (await client.query(
+    `SELECT x.id, f.id AS fomento_id, f.farmer_name, f.status, f.liquidado_at FROM ${tabla} x JOIN fomentos f ON f.id = x.fomento_id WHERE x.id = $1 FOR UPDATE OF f`,
+    [m.reference_id]
+  )).rows[0];
+  if (!fila) return;
+  if (fila.liquidado_at || fila.status === "CERRADO_LIQUIDACION") {
+    throw new ApiError(409, `A ${fila.farmer_name} ya se le hizo la cuenta de ese fomento: reábrela primero en Fomentos para anular este movimiento.`);
+  }
+  if (tabla === "fomento_entregas") {
+    const t = (await client.query(
+      `SELECT COALESCE((SELECT sum(valor) FROM fomento_entregas WHERE fomento_id = $1 AND id <> $2), 0)::float AS quedan,
+              COALESCE((SELECT sum(valor) FROM fomento_pagos WHERE fomento_id = $1), 0)::float AS pagado`,
+      [fila.fomento_id, fila.id]
+    )).rows[0];
+    if (t.pagado > 0.005 && t.quedan < t.pagado - 0.005) throw new ApiError(409, `No se puede anular: ${fila.farmer_name} ya devolvió más de lo que quedaría entregado.`);
+  }
+  await client.query(`DELETE FROM ${tabla} WHERE id = $1`, [fila.id]);
+}
 
-  const result = await inTransaction(async (client) => {
-    const m = await getMovimientoDelAccionistaForUpdate(client, req.params.id as string, accionistaId);
-    if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
-    if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
-    if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta línea es la del banco: anula el movimiento al que acompaña y esta se anula sola.");
-    if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
-    // El pago de una COMPRA a contado no se anula suelto (pedido del dueño 2026-11-12): la compra quedaba «pagada» sin
-    // dinero y sin deuda con el proveedor. Se anula la compra, o se pasa a crédito y queda en Por Pagar.
-    if (m.reference_type === "purchase" && m.category === "COMPRA_GENERAL") {
-      throw new ApiError(409, "Este es el pago de una compra: anúlala en Compras o, si fue a crédito, usa «Pasar a crédito» en esa compra (queda en Por Pagar).");
-    }
-    // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
-    await revertirMovimientoDePrestamo(client, m);
+/**
+ * Anula un movimiento de caja y deshace lo que hizo (cuenta, venta, anticipo, fomento, hoja de vida…). Va DENTRO de una
+ * transacción. `mismoDia`: el contra-asiento queda en el día del original (Caja del día), no en el de hoy.
+ */
+export async function anularMovimientoDeCaja(
+  client: PoolClient,
+  o: { id: string; accionistaId: string | null | undefined; user: AuthenticatedRequest["user"] | undefined; reason: string; mismoDia?: boolean }
+) {
+  const { user, accionistaId } = o;
+  const body = { reason: o.reason };
+  const m = await getMovimientoDelAccionistaForUpdate(client, o.id, accionistaId ?? undefined);
+  if (m.reversal_of) throw new ApiError(400, "No se puede anular un contra-asiento.");
+  if (m.reversed_at) throw new ApiError(400, "Este movimiento ya fue anulado.");
+  if (m.reference_type === REF_PAGADO_CON_BANCO) throw new ApiError(409, "Esta línea es la del banco: anula el movimiento al que acompaña y esta se anula sola.");
+  if (m.reference_type === "arqueo") throw new ApiError(409, "El faltante/sobrante del arqueo es parte del cuadre o del cierre de la caja: no se anula. Si se contó mal, haz otro cuadre del día.");
+  // El pago de una COMPRA a contado no se anula suelto (pedido del dueño 2026-11-12): la compra quedaba «pagada» sin
+  // dinero y sin deuda con el proveedor. Se anula la compra, o se pasa a crédito y queda en Por Pagar.
+  if (m.reference_type === "purchase" && m.category === "COMPRA_GENERAL") {
+    throw new ApiError(409, "Este es el pago de una compra: anúlala en Compras o, si fue a crédito, usa «Pasar a crédito» en esa compra (queda en Por Pagar).");
+  }
+  // Préstamos del banco: anular el pago de una cuota la deja pendiente; la entrada del dinero se anula desde el préstamo.
+  await revertirMovimientoDePrestamo(client, m);
 
-    // El contra-asiento va a la caja donde está el dinero HOY: si la caja del movimiento ya se cerró, a la abierta
-    // del mismo accionista (antes caía en la caja cerrada y cambiaba su saldo después del cierre).
-    const cajaMov = (await client.query("SELECT status FROM cash_registers WHERE id = $1", [m.cash_register_id])).rows[0];
-    let cajaDestino = m.cash_register_id;
-    if (cajaMov?.status !== "OPEN") {
-      const abierta = (await client.query(
-        "SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [accionistaId ?? null]
-      )).rows[0];
-      if (!abierta) throw new ApiError(409, "La caja de ese movimiento ya se cerró: abre la caja de hoy para registrar la anulación ahí.");
-      cajaDestino = abierta.id;
-    }
+  // El contra-asiento va a la caja donde está el dinero HOY: si la caja del movimiento ya se cerró, a la abierta
+  // del mismo accionista (antes caía en la caja cerrada y cambiaba su saldo después del cierre).
+  const cajaMov = (await client.query("SELECT status FROM cash_registers WHERE id = $1", [m.cash_register_id])).rows[0];
+  let cajaDestino = m.cash_register_id;
+  if (cajaMov?.status !== "OPEN") {
+    const abierta = (await client.query(
+      "SELECT id FROM cash_registers WHERE accionista_id = $1 AND status = 'OPEN' ORDER BY opened_at DESC LIMIT 1", [accionistaId ?? null]
+    )).rows[0];
+    if (!abierta) throw new ApiError(409, "La caja de ese movimiento ya se cerró: abre la caja de hoy para registrar la anulación ahí.");
+    cajaDestino = abierta.id;
+  }
 
-    // Movimiento opuesto que neutraliza el efecto en el saldo.
-    const opposite = m.movement === "INCOME" ? "EXPENSE" : "INCOME";
-    const reversal = await client.query(
-      `INSERT INTO cash_movements
-         (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
-       VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)
-       RETURNING *`,
-      [cajaDestino, opposite, m.category, m.amount,
-       `Anulación: ${body.reason} (mov. ${String(m.id).slice(0, 8)}${cajaDestino !== m.cash_register_id ? ", de una caja ya cerrada" : ""})`, m.id, user?.id ?? null, m.medio ?? null]
-    );
+  // Movimiento opuesto que neutraliza el efecto en el saldo.
+  const opposite = m.movement === "INCOME" ? "EXPENSE" : "INCOME";
+  const reversal = await client.query(
+    `INSERT INTO cash_movements
+       (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+     VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)
+     RETURNING *`,
+    [cajaDestino, opposite, m.category, m.amount,
+     `Anulación: ${body.reason} (mov. ${String(m.id).slice(0, 8)}${cajaDestino !== m.cash_register_id ? ", de una caja ya cerrada" : ""})`, m.id, user?.id ?? null, m.medio ?? null]
+  );
 
-    await client.query(
-      `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
-      [m.id, user?.id ?? null, body.reason]
-    );
+  await client.query(
+    `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
+    [m.id, user?.id ?? null, body.reason]
+  );
 
-    // Traspaso efectivo↔banco: sus dos líneas se anulan juntas.
-    if (m.reference_type === "traspaso_interno") {
-      const par = (await client.query(
-        `SELECT * FROM cash_movements WHERE reference_type = 'traspaso_interno' AND reversed_at IS NULL AND reversal_of IS NULL
-            AND id <> $1 AND (id = $2 OR reference_id = $1) FOR UPDATE`,
-        [m.id, m.reference_id]
-      )).rows[0];
-      if (par) {
-        await client.query(
-          `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
-           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
-          [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
-           `Anulación: ${body.reason} (otra línea del traspaso)`, par.id, user?.id ?? null, par.medio]
-        );
-        await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
-      }
-    }
-
-    // 💸 Préstamo a una persona: se anula su Por Cobrar (si no tiene abonos) y lo que hizo entre socios.
-    if (m.reference_type === REF_PRESTAMO_PERSONA && m.reference_id) {
-      await anularPrestamoPersona(client, m.id, String(m.reference_id));
-    }
-    // 💳 Gasto que pagó OTRO socio (su tarjeta o su dinero): se anula la otra línea y vuelve lo cruzado.
-    if (m.reference_type === "pagado_por_socio" && m.reference_id) {
-      const par = (await client.query(
-        "SELECT * FROM cash_movements WHERE id = $1 AND reversed_at IS NULL AND reversal_of IS NULL FOR UPDATE", [m.reference_id]
-      )).rows[0];
-      if (par) {
-        await client.query(
-          `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
-           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
-          [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
-           `Anulación: ${body.reason} (lo que pagó el socio)`, par.id, user?.id ?? null, par.medio]
-        );
-        await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
-      }
-      await deshacerCrucesYDeuda(client, m.movement === "EXPENSE" ? m.id : String(m.reference_id));
-    }
-    // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
-    if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
-    // Venta detalle de arroz de OTRO socio cobrada en esta caja: la venta se anula y el arroz vuelve a su dueño.
-    if (m.category === "COBRO_POR_SOCIO" && m.reference_type === "sales" && m.reference_id) {
-      await client.query("DELETE FROM inventory_movements WHERE reference_type = 'sales' AND reference_id = $1 AND movement = 'OUT'", [m.reference_id]);
-      await client.query("UPDATE sales SET sale_status = 'CANCELLED' WHERE id = $1", [m.reference_id]);
-    }
-    // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
-    if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
-    // Venta detalle POR ASIGNAR (aún sin dueño ni inventario descontado): solo queda anulada.
-    if (m.reference_type === "venta_detalle_por_asignar" && m.reference_id) {
-      await client.query("UPDATE ventas_detalle_por_asignar SET anulado_at = now() WHERE id = $1 AND asignado_at IS NULL", [m.reference_id]);
-    }
-    // 🌾 Anticipo al agricultor (Caja › Arroz en cáscara): se cancela el anticipo y, si al entregarlo pagó lo que se le
-    // debía, esa deuda (y el neto de su liquidación) vuelve. Si ya se descontó en una liquidación, no se deja (2026-10-28:
-    // antes el dinero volvía a la caja pero el anticipo seguía pendiente y se le descontaba igual).
-    if (m.reference_type === "farmer_advances" && m.reference_id) {
-      const adv = (await client.query("SELECT id, status FROM farmer_advances WHERE id = $1 FOR UPDATE", [m.reference_id])).rows[0];
-      if (adv && adv.status !== "CANCELLED") {
-        const apps = (await client.query(
-          "SELECT id, liquidation_id, payable_id, amount_applied::float AS monto FROM advance_applications WHERE advance_id = $1", [adv.id]
-        )).rows as Array<{ id: string; liquidation_id: string | null; payable_id: string | null; monto: number }>;
-        if (apps.some((a) => !a.payable_id)) {
-          throw new ApiError(409, "Este anticipo ya se descontó en una liquidación: anula primero esa liquidación.");
-        }
-        for (const a of apps) {
-          await client.query(
-            `UPDATE accounts_payable SET balance = LEAST(amount, balance + $2),
-                    status = CASE WHEN LEAST(amount, balance + $2) >= amount - 0.005 THEN 'CONFIRMED'::document_status ELSE 'PARTIAL'::document_status END
-              WHERE id = $1`,
-            [a.payable_id, a.monto]
-          );
-          if (a.liquidation_id) {
-            await client.query(
-              "UPDATE liquidations SET advances_discount = GREATEST(0, advances_discount - $2), net_amount = net_amount + $2 WHERE id = $1",
-              [a.liquidation_id, a.monto]
-            );
-          }
-          await client.query("DELETE FROM advance_applications WHERE id = $1", [a.id]);
-        }
-        await client.query("UPDATE farmer_advances SET status = 'CANCELLED', balance = 0 WHERE id = $1", [adv.id]);
-      }
-    }
-    // Dinero entre socios (sale de una caja y entra a la otra): se anulan las dos líneas, lo descontado y el préstamo.
-    if (m.reference_type === "dinero_entre_socios" && m.reference_id) {
-      await anularDineroEntreSocios(client, { id: m.reference_id, motivo: body.reason, userId: user?.id ?? null });
-    }
-    // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
-    const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
-    // 🧾 Cobro de una VENTA (pedido despachado y cobrado, o venta de contado) anulado (pedido del dueño 2026-11-12: «anulé
-    // el cobro de una venta y no volvió a Por Cobrar»): el ingreso apunta a la venta, no a la cuenta. La venta sigue
-    // hecha, así que el cliente vuelve a deber lo anulado: su cuenta de la venta sube; si fue de contado sin cuenta y el
-    // cliente tiene nombre, nace su Por Cobrar. (Consumidor final: no hay a quién cobrarle, queda solo la anulación.)
-    let ventaVuelveADeber: { cuenta: string; monto: number; nueva: boolean } | null = null;
-    if (!cuentaRevertida && m.movement === "INCOME" && m.category === "VENTA" && m.reference_type === "sales" && m.reference_id) {
-      const monto = round2(Number(m.amount));
-      const venta = (await client.query(
-        `SELECT s.id, s.sale_number, s.customer_id, s.accionista_id, c.full_name FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
-          WHERE s.id = $1 FOR UPDATE OF s`, [m.reference_id]
-      )).rows[0];
-      if (venta) {
-        const ar = (await client.query(
-          `SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable
-            WHERE sale_id = $1 AND status <> 'CANCELLED' ORDER BY created_at LIMIT 1 FOR UPDATE`, [venta.id]
-        )).rows[0];
-        if (ar) {
-          const nuevo = round2(Math.min(ar.amount, ar.balance + monto));
-          await client.query(
-            `UPDATE accounts_receivable SET balance = $2, status = $3, description = description || $4 WHERE id = $1`,
-            [ar.id, nuevo, nuevo + 0.005 >= ar.amount ? "CONFIRMED" : nuevo < 0.01 ? "PAID" : "PARTIAL",
-             ` · cobro de ${dinero(monto)} anulado: vuelve a deber (${body.reason})`]
-          );
-          ventaVuelveADeber = { cuenta: ar.id, monto: round2(nuevo - ar.balance), nueva: false };
-        } else if (venta.customer_id && !/consumidor\s*final/i.test(String(venta.full_name ?? ""))) {
-          const nueva = (await client.query(
-            `INSERT INTO accounts_receivable (customer_id, sale_id, reference_type, reference_id, description, amount, balance, status, accionista_id)
-             VALUES ($1, $2, 'cobro_anulado', $2, $3, $4, $4, 'CONFIRMED', $5) RETURNING id`,
-            [venta.customer_id, venta.id, `Venta ${venta.sale_number} — ${venta.full_name}: cobro anulado (${body.reason})`, monto, venta.accionista_id]
-          )).rows[0].id as string;
-          ventaVuelveADeber = { cuenta: nueva, monto, nueva: true };
-        }
-      }
-    }
-
-    // Fondos a rendir cuentas: sin estados colgados.
-    //  · Anular el FONDO anula también su vuelto/faltante registrado aparte (si
-    //    lo hubo): la caja vuelve exactamente a como estaba antes de entregarlo.
-    //    (Si el vuelto se registró en la misma línea, el contra-asiento ya es
-    //    por el gasto real y no hay nada más que revertir.)
-    //  · Anular SOLO el vuelto/faltante devuelve el fondo a «Por Liquidar».
-    const ajustesAnulados: string[] = [];
-    if (m.es_fondo) {
-      await exigirFondoSinDescuentos(client, m.id);
-      const ajustes = await client.query(
-        `SELECT * FROM cash_movements
-          WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL
-          FOR UPDATE`,
-        [m.id]
+  // Traspaso efectivo↔banco: sus dos líneas se anulan juntas.
+  if (m.reference_type === "traspaso_interno") {
+    const par = (await client.query(
+      `SELECT * FROM cash_movements WHERE reference_type = 'traspaso_interno' AND reversed_at IS NULL AND reversal_of IS NULL
+          AND id <> $1 AND (id = $2 OR reference_id = $1) FOR UPDATE`,
+      [m.id, m.reference_id]
+    )).rows[0];
+    if (par) {
+      await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+         VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
+        [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
+         `Anulación: ${body.reason} (otra línea del traspaso)`, par.id, user?.id ?? null, par.medio]
       );
-      for (const a of ajustes.rows) {
-        await client.query(
-          `INSERT INTO cash_movements
-             (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
-           VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)`,
-          [a.cash_register_id, a.movement === "INCOME" ? "EXPENSE" : "INCOME", a.category, a.amount,
-           `Anulación: ${body.reason} (ajuste del fondo ${String(m.id).slice(0, 8)})`, a.id, user?.id ?? null]
-        );
-        await client.query(
-          `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
-          [a.id, user?.id ?? null, `Fondo anulado: ${body.reason}`]
-        );
-        ajustesAnulados.push(a.id);
+      await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
+    }
+  }
+
+  // 💸 Préstamo a una persona: se anula su Por Cobrar (si no tiene abonos) y lo que hizo entre socios.
+  if (m.reference_type === REF_PRESTAMO_PERSONA && m.reference_id) {
+    await anularPrestamoPersona(client, m.id, String(m.reference_id));
+  }
+  // 💳 Gasto que pagó OTRO socio (su tarjeta o su dinero): se anula la otra línea y vuelve lo cruzado.
+  if (m.reference_type === "pagado_por_socio" && m.reference_id) {
+    const par = (await client.query(
+      "SELECT * FROM cash_movements WHERE id = $1 AND reversed_at IS NULL AND reversal_of IS NULL FOR UPDATE", [m.reference_id]
+    )).rows[0];
+    if (par) {
+      await client.query(
+        `INSERT INTO cash_movements (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by, medio)
+         VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7, $8)`,
+        [cajaDestino, par.movement === "INCOME" ? "EXPENSE" : "INCOME", par.category, par.amount,
+         `Anulación: ${body.reason} (lo que pagó el socio)`, par.id, user?.id ?? null, par.medio]
+      );
+      await client.query("UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1", [par.id, user?.id ?? null, body.reason]);
+    }
+    await deshacerCrucesYDeuda(client, m.movement === "EXPENSE" ? m.id : String(m.reference_id));
+  }
+  // Cobro que recibió este accionista POR OTRO socio: se anula también la deuda entre los dos.
+  if (m.category === "COBRO_POR_SOCIO") await anularDeudaDeCobroPorSocio(client, m.id, body.reason);
+  // Venta detalle de arroz de OTRO socio cobrada en esta caja: la venta se anula y el arroz vuelve a su dueño.
+  if (m.category === "COBRO_POR_SOCIO" && m.reference_type === "sales" && m.reference_id) {
+    await client.query("DELETE FROM inventory_movements WHERE reference_type = 'sales' AND reference_id = $1 AND movement = 'OUT'", [m.reference_id]);
+    await client.query("UPDATE sales SET sale_status = 'CANCELLED' WHERE id = $1", [m.reference_id]);
+  }
+  // Pago que hizo este accionista POR OTRO socio: vuelve lo descontado y se anula la deuda nueva.
+  if (m.category === "PAGO_POR_SOCIO" || m.category === "GASTO_POR_SOCIO") await anularPagoPorSocio(client, m.id, body.reason);
+  // Venta detalle POR ASIGNAR (aún sin dueño ni inventario descontado): solo queda anulada.
+  if (m.reference_type === "venta_detalle_por_asignar" && m.reference_id) {
+    await client.query("UPDATE ventas_detalle_por_asignar SET anulado_at = now() WHERE id = $1 AND asignado_at IS NULL", [m.reference_id]);
+  }
+  // 🌾 Anticipo al agricultor (Caja › Arroz en cáscara): se cancela el anticipo y, si al entregarlo pagó lo que se le
+  // debía, esa deuda (y el neto de su liquidación) vuelve. Si ya se descontó en una liquidación, no se deja (2026-10-28:
+  // antes el dinero volvía a la caja pero el anticipo seguía pendiente y se le descontaba igual).
+  if (m.reference_type === "farmer_advances" && m.reference_id) {
+    const adv = (await client.query("SELECT id, status FROM farmer_advances WHERE id = $1 FOR UPDATE", [m.reference_id])).rows[0];
+    if (adv && adv.status !== "CANCELLED") {
+      const apps = (await client.query(
+        "SELECT id, liquidation_id, payable_id, amount_applied::float AS monto FROM advance_applications WHERE advance_id = $1", [adv.id]
+      )).rows as Array<{ id: string; liquidation_id: string | null; payable_id: string | null; monto: number }>;
+      if (apps.some((a) => !a.payable_id)) {
+        throw new ApiError(409, "Este anticipo ya se descontó en una liquidación: anula primero esa liquidación.");
       }
-    } else if (m.reference_type === "fondo_liquidacion" && m.reference_id) {
-      const quedan = await client.query(
-        `SELECT 1 FROM cash_movements
-          WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL LIMIT 1`,
+      for (const a of apps) {
+        await client.query(
+          `UPDATE accounts_payable SET balance = LEAST(amount, balance + $2),
+                  status = CASE WHEN LEAST(amount, balance + $2) >= amount - 0.005 THEN 'CONFIRMED'::document_status ELSE 'PARTIAL'::document_status END
+            WHERE id = $1`,
+          [a.payable_id, a.monto]
+        );
+        if (a.liquidation_id) {
+          await client.query(
+            "UPDATE liquidations SET advances_discount = GREATEST(0, advances_discount - $2), net_amount = net_amount + $2 WHERE id = $1",
+            [a.liquidation_id, a.monto]
+          );
+        }
+        await client.query("DELETE FROM advance_applications WHERE id = $1", [a.id]);
+      }
+      await client.query("UPDATE farmer_advances SET status = 'CANCELLED', balance = 0 WHERE id = $1", [adv.id]);
+    }
+  }
+  // 🌾 Entrega o devolución de fomento: sale también de la cuenta del agricultor (2026-11-23: antes el dinero volvía a la
+  // caja y el fomento seguía cargado).
+  if ((m.reference_type === "fomento_entregas" || m.reference_type === "fomento_pagos") && m.reference_id) await quitarDeFomento(client, m);
+  // Dinero entre socios (sale de una caja y entra a la otra): se anulan las dos líneas, lo descontado y el préstamo.
+  if (m.reference_type === "dinero_entre_socios" && m.reference_id) {
+    await anularDineroEntreSocios(client, { id: m.reference_id, motivo: body.reason, userId: user?.id ?? null });
+  }
+  // Si cobró/pagó una CUENTA, esa cuenta (y su hermana entre accionistas) vuelve a deber lo anulado.
+  const cuentaRevertida = await revertirAbonoDeCuentaPorAnulacion(client, m, { userId: user?.id ?? null, motivo: body.reason });
+  // 🧾 Cobro de una VENTA (pedido despachado y cobrado, o venta de contado) anulado (pedido del dueño 2026-11-12: «anulé
+  // el cobro de una venta y no volvió a Por Cobrar»): el ingreso apunta a la venta, no a la cuenta. La venta sigue
+  // hecha, así que el cliente vuelve a deber lo anulado: su cuenta de la venta sube; si fue de contado sin cuenta y el
+  // cliente tiene nombre, nace su Por Cobrar. (Consumidor final: no hay a quién cobrarle, queda solo la anulación.)
+  let ventaVuelveADeber: { cuenta: string; monto: number; nueva: boolean } | null = null;
+  if (!cuentaRevertida && m.movement === "INCOME" && m.category === "VENTA" && m.reference_type === "sales" && m.reference_id) {
+    const monto = round2(Number(m.amount));
+    const venta = (await client.query(
+      `SELECT s.id, s.sale_number, s.customer_id, s.accionista_id, c.full_name FROM sales s LEFT JOIN customers c ON c.id = s.customer_id
+        WHERE s.id = $1 FOR UPDATE OF s`, [m.reference_id]
+    )).rows[0];
+    if (venta) {
+      const ar = (await client.query(
+        `SELECT id, amount::float AS amount, balance::float AS balance FROM accounts_receivable
+          WHERE sale_id = $1 AND status <> 'CANCELLED' ORDER BY created_at LIMIT 1 FOR UPDATE`, [venta.id]
+      )).rows[0];
+      if (ar) {
+        const nuevo = round2(Math.min(ar.amount, ar.balance + monto));
+        await client.query(
+          `UPDATE accounts_receivable SET balance = $2, status = $3, description = description || $4 WHERE id = $1`,
+          [ar.id, nuevo, nuevo + 0.005 >= ar.amount ? "CONFIRMED" : nuevo < 0.01 ? "PAID" : "PARTIAL",
+           ` · cobro de ${dinero(monto)} anulado: vuelve a deber (${body.reason})`]
+        );
+        ventaVuelveADeber = { cuenta: ar.id, monto: round2(nuevo - ar.balance), nueva: false };
+      } else if (venta.customer_id && !/consumidor\s*final/i.test(String(venta.full_name ?? ""))) {
+        const nueva = (await client.query(
+          `INSERT INTO accounts_receivable (customer_id, sale_id, reference_type, reference_id, description, amount, balance, status, accionista_id)
+           VALUES ($1, $2, 'cobro_anulado', $2, $3, $4, $4, 'CONFIRMED', $5) RETURNING id`,
+          [venta.customer_id, venta.id, `Venta ${venta.sale_number} — ${venta.full_name}: cobro anulado (${body.reason})`, monto, venta.accionista_id]
+        )).rows[0].id as string;
+        ventaVuelveADeber = { cuenta: nueva, monto, nueva: true };
+      }
+    }
+  }
+
+  // Fondos a rendir cuentas: sin estados colgados.
+  //  · Anular el FONDO anula también su vuelto/faltante registrado aparte (si
+  //    lo hubo): la caja vuelve exactamente a como estaba antes de entregarlo.
+  //    (Si el vuelto se registró en la misma línea, el contra-asiento ya es
+  //    por el gasto real y no hay nada más que revertir.)
+  //  · Anular SOLO el vuelto/faltante devuelve el fondo a «Por Liquidar».
+  const ajustesAnulados: string[] = [];
+  if (m.es_fondo) {
+    await exigirFondoSinDescuentos(client, m.id);
+    const ajustes = await client.query(
+      `SELECT * FROM cash_movements
+        WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL
+        FOR UPDATE`,
+      [m.id]
+    );
+    for (const a of ajustes.rows) {
+      await client.query(
+        `INSERT INTO cash_movements
+           (cash_register_id, movement, category, amount, description, reference_type, reference_id, reversal_of, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'reversal', $6, $6, $7)`,
+        [a.cash_register_id, a.movement === "INCOME" ? "EXPENSE" : "INCOME", a.category, a.amount,
+         `Anulación: ${body.reason} (ajuste del fondo ${String(m.id).slice(0, 8)})`, a.id, user?.id ?? null]
+      );
+      await client.query(
+        `UPDATE cash_movements SET reversed_at = now(), reversed_by = $2, reversed_reason = $3 WHERE id = $1`,
+        [a.id, user?.id ?? null, `Fondo anulado: ${body.reason}`]
+      );
+      ajustesAnulados.push(a.id);
+    }
+  } else if (m.reference_type === "fondo_liquidacion" && m.reference_id) {
+    const quedan = await client.query(
+      `SELECT 1 FROM cash_movements
+        WHERE reference_type = 'fondo_liquidacion' AND reference_id = $1 AND reversed_at IS NULL LIMIT 1`,
+      [m.reference_id]
+    );
+    if (!quedan.rowCount) {
+      await client.query(
+        `UPDATE cash_movements
+            SET fondo_estado = 'POR_LIQUIDAR',
+                description = NULLIF(btrim(regexp_replace(COALESCE(description, ''), '\\s*·\\s*(Liquidado: gasto real|Gasto real: \\$).*$', '')), '')
+          WHERE id = $1 AND es_fondo AND reversed_at IS NULL AND monto_entregado IS NULL`,
         [m.reference_id]
       );
-      if (!quedan.rowCount) {
-        await client.query(
-          `UPDATE cash_movements
-              SET fondo_estado = 'POR_LIQUIDAR',
-                  description = NULLIF(btrim(regexp_replace(COALESCE(description, ''), '\\s*·\\s*(Liquidado: gasto real|Gasto real: \\$).*$', '')), '')
-            WHERE id = $1 AND es_fondo AND reversed_at IS NULL AND monto_entregado IS NULL`,
-          [m.reference_id]
-        );
-      }
     }
+  }
 
-    // Si el egreso anulado fue una compra de sacos, descuenta del inventario lo
-    // que había ingresado (reverso automático para mantener el cuadre).
-    const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
-    // Si pagó una compra de REPUESTOS, se retira del stock lo que entró.
-    const repuestosRevertidos = await reversarEntradaRepuestosDeCaja(client, m.id);
-    // Gasto de Transporte pagado por la Matriz: se deshace el cruce, la Por Cobrar y el gasto en Transporte.
-    if (m.reference_type === "campo_cxp" && m.reference_id) {
-      await anularGastoTransporte(client, String(m.reference_id), body.reason);
-    }
-    // 💳 Gasto pagado con el banco / tarjeta: su «Retiro del banco» se anula con él.
-    const bancoAnulado = await anularPagoConBanco(client, { gastoId: m.id, cajaDestino, motivo: body.reason, userId: user?.id ?? null });
-    // Si pagó un MANTENIMIENTO que usó repuestos del inventario, vuelven al stock.
-    if (m.reference_type === "equipment_maintenance" && m.reference_id) {
-      await devolverRepuestosDeMantenimiento(client, String(m.reference_id));
-      // Sale de la hoja de vida: la reparación y lo repartido a otras máquinas.
-      await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE id = $1 OR parent_id = $1", [m.reference_id]);
-    }
-    // Hojas de vida nacidas de este egreso (repuestos de uso inmediato, materiales).
-    await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE cash_movement_id = $1", [m.id]);
-    // Si fue un pago de NÓMINA, vuelve a quedar pendiente en Nómina.
-    const nominaReabierta = await reabrirPagoNomina(client, m);
+  // Si el egreso anulado fue una compra de sacos, descuenta del inventario lo
+  // que había ingresado (reverso automático para mantener el cuadre).
+  const sacosRevertidos = await reversarEntradaSacosDeCaja(client, m.id);
+  // Si pagó una compra de REPUESTOS, se retira del stock lo que entró.
+  const repuestosRevertidos = await reversarEntradaRepuestosDeCaja(client, m.id);
+  // Gasto de Transporte pagado por la Matriz: se deshace el cruce, la Por Cobrar y el gasto en Transporte.
+  if (m.reference_type === "campo_cxp" && m.reference_id) {
+    await anularGastoTransporte(client, String(m.reference_id), body.reason);
+  }
+  // 💳 Gasto pagado con el banco / tarjeta: su «Retiro del banco» se anula con él.
+  const bancoAnulado = await anularPagoConBanco(client, { gastoId: m.id, cajaDestino, motivo: body.reason, userId: user?.id ?? null });
+  // Si pagó un MANTENIMIENTO que usó repuestos del inventario, vuelven al stock.
+  if (m.reference_type === "equipment_maintenance" && m.reference_id) {
+    await devolverRepuestosDeMantenimiento(client, String(m.reference_id));
+    // Sale de la hoja de vida: la reparación y lo repartido a otras máquinas.
+    await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE id = $1 OR parent_id = $1", [m.reference_id]);
+  }
+  // Hojas de vida nacidas de este egreso (repuestos de uso inmediato, materiales).
+  await client.query("UPDATE equipment_maintenance SET status = 'ANULADO' WHERE cash_movement_id = $1", [m.id]);
+  // Si fue un pago de NÓMINA, vuelve a quedar pendiente en Nómina.
+  const nominaReabierta = await reabrirPagoNomina(client, m);
 
-    // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
-    // se borra si no tiene historial; con mantenimientos, sale del balance
-    // (costo 0, no depreciable) y queda FUERA DE SERVICIO para no perder su historia.
-    const activos = await client.query("SELECT id, name FROM equipment WHERE cash_movement_id = $1", [m.id]);
-    const activosRetirados: string[] = [];
-    for (const a of activos.rows) {
-      const conHistorial = await client.query("SELECT 1 FROM equipment_maintenance WHERE equipment_id = $1 LIMIT 1", [a.id]);
-      if (conHistorial.rowCount) {
-        await client.query(
-          "UPDATE equipment SET acquisition_cost = 0, is_depreciable = false, status = 'FUERA_SERVICIO' WHERE id = $1",
-          [a.id]
-        );
-      } else {
-        await client.query("DELETE FROM equipment WHERE id = $1", [a.id]);
-      }
-      activosRetirados.push(a.name);
+  // Si el egreso anulado registró un ACTIVO FIJO, se retira de Activos fijos:
+  // se borra si no tiene historial; con mantenimientos, sale del balance
+  // (costo 0, no depreciable) y queda FUERA DE SERVICIO para no perder su historia.
+  const activos = await client.query("SELECT id, name FROM equipment WHERE cash_movement_id = $1", [m.id]);
+  const activosRetirados: string[] = [];
+  for (const a of activos.rows) {
+    const conHistorial = await client.query("SELECT 1 FROM equipment_maintenance WHERE equipment_id = $1 LIMIT 1", [a.id]);
+    if (conHistorial.rowCount) {
+      await client.query(
+        "UPDATE equipment SET acquisition_cost = 0, is_depreciable = false, status = 'FUERA_SERVICIO' WHERE id = $1",
+        [a.id]
+      );
+    } else {
+      await client.query("DELETE FROM equipment WHERE id = $1", [a.id]);
     }
+    activosRetirados.push(a.name);
+  }
 
-    return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida, banco_anulado: bancoAnulado, venta_vuelve_a_deber: ventaVuelveADeber };
-  });
+  // 📒 Caja del día: se anula en el mismo día del movimiento (si ese mes no está cerrado), así esa hoja queda como si no
+  // se hubiera escrito y la de hoy no cambia.
+  if (o.mismoDia && cajaDestino === m.cash_register_id) {
+    const dia = fechaEc(new Date(m.created_at));
+    const abierto = await fechaValidaDeCaja(client, m.cash_register_id, dia).then(() => true, () => false);
+    if (abierto) {
+      await client.query(
+        `UPDATE cash_movements r SET created_at = x.created_at + interval '1 millisecond'
+           FROM cash_movements x
+          WHERE r.reversal_of = x.id AND r.created_at = now() AND r.cash_register_id = x.cash_register_id`
+      );
+    }
+  }
+
+  return { ...reversal.rows[0], sacos_revertidos: sacosRevertidos, activos_retirados: activosRetirados, ajustes_anulados: ajustesAnulados, repuestos_revertidos: repuestosRevertidos, nomina_reabierta: nominaReabierta, cuenta_revertida: cuentaRevertida, banco_anulado: bancoAnulado, venta_vuelve_a_deber: ventaVuelveADeber };
+}
+
+cashRouter.post("/movements/:id/reverse", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+  await ensureCashColumns();
+  const body = z.object({ reason: z.string().min(3), mismo_dia: z.boolean().optional() }).parse(req.body);
+  const auth = req as AuthenticatedRequest;
+  const result = await inTransaction((client) => anularMovimientoDeCaja(client, {
+    id: String(req.params.id), accionistaId: auth.accionistaId, user: auth.user, reason: body.reason, mismoDia: body.mismo_dia
+  }));
 
   res.status(201).json(result);
 }));
@@ -1616,13 +1668,13 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
 }
 
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
-cashRouter.get("/payables", asyncRoute(async (req, res) => {
-  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+/** Por Pagar vigentes de un accionista, con el nombre del acreedor (también las usa la Caja del día). */
+export async function listarPorPagar(db: { query: typeof pool.query }, accionistaId: string | null | undefined) {
   // LEFT JOIN a farmers: una cuenta por pagar NO siempre es a un agricultor.
   // El servicio de pilado a CEYRO no tiene agricultor, y con el JOIN interno
   // quedaba oculta (se veía en Por Cobrar pero no aquí). Cuando no hay
   // agricultor, se muestra el concepto para saber a quién y por qué se paga.
-  const result = await pool.query(
+  const result = await db.query(
     `SELECT ap.*,
             -- Nombre del ACREEDOR / proveedor / entidad a quien se le debe:
             --  · liquidación   -> el agricultor (farmers)
@@ -1714,7 +1766,11 @@ cashRouter.get("/payables", asyncRoute(async (req, res) => {
      ORDER BY ap.created_at DESC`,
     [accionistaId]
   );
-  res.json(result.rows);
+  return result.rows;
+}
+
+cashRouter.get("/payables", asyncRoute(async (req, res) => {
+  res.json(await listarPorPagar(pool, (req as AuthenticatedRequest).accionistaId));
 }));
 
 // ── Exportar movimientos del día en Excel ────────────────────────────────────

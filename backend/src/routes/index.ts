@@ -2,6 +2,7 @@ import { Router } from "express";
 import { advancesRouter } from "./modules/advances.js";
 import { authRouter } from "./modules/auth.js";
 import { cashRouter } from "./modules/cash.js";
+import { cajaDiaRouter } from "./modules/caja-dia.js";
 import { catalogsRouter } from "./modules/catalogs.js";
 import { dashboardRouter } from "./modules/dashboard.js";
 import { documentsRouter } from "./modules/documents.js";
@@ -90,6 +91,8 @@ routes.use("/lots", lotsRouter);
 routes.use("/inventory", inventoryRouter);
 routes.use("/processing-batches", processingRouter);
 routes.use("/liquidations", liquidationsRouter);
+// 📒 Caja del día (antes que /cash: comparte su prefijo y sus permisos).
+routes.use("/cash/dia", cajaDiaRouter);
 routes.use("/cash", cashRouter);
 routes.use("/sales", salesRouter);
 routes.use("/orders", ordersRouter);

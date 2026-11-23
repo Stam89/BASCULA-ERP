@@ -1,6 +1,8 @@
 import type { PoolClient } from "pg";
 import { pool } from "./pool.js";
 import { medioPagoDeLaPeticion } from "../http/medio-pago.js";
+import { renglonDeLaPeticion } from "../http/caja-contexto.js";
+import { cerrarRenglon, validarRenglon } from "../services/caja-renglon.js";
 
 export async function inTransaction<T>(work: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await pool.connect();
@@ -9,7 +11,11 @@ export async function inTransaction<T>(work: (client: PoolClient) => Promise<T>)
     // Efectivo o banco elegido en la operación: el disparador de cash_movements lo usa (solo en esta transacción).
     const medio = medioPagoDeLaPeticion();
     if (medio) await client.query("SELECT set_config('app.medio_pago', $1, true)", [medio]);
+    // 📒 Renglón de la Caja del día: la caja y el día se validan antes; al final queda enlazado y fechado lo que nació.
+    const renglon = renglonDeLaPeticion();
+    if (renglon) await validarRenglon(client, renglon);
     const result = await work(client);
+    if (renglon) await cerrarRenglon(client, renglon);
     await client.query("COMMIT");
     return result;
   } catch (error) {

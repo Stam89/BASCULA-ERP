@@ -10,6 +10,7 @@ import { ApiError } from "../../http/error-handler.js";
 import { avisarSobregiro, exigirCajaAbiertaDelAccionista, fecharMovimientosDeCaja, fechaValidaDeCaja } from "../../services/caja.js";
 import { etiquetaMaquina, resolverMaquina } from "../../services/maquinas.js";
 import { round2 } from "../../utils/rice-formulas.js";
+import { hoyEc } from "../../utils/fechas.js";
 import { signUploadUrl } from "../../auth/upload-sign.js";
 import { consumirRepuestosEnMantenimiento, exigirMatriz, registrarCompraRepuestos } from "./repuestos.js";
 import { resolverProveedor } from "../../services/proveedores.js";
@@ -450,13 +451,16 @@ equipmentRouter.post("/transporte/gasto", asyncRoute(async (req, res) => {
     // 💳 Pagado con el banco / tarjeta de débito de la Matriz (no sale de la gaveta).
     pagado_con_banco: z.boolean().optional(),
     // Día del gasto, si no es hoy (la hoja de Caja).
-    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    // 📅 Día en que se hizo el trabajo, si no es el mismo en que se pagó (va a la hoja de vida de la máquina).
+    fecha_trabajo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
+  if (body.fecha_trabajo && body.fecha_trabajo > hoyEc()) throw new ApiError(400, "El trabajo no puede tener fecha futura.");
   const out = await inTransaction(async (client) => {
    const fechaMov = await fechaValidaDeCaja(client, body.cash_register_id, body.fecha);
    const r = await registrarGastoTransporte(client, {
-    fecha: fechaMov,
+    fecha: fechaMov, fechaTrabajo: body.fecha_trabajo ?? null,
     anticipoOperador: body.anticipo_operador ?? null,
     matrizId: auth.accionistaId!, cashRegisterId: body.cash_register_id, activoId: body.activo_id ?? null, tipo: body.maintenance_type,
     categoria: body.categoria ?? null, monto: body.monto ?? null, pagadoA: body.pagado_a ?? null,
@@ -484,7 +488,9 @@ equipmentRouter.post("/planta/gasto", asyncRoute(async (req, res) => {
     monto: z.number().positive().max(1_000_000).transform(round2),
     description: z.string().trim().min(2).max(500),
     pagado_con_banco: z.boolean().optional(),
-    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+    fecha: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    // 📅 Día en que se hizo el trabajo, si no es el mismo en que se pagó (Caja del día).
+    fecha_trabajo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
   }).parse(req.body);
   const auth = req as AuthenticatedRequest;
   const accionistaId = auth.accionistaId ?? null;
@@ -530,6 +536,10 @@ equipmentRouter.post("/planta/gasto", asyncRoute(async (req, res) => {
           WHERE id = $2 OR cash_movement_id = $1`,
         [movimientoId, hojaId]
       );
+    }
+    if (body.fecha_trabajo) {
+      if (body.fecha_trabajo > hoyEc()) throw new ApiError(400, "El trabajo no puede tener fecha futura.");
+      await client.query("UPDATE equipment_maintenance SET fecha_trabajo = $2 WHERE id = $3 OR cash_movement_id = $1", [movimientoId, body.fecha_trabajo, hojaId]);
     }
     return { maquina: etiquetaMaquina(maquina), total: body.monto, cash_movement_id: movimientoId };
   });

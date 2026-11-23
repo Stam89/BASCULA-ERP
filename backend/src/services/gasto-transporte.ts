@@ -60,6 +60,8 @@ export type GastoTransporteInput = {
   anticipoOperador?: string | null;
   /** Día del gasto si no es hoy (la hoja de Caja). */
   fecha?: string | null;
+  /** Día en que se hizo el trabajo, si no es el del pago (hoja de vida). */
+  fechaTrabajo?: string | null;
 };
 
 export async function registrarGastoTransporte(client: PoolClient, i: GastoTransporteInput) {
@@ -122,7 +124,7 @@ export async function registrarGastoTransporte(client: PoolClient, i: GastoTrans
   const mant = !conTrabajo ? null : (await client.query(
     `INSERT INTO campo_mantenimientos (fecha, activo_id, tipo, detalle, proveedor, factura, costo, observaciones, created_by, cxp_id)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-    [fecha, activo.id, i.tipo, `${tipoTxt}: ${i.descripcion}`.slice(0, 1000),
+    [i.fechaTrabajo ?? fecha, activo.id, i.tipo, `${tipoTxt}: ${i.descripcion}`.slice(0, 1000),
      (i.provider ?? "").trim() || null, (i.factura ?? "").trim() || null, total,
      [`Pagado por la caja de ${matriz.name}`, i.hechoPorTipo === "PROPIO" ? "hecho por nuestro personal" : i.hechoPorTipo === "EXTERNO" ? "hecho por técnico de afuera" : "",
       Number(i.manoObra) > 0 ? `mano de obra $${round2(Number(i.manoObra)).toFixed(2)}` : "", detalleItems ? `usado: ${detalleItems}` : "",
