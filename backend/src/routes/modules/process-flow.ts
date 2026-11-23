@@ -475,7 +475,7 @@ processFlowRouter.get("/drying/reports", asyncRoute(async (req, res) => {
             COALESCE(
               jsonb_agg(
                 jsonb_build_object(
-                  'lot_id', dl.lot_id,
+                  'lot_id', dl.lot_id, 'weighing_ticket_id', dl.weighing_ticket_id,
                   'lot_code', dl.lot_code,
                   'farmer_name', dl.farmer_name,
                   'net_weight_kg', dl.net_weight_kg,
@@ -1673,7 +1673,7 @@ processFlowRouter.get("/lots/:lotId", asyncRoute(async (req, res) => {
               COALESCE(
                 jsonb_agg(
                   jsonb_build_object(
-                    'lot_id', dl.lot_id,
+                    'lot_id', dl.lot_id, 'weighing_ticket_id', dl.weighing_ticket_id,
                     'lot_code', dl.lot_code,
                     'farmer_name', dl.farmer_name,
                     'net_weight_kg', dl.net_weight_kg,
@@ -2017,6 +2017,12 @@ processFlowRouter.post("/drying/secador/recalcular", requirePermiso("ANULAR"), a
   res.json(result);
 }));
 
+// ➖ Quitar un peso mal puesto de una secadora en proceso (pedido del dueño 2026-11-23).
+processFlowRouter.post("/drying/:dryingId/quitar-ticket", asyncRoute(async (req, res) => {
+  const body = z.object({ weighing_ticket_id: z.string().uuid() }).parse(req.body);
+  res.json(await inTransaction((client) => quitarTicketDeSecado(client, String(req.params.dryingId), body.weighing_ticket_id, (req as AuthenticatedRequest).user?.id ?? null)));
+}));
+
 // 🔀 CAMBIAR DE SECADORA (pedido del dueño 2026-10-29: «lo de la secadora 1 va en la 2 y lo de la 2 en la 1»).
 // Se mueve TODO lo que hay en el túnel de ese secado (es el túnel físico) al túnel elegido; si el elegido también está
 // lleno, se INTERCAMBIAN. Solo mientras el motor NO arranca: ningún secado con hora de inicio, hora final, combustible
@@ -2085,6 +2091,93 @@ processFlowRouter.post("/drying/:dryingId/cambiar-secadora", asyncRoute(async (r
   });
   res.json(result);
 }));
+
+// ➖ QUITAR un ticket de un secado EN PROCESO: lo contrario de sumarTicketsASecado. Sirve también con el motor encendido
+// (es corregir un error, no mover arroz). El ticket queda libre para otra secadora; bajan los QQ/kg del secado, su informe
+// y el pago de la cuadrilla. El combustible y el servicio se calculan al finalizar, ya con los QQ nuevos.
+export async function quitarTicketDeSecado(client: PoolClient, dryingId: string, ticketId: string, userId: string | null) {
+  const rep = (await client.query(
+    `SELECT d.*, l.accionista_id, l.lot_code FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id WHERE d.id = $1 FOR UPDATE OF d`,
+    [dryingId]
+  )).rows[0];
+  if (!rep) throw new ApiError(404, "Secado no encontrado");
+  const t = rep.tunnel_number;
+  if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") throw new ApiError(400, "De un secado en tendal no se quitan tickets así.");
+  if (rep.status !== "IN_PROGRESS" || rep.motor_fuel_id) throw new ApiError(409, `El secado del túnel ${t} ya se finalizó: reábrelo primero para quitar un peso.`);
+  const miembros = (await client.query(
+    "SELECT id, weighing_ticket_id, lot_code FROM drying_tunnel_report_lots WHERE drying_report_id = $1 FOR UPDATE", [dryingId]
+  )).rows;
+  const m = miembros.find((x) => x.weighing_ticket_id === ticketId);
+  if (!m) throw new ApiError(404, "Ese peso ya no está en esta secadora. Refresca la pantalla.");
+  if (miembros.length < 2) throw new ApiError(409, "Es el único peso de este secado: no se puede dejar la secadora vacía.");
+  const pagado = await client.query(
+    "SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND paid_at IS NOT NULL LIMIT 1", [dryingId]
+  );
+  if (pagado.rowCount) throw new ApiError(409, `La cuadrilla del túnel ${t} ya se pagó con este peso: anula primero ese pago en Caja.`);
+  const enProduccion = await client.query(
+    `SELECT 1 FROM processing_batch_drying_lots WHERE drying_report_id = $1 OR weighing_ticket_id = $2
+     UNION ALL SELECT 1 FROM processing_batches WHERE drying_report_id = $1 AND status <> 'CANCELLED' LIMIT 1`, [dryingId, ticketId]
+  );
+  if (enProduccion.rowCount) throw new ApiError(409, "El arroz de este secado ya entró a Producción: anula primero ese proceso.");
+  const lotId = String(rep.lot_id);
+  const liqDelLote = await client.query(
+    "SELECT 1 FROM liquidations WHERE lot_id = $1 AND weighing_ticket_id IS NULL AND status <> 'CANCELLED' LIMIT 1", [lotId]
+  );
+  if (liqDelLote.rowCount) throw new ApiError(409, "Este lote ya tiene una liquidación completa: anúlala primero.");
+
+  const antesQq = Number(rep.total_quintals) || 0;
+  await client.query("DELETE FROM drying_tunnel_report_lots WHERE id = $1", [m.id]);
+  await client.query("UPDATE weighing_tickets SET lot_id = NULL WHERE id = $1", [ticketId]);
+  await client.query(
+    "UPDATE inventory_movements SET lot_id = NULL WHERE reference_type = 'weighing_tickets' AND reference_id = $1 AND lot_id = $2", [ticketId, lotId]
+  );
+  // Si ese peso ya se liquidó por ticket, su liquidación sigue igual pero ya no apunta a este lote.
+  await client.query("UPDATE liquidations SET lot_id = NULL WHERE weighing_ticket_id = $1 AND lot_id = $2", [ticketId, lotId]);
+  const nuevo = (await client.query(
+    `UPDATE drying_tunnel_reports d SET input_weight_kg = x.kg, total_quintals = x.qq
+       FROM (SELECT sum(net_weight_kg) AS kg, sum(quintals) AS qq FROM drying_tunnel_report_lots WHERE drying_report_id = $1) x
+      WHERE d.id = $1 RETURNING d.total_quintals::float AS qq, d.input_weight_kg::float AS kg`, [dryingId]
+  )).rows[0];
+  await client.query(
+    `UPDATE lots l SET farmer_id = CASE WHEN (SELECT count(DISTINCT w.farmer_id) FROM weighing_tickets w WHERE w.lot_id = l.id) = 1
+                                        THEN (SELECT min(w.farmer_id::text)::uuid FROM weighing_tickets w WHERE w.lot_id = l.id) ELSE NULL END
+      WHERE l.id = $1`, [lotId]
+  );
+  if (rep.process_report_id) {
+    await client.query(
+      `UPDATE lot_process_reports
+          SET report_data = report_data || jsonb_build_object('total_quintals', $2::numeric, 'total_weight_kg', $3::numeric,
+                'lots', COALESCE((SELECT jsonb_agg(x) FROM jsonb_array_elements(COALESCE(report_data->'lots', '[]'::jsonb)) x
+                                   WHERE x->>'weighing_ticket_id' IS DISTINCT FROM $4), '[]'::jsonb))
+        WHERE id = $1`,
+      [rep.process_report_id, nuevo.qq, nuevo.kg, ticketId]
+    );
+  }
+  // Cuadrilla: lo asignado por QQ baja en la misma proporción; lo que va por sacos se corrige a mano.
+  let sacosAMano = false;
+  if (!rep.cuadrilla_pagada_fuera && antesQq > 0) {
+    const asig = (await client.query(
+      "SELECT id, worker_name, activity_id, momento, quintals::float AS quintals FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1", [dryingId]
+    )).rows;
+    for (const a of asig) {
+      const empaque = a.momento === "VACIADO" ? rep.botada_empaque ?? rep.recepcion_empaque : rep.recepcion_empaque;
+      if (empaque === "SACOS") { sacosAMano = true; continue; }
+      const qq = Math.round(Number(a.quintals) * (nuevo.qq / antesQq) * 1000) / 1000;
+      await client.query("UPDATE drying_tunnel_cuadrilla SET quintals = $2 WHERE id = $1", [a.id, qq]);
+      const entrada = await client.query(
+        "SELECT to_char(work_date, 'YYYY-MM-DD') AS dia FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND momento = $2 AND lower(btrim(worker_name)) = lower(btrim($3))",
+        [dryingId, a.momento, a.worker_name]
+      );
+      if (entrada.rowCount) {
+        await upsertCuadrillaSecadoraEntry(client, {
+          referencia_id: dryingId, tunnel_number: Number(t), momento: a.momento, activity_id: a.activity_id,
+          worker_name: a.worker_name, quantity: qq, work_date: entrada.rows[0].dia, created_by: userId, accionista_id: rep.accionista_id
+        });
+      }
+    }
+  }
+  return { ticket: m.lot_code as string, total_quintals: nuevo.qq, input_weight_kg: nuevo.kg, sacos_a_mano: sacosAMano };
+}
 
 // ➕ SUMAR TICKETS a un secado ya registrado (pedido del dueño 2026-10-29: «faltó agregar un peso y el motor aún no
 // se enciende»). Solo mientras el motor NO arranca (sin hora de inicio) y sin combustible cerrado. Los tickets pasan
@@ -2699,7 +2792,7 @@ async function getDryingReportById(client: PoolClient, dryingId: string) {
             COALESCE(
               jsonb_agg(
                 jsonb_build_object(
-                  'lot_id', dl.lot_id,
+                  'lot_id', dl.lot_id, 'weighing_ticket_id', dl.weighing_ticket_id,
                   'lot_code', dl.lot_code,
                   'farmer_name', dl.farmer_name,
                   'net_weight_kg', dl.net_weight_kg,

@@ -2,7 +2,14 @@
 
 Actualizado: 2026-11-23
 
-## Último cambio: 🌾 Fomentos iguales al Excel + datos corregidos (2026-11-23)
+## Último cambio: ➖ Quitar un peso de una secadora en proceso (2026-11-23)
+
+- Secadoras › editar un secado en proceso: botón «Quitar» por peso (`quitarTicketDeSecado`, POST /process-flow/drying/:id/quitar-ticket), también con el
+  motor encendido. Recalcula QQ/kg (suma de los pesos que quedan), informe y cuadrilla; el ticket queda libre. Frenos: único peso, cuadrilla
+  pagada, finalizado o en Producción. Simulacro `quitar_peso_secado`.
+- Pendiente: `cambio-bascula.ts` corrige el peso del ticket pero no el total del secado ni su cuadrilla (ticket 558: 17.41 → 17.80).
+
+## Cambio anterior: 🌾 Fomentos iguales al Excel + datos corregidos (2026-11-23)
 
 - **Datos (orden del dueño, con respaldo en `C:\BASCULA-Respaldos`)**: 29 trabajos del 10–18/11 ($1,625.25, caja CEYRO) pasaron de
   GASTO_OPERATIVO a su máquina con hoja de vida (máquinas nuevas: TURBINA POLVILLERA, VENTILADOR DE TAMO, CARACOL DE POLVILLO,

@@ -1097,6 +1097,7 @@ type DryingTunnelReport = {
 };
 
 type DryingTunnelLot = {
+  weighing_ticket_id?: string | null;
   lot_id: string;
   lot_code: string;
   farmer_name: string | null;
@@ -12316,6 +12317,21 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
   // tarjeta del túnel en proceso. Actualiza el badge al INSTANTE (optimista) y
   // persiste en el backend; al Finalizar el túnel, el ruteo (CxC/Producción) lee
   // este nuevo valor. Si falla, refresca para restaurar el valor real.
+  // ➖ Quitar un peso mal puesto de una secadora en proceso: el servidor baja QQ, informe y pago de la cuadrilla.
+  async function quitarPesoDeSecado(rep: DryingTunnelReport, lot: DryingTunnelLot) {
+    const id = lot.weighing_ticket_id;
+    if (!id) return;
+    if (!(await confirmar(`¿Quitar ${lot.lot_code} de ${lot.farmer_name ?? "sin agricultor"} (${Number(lot.quintals ?? 0).enReal()} QQ) de esta secadora?\n\nEl peso total, el informe y el pago de la cuadrilla se recalculan solos. El peso queda libre para otra secadora.`))) return;
+    const r = await apiPost<{ ticket: string; total_quintals: number; input_weight_kg: number; sacos_a_mano: boolean }>(`/process-flow/drying/${rep.id}/quitar-ticket`, { weighing_ticket_id: id });
+    const sinEl = (x: DryingTunnelReport): DryingTunnelReport => x.id !== rep.id ? x : {
+      ...x, total_quintals: r.total_quintals as unknown as DryingTunnelReport["total_quintals"], lots: x.lots.filter((l) => l.weighing_ticket_id !== id)
+    };
+    setDryingReports((prev) => prev.map(sinEl));
+    setEditingDryingReport((prev) => (prev ? sinEl(prev) : prev));
+    addToast(`${r.ticket} quitado · ahora son ${Number(r.total_quintals).enReal()} QQ${r.sacos_a_mano ? " · revisa el número de sacos de la cuadrilla" : ""}`, "success");
+    await refresh();
+  }
+
   async function cambiarTipoServicioLote(reportId: string, lotId: string, operationType: "SECADO" | "SECADO_PILADO" | "COMPRA") {
     const isMaquila = operationType !== "COMPRA";
     const patchLot = (rep: DryingTunnelReport): DryingTunnelReport =>
@@ -16429,6 +16445,7 @@ Motivo (obligatorio):`, ""));
                                     selectedLots={rep.lots}
                                     editing
                                     onRemove={() => undefined}
+                                    onQuitarPeso={(l) => quitarPesoDeSecado(rep, l).catch((e) => addToast(e.message, "error"))}
                                     onChangeServiceType={(lotId, op) => cambiarTipoServicioLote(rep.id, lotId, op).catch((error) => setMessage(error.message))}
                                     changingLotId={changingServiceLotId}
                                   />
@@ -16498,6 +16515,7 @@ Motivo (obligatorio):`, ""));
                               selectedLots={rep.lots}
                               editing
                               onRemove={() => undefined}
+                              onQuitarPeso={done ? undefined : (l) => quitarPesoDeSecado(rep, l).catch((e) => addToast(e.message, "error"))}
                               onChangeServiceType={done ? undefined : (lotId, op) => cambiarTipoServicioLote(rep.id, lotId, op).catch((error) => setMessage(error.message))}
                               changingLotId={changingServiceLotId}
                             />
@@ -30568,12 +30586,15 @@ function DryingLotSelector({
   selectedLots,
   editing,
   onRemove,
+  onQuitarPeso,
   onChangeServiceType,
   changingLotId
 }: {
   selectedLots: DryingTunnelLot[];
   editing: boolean;
   onRemove: (lotId: string) => void;
+  /** Secado en proceso: quita ese peso de la secadora (si queda al menos otro). */
+  onQuitarPeso?: (lot: DryingTunnelLot) => void;
   // Cuando se pasa (modo edición del túnel en proceso), se muestra un selector
   // para CORREGIR el tipo de servicio del lote mal ingresado en Báscula.
   onChangeServiceType?: (lotId: string, operationType: "SECADO" | "SECADO_PILADO" | "COMPRA") => void;
@@ -30584,7 +30605,7 @@ function DryingLotSelector({
       <span>Lotes utilizados</span>
       {selectedLots.length === 0 && <p className="muted">Agrega uno o varios lotes desde el selector.</p>}
       {selectedLots.map((lot) => (
-        <div className="usedLotRow" key={lot.lot_id}>
+        <div className="usedLotRow" key={lot.weighing_ticket_id ?? lot.lot_id}>
           <div>
             <strong style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>{lot.farmer_name ?? "Sin agricultor"}<OpTypeBadge operationType={lot.operation_type} isMaquila={lot.is_maquila} /></strong>
             <small>{lot.lot_code} - {Number(lot.quintals ?? 0).enReal()} QQ</small>
@@ -30605,6 +30626,9 @@ function DryingLotSelector({
               </label>
             )}
           </div>
+          {editing && onQuitarPeso && lot.weighing_ticket_id && selectedLots.length > 1 && (
+            <button type="button" onClick={() => onQuitarPeso(lot)}>Quitar</button>
+          )}
           {!editing && (
             <button type="button" onClick={() => onRemove(lot.lot_id)}>
               Quitar
