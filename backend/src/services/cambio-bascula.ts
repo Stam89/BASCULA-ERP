@@ -7,6 +7,7 @@
 import type { PoolClient } from "pg";
 import { ApiError } from "../http/error-handler.js";
 import { calculateNetWeight, calculateQuintals, round2 } from "../utils/rice-formulas.js";
+import { recalcularTotalDeSecado } from "./secado-total.js";
 import { agricultorPorNombre } from "./agricultor-nombres.js";
 
 type Db = Pick<PoolClient, "query">;
@@ -114,7 +115,21 @@ export async function aplicarCambioBascula(client: PoolClient, mobileId: string,
     await client.query("UPDATE processing_batches SET input_quantity = input_quantity + $2 WHERE id = $1", [p.processing_batch_id, kgDelta]);
     await client.query("UPDATE processing_batch_drying_lots SET net_weight_kg = $2, quintals = $3 WHERE id = $1", [p.id, neto, qq]);
   }
-  await client.query("UPDATE drying_tunnel_report_lots SET net_weight_kg = $2, quintals = $3 WHERE weighing_ticket_id = $1", [wt.id, neto, qq]);
+  const secados = (await client.query(
+    "UPDATE drying_tunnel_report_lots SET net_weight_kg = $2, quintals = $3 WHERE weighing_ticket_id = $1 RETURNING drying_report_id AS id", [wt.id, neto, qq]
+  )).rows;
+  // El total del secado, su informe y la cuadrilla por pagar siguen al peso nuevo. Lo ya pagado o cobrado no se toca: se avisa.
+  for (const id of new Set(secados.map((x) => String(x.id)))) {
+    const r = await recalcularTotalDeSecado(client, id, null);
+    if (Math.abs(r.nuevo.qq - r.antesQq) < 0.005) continue;
+    const donde = r.tendal ? "el tendal" : `la secadora ${r.tunel}`;
+    if (r.yaPagada) avisos.push(`La cuadrilla de ${donde} ya se pagó con el peso anterior: no se cambió.`);
+    if (r.sacosAMano) avisos.push(`La cuadrilla de ${donde} va por sacos: revisa el número de sacos.`);
+    if (r.tendal && r.finalizado) avisos.push("El pago a la cuadrilla del tendal no se cambió: revísalo.");
+    if (r.conCombustible) avisos.push(`El combustible de ${donde} ya estaba repartido: no se cambió.`);
+    const cobro = await client.query("SELECT 1 FROM accounts_receivable WHERE reference_type = 'secado_service' AND reference_id = $1 AND status <> 'CANCELLED' LIMIT 1", [r.lotId]);
+    if (cobro.rowCount) avisos.push(`El cobro del servicio de secado de ${donde} no se cambió: revísalo.`);
+  }
 
   // 3) El ingreso y el ticket con los pesos nuevos (la sincronización ya no lo marca: coinciden con la báscula).
   await client.query(

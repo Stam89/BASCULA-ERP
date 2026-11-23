@@ -16,6 +16,7 @@ import {
   linkLotProcessReports,
   type ProcessStage
 } from "../../utils/process-reports.js";
+import { recalcularTotalDeSecado } from "../../services/secado-total.js";
 import { upsertCuadrillaSecadoraEntry, autoGenerarPagosCuadrillaDeSecado, getEffectiveCuadrillaActivityByName, moverCuadrillaLlenadoDeTunel } from "./cuadrilla.js";
 import { getMatrizId } from "../../services/matriz.js";
 import { getRates } from "./labor.js";
@@ -2125,7 +2126,6 @@ export async function quitarTicketDeSecado(client: PoolClient, dryingId: string,
   );
   if (liqDelLote.rowCount) throw new ApiError(409, "Este lote ya tiene una liquidación completa: anúlala primero.");
 
-  const antesQq = Number(rep.total_quintals) || 0;
   await client.query("DELETE FROM drying_tunnel_report_lots WHERE id = $1", [m.id]);
   await client.query("UPDATE weighing_tickets SET lot_id = NULL WHERE id = $1", [ticketId]);
   await client.query(
@@ -2133,49 +2133,12 @@ export async function quitarTicketDeSecado(client: PoolClient, dryingId: string,
   );
   // Si ese peso ya se liquidó por ticket, su liquidación sigue igual pero ya no apunta a este lote.
   await client.query("UPDATE liquidations SET lot_id = NULL WHERE weighing_ticket_id = $1 AND lot_id = $2", [ticketId, lotId]);
-  const nuevo = (await client.query(
-    `UPDATE drying_tunnel_reports d SET input_weight_kg = x.kg, total_quintals = x.qq
-       FROM (SELECT sum(net_weight_kg) AS kg, sum(quintals) AS qq FROM drying_tunnel_report_lots WHERE drying_report_id = $1) x
-      WHERE d.id = $1 RETURNING d.total_quintals::float AS qq, d.input_weight_kg::float AS kg`, [dryingId]
-  )).rows[0];
   await client.query(
     `UPDATE lots l SET farmer_id = CASE WHEN (SELECT count(DISTINCT w.farmer_id) FROM weighing_tickets w WHERE w.lot_id = l.id) = 1
                                         THEN (SELECT min(w.farmer_id::text)::uuid FROM weighing_tickets w WHERE w.lot_id = l.id) ELSE NULL END
       WHERE l.id = $1`, [lotId]
   );
-  if (rep.process_report_id) {
-    await client.query(
-      `UPDATE lot_process_reports
-          SET report_data = report_data || jsonb_build_object('total_quintals', $2::numeric, 'total_weight_kg', $3::numeric,
-                'lots', COALESCE((SELECT jsonb_agg(x) FROM jsonb_array_elements(COALESCE(report_data->'lots', '[]'::jsonb)) x
-                                   WHERE x->>'weighing_ticket_id' IS DISTINCT FROM $4), '[]'::jsonb))
-        WHERE id = $1`,
-      [rep.process_report_id, nuevo.qq, nuevo.kg, ticketId]
-    );
-  }
-  // Cuadrilla: lo asignado por QQ baja en la misma proporción; lo que va por sacos se corrige a mano.
-  let sacosAMano = false;
-  if (!rep.cuadrilla_pagada_fuera && antesQq > 0) {
-    const asig = (await client.query(
-      "SELECT id, worker_name, activity_id, momento, quintals::float AS quintals FROM drying_tunnel_cuadrilla WHERE drying_report_id = $1", [dryingId]
-    )).rows;
-    for (const a of asig) {
-      const empaque = a.momento === "VACIADO" ? rep.botada_empaque ?? rep.recepcion_empaque : rep.recepcion_empaque;
-      if (empaque === "SACOS") { sacosAMano = true; continue; }
-      const qq = Math.round(Number(a.quintals) * (nuevo.qq / antesQq) * 1000) / 1000;
-      await client.query("UPDATE drying_tunnel_cuadrilla SET quintals = $2 WHERE id = $1", [a.id, qq]);
-      const entrada = await client.query(
-        "SELECT to_char(work_date, 'YYYY-MM-DD') AS dia FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND momento = $2 AND lower(btrim(worker_name)) = lower(btrim($3))",
-        [dryingId, a.momento, a.worker_name]
-      );
-      if (entrada.rowCount) {
-        await upsertCuadrillaSecadoraEntry(client, {
-          referencia_id: dryingId, tunnel_number: Number(t), momento: a.momento, activity_id: a.activity_id,
-          worker_name: a.worker_name, quantity: qq, work_date: entrada.rows[0].dia, created_by: userId, accionista_id: rep.accionista_id
-        });
-      }
-    }
-  }
+  const { nuevo, sacosAMano } = await recalcularTotalDeSecado(client, dryingId, userId, ticketId);
   return { ticket: m.lot_code as string, total_quintals: nuevo.qq, input_weight_kg: nuevo.kg, sacos_a_mano: sacosAMano };
 }
 

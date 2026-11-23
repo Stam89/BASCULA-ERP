@@ -7,7 +7,7 @@ Actualizado: 2026-11-23
 - Secadoras › editar un secado en proceso: botón «Quitar» por peso (`quitarTicketDeSecado`, POST /process-flow/drying/:id/quitar-ticket), también con el
   motor encendido. Recalcula QQ/kg (suma de los pesos que quedan), informe y cuadrilla; el ticket queda libre. Frenos: único peso, cuadrilla
   pagada, finalizado o en Producción. Simulacro `quitar_peso_secado`.
-- Pendiente: `cambio-bascula.ts` corrige el peso del ticket pero no el total del secado ni su cuadrilla (ticket 558: 17.41 → 17.80).
+- `services/secado-total.ts` (`recalcularTotalDeSecado`): al quitar un peso o al aplicar un cambio de la báscula se recalculan total del secado, informe y cuadrilla por pagar; lo pagado, el combustible repartido y el cobro de secado solo se avisan. Simulacro `cambio_bascula_secado`.
 
 ## Cambio anterior: 🌾 Fomentos iguales al Excel + datos corregidos (2026-11-23)
 
