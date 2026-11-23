@@ -1,8 +1,20 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-06
+Actualizado: 2026-11-23
 
-## Último cambio: 🧰 Arreglos del 12/11 (compras, medio de pago, despacho, Transporte, liquidación)
+## Último cambio: 🌾 Fomentos iguales al Excel + datos corregidos (2026-11-23)
+
+- **Datos (orden del dueño, con respaldo en `C:\BASCULA-Respaldos`)**: 29 trabajos del 10–18/11 ($1,625.25, caja CEYRO) pasaron de
+  GASTO_OPERATIVO a su máquina con hoja de vida (máquinas nuevas: TURBINA POLVILLERA, VENTILADOR DE TAMO, CARACOL DE POLVILLO,
+  ELEVADOR); quincena de Lenin ($40, 14/11) a PAGO_MANO_OBRA; fomento ROBERTO 13/11 de $8 a $80; GEOVANY $592.50 cobrado el 18/11
+  en la caja de ROVINSON. Fomentos de ROVINSON = hoja del Excel (VALOR 79,492.21 + INVERSION 33,352.50): 48 renglones, 6 cuentas
+  «(INVERSION)» con renta 0, 18 cuentas APROBADOS en cero y 11 ciclos cerrados (interés de noviembre $1,774.97 = hoja INTERES 26).
+  Diferencias a propósito: PINILLO +150 (13/11) y NELSON +20 (06/11) están en la caja y no en la hoja; JORGE CANCLON 17.57 va al 7% en
+  su hoja y al 4% aquí. ANIBAL FAJARDO conserva su pago por banco de 2,572.09 (incluye $57 que la hoja tiene en ROVINSON ANIBAL CHEGUEVARA).
+- **Importador del mosaico** (`fomentoMosaico.ts`): sin «RENTA:» tomaba «CUADRAS: 0» como interés 0% (16 cuentas sin gasto adm.).
+- El arroz de las cuentas ya hechas (ROBERTO 88.84 QQ, ISIDRO 20.04, LIBERATO) sigue sin liquidar: al liquidar NO descontar fomento otra vez.
+
+## Cambio anterior: 🧰 Arreglos del 12/11 (compras, medio de pago, despacho, Transporte, liquidación)
 
 - **Compras**: el tipo de pago ya no viene en «Contado»: hay que elegirlo. El pago de una compra (cash_movements
   reference_type 'purchase', COMPRA_GENERAL) ya no se anula suelto en Caja (409). Nuevo `POST /purchases/:id/a-credito`

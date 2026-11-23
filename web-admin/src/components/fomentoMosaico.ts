@@ -96,8 +96,10 @@ export function leerCuadros(data: Celda[][]): { cuadros: CuadroMosaico[]; sinNom
       }
       // Sin rótulo «NOMBRE:»: el primer nombre de la fila de arriba del cuadro.
       if (!cliente) for (let cc = ini; cc <= ini + 4 && !cliente; cc++) if (esNombre(at(r - 3, cc))) cliente = texto(at(r - 3, cc));
-      // Sin rótulo «RENTA:»: el número de la segunda fila (como en el primer cuadro de la hoja).
-      if (renta == null) for (let cc = ini; cc <= ini + 3 && renta == null; cc++) { const n = numero(at(r - 2, cc)); if (n != null && n >= 0 && n <= 0.5 && typeof at(r - 2, cc) === "number") renta = n; }
+      // Sin rótulo «RENTA:»: el número de la segunda fila (como en el primer cuadro de la hoja). Si esa fila es la de
+      // «CUADRAS:» ese número son cuadras, no interés: «CUADRAS: 0» entraba como renta 0 % (revisado 2026-11-23).
+      const filaDeCuadras = Array.from({ length: fin - ini + 1 }, (_, k) => norm(at(r - 2, ini + k)).replace(/\s/g, "")).some((t) => t.startsWith("CUADRAS"));
+      if (renta == null && !filaDeCuadras) for (let cc = ini; cc <= ini + 3 && renta == null; cc++) { const n = numero(at(r - 2, cc)); if (n != null && n >= 0 && n <= 0.5 && typeof at(r - 2, cc) === "number") renta = n; }
 
       const entregas: EntregaMosaico[] = [];
       const sumanSinValor: number[] = [];
