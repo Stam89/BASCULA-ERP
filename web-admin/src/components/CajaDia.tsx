@@ -62,8 +62,9 @@ function Elegir({ id, valor, opciones, placeholder, onElegir }: { id: string; va
   </>;
 }
 
-export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, reglas, memoria, puedeEditar, puedeAnular, onCambio, onNomina, onFormulario, avisar }: {
-  cajaId: string; matriz: { id: string; nombre: string };
+export function CajaDia({ version, cajaId, matriz, productos, bodegaId, categorias, reglas, memoria, puedeEditar, puedeAnular, onCambio, onNomina, onFormulario, avisar }: {
+  /** Sube cuando otro equipo guardó algo: se vuelve a leer el día. */
+  version: number; cajaId: string; matriz: { id: string; nombre: string };
   productos: ProductoHoja[]; bodegaId: string | null;
   categorias: Array<{ codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO" }>;
   reglas: ReglaCaja[]; memoria: Array<{ concepto: string; category: string }>;
@@ -96,7 +97,7 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
       setDia(d); setCtx(c); setError("");
     } catch (e) { if (n === pedido.current) setError(e instanceof Error ? e.message : "No se pudo leer la caja"); }
   }, [cajaId]);
-  useEffect(() => { void cargar(fecha); }, [cargar, fecha]);
+  useEffect(() => { void cargar(fecha); }, [cargar, fecha, version]);
 
   const apoyo = useMemo<ApoyoDia | null>(() => {
     if (!ctx || !dia) return null;

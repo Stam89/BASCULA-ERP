@@ -1,3 +1,4 @@
+import { anotarCambio } from "../services/cambios.js";
 import type { NextFunction, Request, Response } from "express";
 import { pool } from "../db/pool.js";
 import type { AuthenticatedRequest } from "../auth/require-auth.js";
@@ -110,6 +111,9 @@ export function auditMiddleware(req: Request, res: Response, next: NextFunction)
     // Renovar la sesión no es una acción de nadie: pasa sola y tapaba lo demás (180 de 248 filas en un día).
     if (segment === "auth" && originalUrl.split("?")[0].endsWith("/refresh")) return;
     if (res.locals.envioRepetido) return; // reintento de algo ya guardado: no pasó nada nuevo
+
+    // 🔄 Los demás equipos se enteran de que algo cambió (leer avisos o ver una vista previa no cambia nada).
+    if (!denegado && segment !== "notificaciones" && !/preview|simular/.test(originalUrl)) anotarCambio(req.get("x-equipo"));
 
     const label = RESOURCE_LABELS[segment] || segment;
     const verb = method === "POST" ? "Creó" : method === "PUT" ? "Actualizó" : method === "DELETE" ? "Eliminó" : "Modificó";

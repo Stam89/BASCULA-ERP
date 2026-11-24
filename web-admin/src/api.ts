@@ -49,8 +49,11 @@ export type OpcionesApi = {
   renglon?: unknown;
 };
 
+// Identifica a esta pantalla abierta: el servidor no le avisa de lo que ella misma guardó (backend services/cambios.ts).
+const EQUIPO = Array.from(crypto.getRandomValues(new Uint8Array(9)), (b) => b.toString(36)).join("");
+
 function authHeaders(opts?: OpcionesApi): Record<string, string> {
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { "X-Equipo": EQUIPO };
   try {
     const raw = localStorage.getItem(authStorageKey);
     const token = raw ? (JSON.parse(raw) as { token?: string }).token : undefined;

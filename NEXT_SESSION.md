@@ -9,6 +9,10 @@ Actualizado: 2026-11-24
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-24 · Las pantallas se ponen al día solas
+- Lo que guarda otro equipo se ve en ~20 s: `services/cambios.ts` (marca en memoria, sube en `auditMiddleware`; `X-Equipo` evita contar lo propio) viaja en `GET /notificaciones`. En `App.tsx`, `revisarCambios` espera si se escribe o hay ventana abierta y solo corre en las pestañas de su lista (no nómina, liquidaciones ni ajustes).
+- «↻ Actualizar» también recarga lo propio de la pestaña (`recargarPestana`): antes en Producción no traía el historial ni los procesos guardados.
+
 ## 2026-11-24 · App de la báscula v11.58 (código 249) y su parte en el ERP
 - App en `C:\Users\Usuario\AndroidStudioProjects\BASCULA` (fuera del repo, sin git). Copia de la 11.57: `C:\BASCULA-Respaldos\app-bascula-v11.57-antes-20261123`. Base Room sigue en v6.
   **Pendiente del dueño: instalarla ENCIMA en la tablet** (Menú › Preparar actualización, sin desinstalar). Se probó completa en una tablet virtual, no en la física.

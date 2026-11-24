@@ -5097,12 +5097,12 @@ export function App() {
     return checks.filter(Boolean).length;
   }, [dashboard.current_cash_register, farmers.length, insumos.length, products.length, warehouses.length]);
 
-  async function refresh() {
+  async function refresh(silencioso = false) {
     // Mismos módulos que el backend (READ_MODULES_BY_PREFIX.liquidations) para leer liquidaciones.
     const permitidos = accionistas.find((a) => a.id === activeAccionistaId)?.allowed_modules ?? [];
     const puedeLeerLiquidaciones = authUser?.role_name === "ADMINISTRADOR"
       || ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora"].some((m) => permitidos.includes(m) || permitidos.includes(`EDIT:${m}`));
-    setLoading(true);
+    if (!silencioso) setLoading(true);
     try {
       const online = await checkHealth();
       setApiOnline(online);
@@ -5152,7 +5152,7 @@ export function App() {
       // Con servidor, un error de verdad se sigue mostrando; sin servidor ya lo dice el aviso rojo «Sin conexión».
       if (online && erroresCarga.length) throw erroresCarga[0];
     } finally {
-      setLoading(false);
+      if (!silencioso) setLoading(false);
     }
   }
 
@@ -9664,7 +9664,8 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     } catch (e) { console.error(e); }
   }
 
-  useEffect(() => {
+  // Lo propio de cada pestaña (lo común lo trae refresh()). También lo usan el botón «Actualizar» y la recarga sola.
+  function recargarPestana() {
     if (activeTab === "Fomentos") refreshFomentos().catch(() => undefined);
     // Liquidaciones también necesita los fomentos: al elegir agricultor se
     // carga automáticamente su deuda de fomento como descuento.
@@ -9702,16 +9703,48 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     if (activeTab === "Por Pagar") refreshPayables().catch(() => undefined);
     // Secadoras y Nómina necesitan las tarifas (precios de gas/diesel).
     if (activeTab === "Secadoras" || activeTab === "Nomina") loadLaborRates().catch(() => undefined);
-    if (activeTab === "Secadoras") { loadMotorActive(motorActivo).catch(() => undefined); loadSecadorGuardia(false).catch(() => undefined); }
     if (activeTab === "Nomina") refreshNomina().catch(() => undefined);
     if (activeTab === "Cuadrilla") refreshCuadrilla().catch(() => undefined);
     if (activeTab === "Servicio Pilado") { refreshPilado().catch(() => undefined); refreshCobros().catch(() => undefined); refreshServiceDriedLots().catch(() => undefined); loadLaborRates().catch(() => undefined); }
     if (activeTab === "Seleccion") { refreshSelection().catch(() => undefined); refreshSacks().catch(() => undefined); }
     if (activeTab === "Dashboard" && canSeePanel) refreshPanel().catch(() => undefined);
-    if (activeTab === "Configuracion") { refreshConfig().catch(() => undefined); loadAdminStaff().catch(() => undefined); }
     if (activeTab === "Costos Operativos") refreshCostos().catch(() => undefined);
     if (activeTab === "Estados Financieros") loadFinanzas().catch((e) => addToast(e.message, "error"));
+  }
+  useEffect(() => {
+    recargarPestana();
+    // Solo al entrar: estas cargas reescriben lo que se está llenando (motor de la secadora, ajustes).
+    if (activeTab === "Secadoras") { loadMotorActive(motorActivo).catch(() => undefined); loadSecadorGuardia(false).catch(() => undefined); }
+    if (activeTab === "Configuracion") { refreshConfig().catch(() => undefined); loadAdminStaff().catch(() => undefined); }
   }, [activeTab, motorActivo, activeAccionistaId]);
+
+  // 🔄 OTRO EQUIPO GUARDÓ ALGO (pedido del dueño 2026-11-24: terminó una producción en el celular y la PC no se enteraba): la
+  // campanita trae una marca que cambia y la pantalla se recarga sola. Espera si hay una ventana abierta o se está escribiendo;
+  // no corre en las pestañas con formularios que una recarga reescribiría (nómina, liquidaciones, ajustes…).
+  const marcaCambios = useRef<string | null>(null);
+  const cambioPendiente = useRef(false);
+  const [recargasSolas, setRecargasSolas] = useState(0);
+  const recargarTodo = (silencioso: boolean) => {
+    recargarPestana();
+    if (activeTab === "Bascula") refreshBasculaTickets().catch(() => undefined);
+    if (activeTab === "Caja") refreshCaja().catch(() => undefined);
+    setRecargasSolas((n) => n + 1);
+    return refresh(silencioso);
+  };
+  const revisarCambios = useRef(() => undefined as void);
+  revisarCambios.current = () => {
+    if (!cambioPendiente.current || !authUser || document.hidden) return;
+    if (!["Dashboard", "Bascula", "Secadoras", "Produccion", "Gana", "Inventario", "Ventas", "Compras", "Caja", "Fomentos", "Por Cobrar", "Por Pagar", "Agricultores"].includes(activeTab)) return;
+    const el = document.activeElement as HTMLInputElement | null;
+    const escribiendo = !!el && ((/^(INPUT|TEXTAREA)$/.test(el.tagName) && !/^(button|checkbox|radio|date|search)$/.test(el.type) && !!el.value) || el.isContentEditable);
+    if (escribiendo || document.querySelector(".modalOverlay, [role='dialog']")) return;
+    cambioPendiente.current = false;
+    recargarTodo(true).catch(() => undefined);
+  };
+  useEffect(() => {
+    const id = window.setInterval(() => revisarCambios.current(), 2000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Carga de datos de cada subpestaña de Configuración. Va en un EFECTO (antes
   // estaba en el onClick de la pestaña), por dos razones: (1) al entrar a
@@ -15372,7 +15405,7 @@ Motivo (obligatorio):`, ""));
             <button
               className="btnSecondary"
               onClick={() => {
-                refresh().catch((e) => setMessage(e.message));
+                recargarTodo(false).catch((e) => setMessage(e.message));
                 // Alertas del Dashboard (sacos por comprar / por terminarse, repuestos).
                 if (activeTab === "Dashboard") {
                   refreshSacks().catch(() => undefined);
@@ -15388,6 +15421,7 @@ Motivo (obligatorio):`, ""));
             </button>
             {/* 🔔 Avisos de cobros/pagos entre socios, Matriz y Transporte. */}
             <CampanitaNotificaciones accionistaKey={authUser ? activeAccionistaId : null}
+              onMarca={(m) => { if (marcaCambios.current !== null && m !== marcaCambios.current) cambioPendiente.current = true; marcaCambios.current = m; }}
               onAbrir={(n) => { if (n.referencia_tipo === "sales_orders" && visibleTabs.includes("Ventas")) { setVentasView("despachos"); irATab("Ventas"); } }} />
             <button type="button" className="btnSecondary" title="Cerrar sesión" aria-label="Cerrar sesión"
               onClick={() => { confirmar("¿Cerrar sesión en este equipo?").then((ok) => { if (ok) logout(); }).catch(() => undefined); }}>
@@ -21208,6 +21242,7 @@ Motivo (obligatorio):`, ""));
                           : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
                       if (cajaDelDia && dashboard.current_cash_register && matrizAccionista) return (
                         <CajaDia
+                          version={recargasSolas}
                           cajaId={dashboard.current_cash_register.id}
                           matriz={{ id: matrizAccionista.id, nombre: matrizName }}
                           productos={productosVentaDetalle()}

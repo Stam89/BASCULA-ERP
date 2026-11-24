@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { pool } from "../../db/pool.js";
 import { asyncRoute } from "../../http/async-route.js";
+import { marcaDeCambios } from "../../services/cambios.js";
 import type { AuthenticatedRequest } from "../../auth/require-auth.js";
 
 // Campanita del ERP: avisos del accionista ACTIVO (p. ej. "CEYRO registró tu
@@ -19,7 +20,7 @@ notificacionesRouter.get("/", asyncRoute(async (req, res) => {
     ),
     pool.query("SELECT count(*)::int AS n FROM notificaciones WHERE accionista_id = $1 AND leida_at IS NULL", [accionistaId])
   ]);
-  res.json({ items: items.rows, no_leidas: noLeidas.rows[0].n });
+  res.json({ items: items.rows, no_leidas: noLeidas.rows[0].n, cambios: marcaDeCambios(req.get("x-equipo")) });
 }));
 
 notificacionesRouter.post("/leer-todas", asyncRoute(async (req, res) => {

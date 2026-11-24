@@ -63,8 +63,10 @@ async function avisarEnEquipo(n: Notificacion) {
   try { new Notification(n.titulo, opciones); } catch { /* el navegador no lo permite */ }
 }
 
-export function CampanitaNotificaciones({ accionistaKey, onAbrir }: {
+export function CampanitaNotificaciones({ accionistaKey, onAbrir, onMarca }: {
   accionistaKey: string | null;
+  /** Marca de cambios del servidor (sube cuando OTRO equipo guarda algo). */
+  onMarca?: (marca: string) => void;
   /** Al tocar un aviso (p. ej. un pedido nuevo → abre la Cola de Despachos). */
   onAbrir?: (n: Notificacion) => void;
 }) {
@@ -76,12 +78,16 @@ export function CampanitaNotificaciones({ accionistaKey, onAbrir }: {
   // Avisos ya vistos en este equipo: solo los NUEVOS suenan / vibran / se muestran en el celular.
   const vistos = useRef<Set<string> | null>(null);
 
+  const avisarMarca = useRef(onMarca);
+  avisarMarca.current = onMarca;
+
   const cargar = useCallback(async () => {
     if (!accionistaKey) return;
     try {
-      const r = await apiGet<{ items: Notificacion[]; no_leidas: number }>("/notificaciones");
+      const r = await apiGet<{ items: Notificacion[]; no_leidas: number; cambios?: string }>("/notificaciones");
       setItems(r.items);
       setNoLeidas(r.no_leidas);
+      if (r.cambios) avisarMarca.current?.(r.cambios);
       if (vistos.current) {
         const nuevos = r.items.filter((n) => !n.leida_at && !vistos.current!.has(n.id));
         for (const n of nuevos.slice(0, 3)) void avisarEnEquipo(n);
