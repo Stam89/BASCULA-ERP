@@ -33,6 +33,8 @@ export type FilaDia = {
   anulado: boolean;
   anulado_motivo: string | null;
   hora: string;
+  /** Orden en que se registró (la hora de otro módulo puede ser de un día anterior). */
+  registro: number;
   por: string | null;
   movimientos: string[];
   maquina: string | null;
@@ -42,7 +44,7 @@ export type FilaDia = {
 type Mov = {
   id: string; movement: "INCOME" | "EXPENSE"; category: string; categoria_nombre: string | null; amount: number; description: string | null; reference_type: string | null;
   reference_id: string | null; created_at: Date; reversal_of: string | null; reversed_at: Date | null; reversed_reason: string | null; medio: string; renglon_id: string | null;
-  maq_activo: string | null; area: string | null; por: string | null; socio: string | null; original_dia: string | null; anulado_dia: string | null;
+  registro?: string | number | null; maq_activo: string | null; area: string | null; por: string | null; socio: string | null; original_dia: string | null; anulado_dia: string | null;
 };
 
 // Lo que otro módulo dejó en la caja, leído de su descripción: quién y qué se hizo.
@@ -134,7 +136,7 @@ const maquinaDe = (m: Mov): string => [m.area, m.maq_activo].filter(Boolean).joi
 
 type RenglonFila = {
   id: string; bloque: Bloque; quien: string; detalle: string; monto: number; sin_gaveta: SinGaveta; flujo: string; datos: Record<string, unknown> | null; reportar: string | null;
-  reportado_at: Date | null; reportado_nota: string | null; anulado_at: Date | null; anulado_motivo: string | null; created_at: Date; por: string | null;
+  reportado_at: Date | null; reportado_nota: string | null; anulado_at: Date | null; anulado_motivo: string | null; created_at: Date; registro?: string | number | null; por: string | null;
 };
 
 /** Arma las filas de un día con lo que hay en la base. Lógica pura (probada aparte). */
@@ -154,7 +156,7 @@ export function armarFilas(fecha: string, movs: Mov[], renglones: RenglonFila[])
       k: `r:${r.id}`, origen: "hoja", bloque: r.bloque, quien: r.quien, detalle: r.detalle, monto: r.monto,
       efecto: anulado ? 0 : round2(vigentes.reduce((s, m) => s + efectoDe(m), 0)), sin_gaveta: r.sin_gaveta, flujo: r.flujo, categoria: suyos[0]?.categoria_nombre ?? null,
       datos: r.datos ?? {}, reportar: r.reportar, reportado_at: r.reportado_at?.toISOString() ?? null, reportado_nota: r.reportado_nota,
-      anulado, anulado_motivo: r.anulado_motivo ?? suyos.find((m) => m.reversed_reason)?.reversed_reason ?? null, hora: r.created_at.toISOString(), por: r.por,
+      anulado, anulado_motivo: r.anulado_motivo ?? suyos.find((m) => m.reversed_reason)?.reversed_reason ?? null, hora: r.created_at.toISOString(), registro: Number(r.registro ?? 0), por: r.por,
       movimientos: suyos.filter((m) => !m.reversed_at).map((m) => m.id), maquina: suyos.map(maquinaDe).find(Boolean) ?? null, socio: suyos.map((m) => m.socio).find(Boolean) ?? null
     });
   }
@@ -182,19 +184,19 @@ export function armarFilas(fecha: string, movs: Mov[], renglones: RenglonFila[])
     (anuladoHoy ? anulados : filas).push({
       k: `m:${m.id}`, origen: "otro", bloque: m.movement === "INCOME" ? "INGRESO" : flujo === "transporte" ? "TRANSPORTE" : "EGRESO",
       quien, detalle, monto: m.amount, efecto: anuladoHoy || sin ? 0 : efectoDe(m), sin_gaveta: sin, flujo, categoria: m.categoria_nombre, datos: {},
-      reportar: null, reportado_at: null, reportado_nota: null, anulado: anuladoHoy, anulado_motivo: m.reversed_reason, hora: m.created_at.toISOString(), por: m.por,
+      reportar: null, reportado_at: null, reportado_nota: null, anulado: anuladoHoy, anulado_motivo: m.reversed_reason, hora: m.created_at.toISOString(), registro: Number(m.registro ?? 0), por: m.por,
       movimientos: m.reversal_of || m.reversed_at ? [] : [m.id], maquina: maquinaDe(m) || null, socio: m.socio
     });
   }
-  const porHora = (a: FilaDia, b: FilaDia) => (a.hora < b.hora ? -1 : a.hora > b.hora ? 1 : 0);
-  return { filas: filas.sort(porHora), anulados: anulados.sort(porHora) };
+  const porRegistro = (a: FilaDia, b: FilaDia) => a.registro - b.registro || (a.hora < b.hora ? -1 : a.hora > b.hora ? 1 : 0);
+  return { filas: filas.sort(porRegistro), anulados: anulados.sort(porRegistro) };
 }
 
 export async function leerDia(db: Db, caja: CajaHoja, fecha: string) {
   const anterior = await saldoGavetaAntesDe(db, caja.id, fecha);
   const movs = (await db.query(
     `SELECT m.id, m.movement, m.category, k.nombre AS categoria_nombre, m.amount::float AS amount, m.description, m.reference_type, m.reference_id, m.created_at,
-            m.reversal_of, m.reversed_at, m.reversed_reason, COALESCE(m.medio, 'EFECTIVO') AS medio, m.renglon_id, m.maq_activo, m.area, u.name AS por, s.name AS socio,
+            m.reversal_of, m.reversed_at, m.reversed_reason, COALESCE(m.medio, 'EFECTIVO') AS medio, m.renglon_id, m.registro, m.maq_activo, m.area, u.name AS por, s.name AS socio,
             ${DIA("o.created_at")}::text AS original_dia,
             (SELECT ${DIA("x.created_at")}::text FROM cash_movements x WHERE x.reversal_of = m.id ORDER BY x.created_at LIMIT 1) AS anulado_dia
        FROM cash_movements m
@@ -203,12 +205,12 @@ export async function leerDia(db: Db, caja: CajaHoja, fecha: string) {
        LEFT JOIN accionistas s ON s.id = m.por_cuenta_de
        LEFT JOIN cash_movements o ON o.id = m.reversal_of
       WHERE m.cash_register_id = $1 AND ${DIA("m.created_at")} = $2::date
-      ORDER BY m.created_at, m.id`,
+      ORDER BY m.created_at, m.registro`,
     [caja.id, fecha]
   )).rows as Mov[];
   const renglones = (await db.query(
     `SELECT r.id, r.bloque, r.quien, r.detalle, r.monto::float AS monto, r.sin_gaveta, r.flujo, r.datos, r.reportar, r.reportado_at, r.reportado_nota,
-            r.anulado_at, r.anulado_motivo, r.created_at, u.name AS por
+            r.anulado_at, r.anulado_motivo, r.created_at, r.registro, u.name AS por
        FROM caja_renglones r LEFT JOIN users u ON u.id = r.created_by
       WHERE r.cash_register_id = $1 AND r.fecha = $2::date ORDER BY r.created_at, r.id`,
     [caja.id, fecha]

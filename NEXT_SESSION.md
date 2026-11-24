@@ -7,6 +7,7 @@ Actualizado: 2026-11-24
   Orden «Como se registró» (por defecto) o «Por fecha» (se recuerda por equipo). Buscador, Todo/Entradas/Salidas y renglón por día.
 - «Tipo de operación» (0 automático, 1 venta, 2 pago arroz, 3 compra, 4 gasto): fija el destino; arroz y compra calculan cantidad × precio. El tipo se queda para la siguiente fila.
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
+- Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
 ## 2026-11-24 · App de la báscula v11.58 (código 249) y su parte en el ERP
 - App en `C:\Users\Usuario\AndroidStudioProjects\BASCULA` (fuera del repo, sin git). Copia de la 11.57: `C:\BASCULA-Respaldos\app-bascula-v11.57-antes-20261123`. Base Room sigue en v6.

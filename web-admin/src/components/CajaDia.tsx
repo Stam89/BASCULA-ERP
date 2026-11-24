@@ -10,6 +10,8 @@ import "./cajaDia.css";
 // 📒 CAJA DEL DÍA (pedido del dueño 2026-11-23): la hoja de un día como su Excel. Tres bloques (ingresos, egresos de la piladora,
 // egresos de Transporte); se escribe quién, qué y cuánto, y debajo la hoja dice en palabras simples a dónde se va. Lo que no
 // entiende lo pregunta; nada se guarda adivinando.
+// Dos vistas (pedido del dueño 2026-11-24): «Lo último arriba» (una sola captura fija y los renglones en el orden en que se
+// registraron, el más nuevo primero con el saldo que quedó después de él) y «Por bloques», la de su Excel.
 
 type Fila = {
   k: string; origen: "hoja" | "otro"; bloque: Bloque; quien: string; detalle: string; monto: number; efecto: number; sin_gaveta: string; flujo: string; categoria: string | null;
@@ -28,6 +30,9 @@ const BLOQUES: Array<{ b: Bloque; titulo: string; sub: string; que: string }> = 
   { b: "EGRESO", titulo: "⬆ Egresos piladora", sub: "lo que sale por la piladora y los socios", que: "¿Qué se hizo?" },
   { b: "TRANSPORTE", titulo: "🚜 Egresos transporte / cosechadora", sub: "sale de la misma gaveta", que: "¿Qué se hizo?" }
 ];
+const CORTO: Record<Bloque, string> = { INGRESO: "⬇ Ingreso", EGRESO: "⬆ Egreso piladora", TRANSPORTE: "🚜 Egreso transporte" };
+const MARCA: Record<Bloque, string> = { INGRESO: "⬇", EGRESO: "⬆", TRANSPORTE: "🚜" };
+const CLAVE_VISTA = "bascula-erp:caja-dia-vista";
 const FLUJOS: Record<Bloque, Array<[Flujo, string]>> = {
   INGRESO: [["venta", "🛒 Venta al detalle"], ["cobro", "📥 Cobro de una cuenta"], ["fomento_dev", "🌾 Devuelve fomento"], ["banco", "🏦 Retiro del banco"], ["otro", "Otro ingreso"]],
   EGRESO: [["fomento", "🌾 Fomento"], ["agricultor", "🌾 Arroz a un agricultor"], ["pago", "📤 Pago de una cuenta"], ["nomina", "🗓️ Nómina pendiente"], ["maquina", "🔧 Máquina o repuesto"],
@@ -76,6 +81,12 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
   const corriendo = useRef(false);
   const pedido = useRef(0);
   const refs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [vista, setVista] = useState<"ultimo" | "bloques">(() => { try { return localStorage.getItem(CLAVE_VISTA) === "bloques" ? "bloques" : "ultimo"; } catch { return "ultimo"; } });
+  const [bloque, setBloque] = useState<Bloque>("EGRESO");
+  const [busca, setBusca] = useState("");
+  const [ver, setVer] = useState<"" | Bloque>("");
+  const [nuevos, setNuevos] = useState<Set<string>>(new Set());
+  const scroll = useRef<HTMLDivElement | null>(null);
 
   const cargar = useCallback(async (f: string) => {
     const n = ++pedido.current;
@@ -137,6 +148,7 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
     if (corriendo.current || !apoyo) return;
     corriendo.current = true;
     let guardados = 0;
+    const hechos: string[] = [];
     try {
       for (;;) {
         const sig = colaRef.current.find((x) => x.estado === "espera");
@@ -145,6 +157,7 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
         try {
           await guardarRenglon({ id: sig.id, fecha: f, bloque: sig.bloque, b: sig.b, plan: sig.plan, apoyo });
           guardados++;
+          hechos.push(`r:${sig.id}`);
           cambiar((c) => c.filter((x) => x.id !== sig.id));
           if (sig.plan.apodo && sig.b.q.trim()) apiPost("/cash/dia/apodos", { tipo: sig.plan.apodo.tipo, apodo: sig.b.q.trim(), nombre: sig.plan.apodo.nombre }).catch(() => undefined);
         } catch (e) {
@@ -152,7 +165,13 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
           cambiar((c) => c.map((x) => (x.id === sig.id ? { ...x, estado: "error", error: m } : x)));
         }
       }
-      if (guardados) { await cargar(f); await onCambio().catch(() => undefined); }
+      if (guardados) {
+        setNuevos(new Set(hechos));
+        setTimeout(() => setNuevos((n) => (hechos.some((x) => n.has(x)) ? new Set() : n)), 6500);
+        scroll.current?.scrollTo({ top: 0 });
+        await cargar(f);
+        await onCambio().catch(() => undefined);
+      }
     } finally {
       corriendo.current = false;
       if (colaRef.current.some((x) => x.estado === "espera")) void procesar(f);
@@ -170,7 +189,25 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
     enfocar(bl, "q");
     void procesar(dia.fecha);
   };
+  const verComo = (v: "ultimo" | "bloques") => { setVista(v); try { localStorage.setItem(CLAVE_VISTA, v); } catch { /* sin memoria del navegador */ } };
+  // Cambiar el tipo se lleva lo que ya estaba escrito.
+  const cambiarBloque = (a: Bloque) => {
+    const x = borradores[bloque];
+    if (a !== bloque) {
+      if (x.q || x.d || x.m) setBorradores((s) => ({ ...s, [bloque]: vacio(), [a]: { ...vacio(), q: x.q, d: x.d, m: x.m } }));
+      setBloque(a);
+    }
+    setTimeout(() => enfocar(a, !x.q && !x.d ? "q" : x.d ? "m" : "d"), 0);
+  };
   const tecla = (bl: Bloque, c: "q" | "d" | "m") => (e: KeyboardEvent) => {
+    // Con la celda vacía, ← y → cambian el tipo (Alt+número ya cambia de negocio).
+    if (vista === "ultimo" && c === "q" && !borradores[bl].q && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      const tipos = BLOQUES.map((x) => x.b).filter((b) => b !== "TRANSPORTE" || dia?.caja.es_matriz);
+      const i = tipos.indexOf(bl) + (e.key === "ArrowRight" ? 1 : -1);
+      e.preventDefault();
+      if (tipos[i]) cambiarBloque(tipos[i]);
+      return;
+    }
     if (e.key === "Escape") { setBorradores((s) => ({ ...s, [bl]: vacio() })); enfocar(bl, "q"); return; }
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -287,23 +324,98 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
 
   const fila = (f: Fila) => {
     saldo = Math.round((saldo + f.efecto) * 100) / 100;
+    return (
+      <div key={f.k} className={`cjd-f ${f.origen === "hoja" ? "" : "otro"} ${f.quien ? "" : "sinq"}`}>
+        <span className="q">{f.quien}</span>
+        <span className="d">{f.detalle}{etiquetas(f)}</span>
+        <span className={`m n ${f.sin_gaveta ? "fuera" : f.efecto >= 0 ? "ent" : "sal"}`}>{f.efecto < 0 ? "−" : ""}{money(f.monto)}</span>
+        <span className="s n">{f.efecto ? money(saldo) : ""}</span>
+        <span className="x">{botonAnular(f)}</span>
+      </div>
+    );
+  };
+
+  const etiquetas = (f: Fila) => {
     const hoja = f.origen === "hoja";
     const trabajo = hoja && (f.flujo === "maquina" || f.flujo === "transporte") && typeof f.datos.fecha_trabajo === "string" ? f.datos.fecha_trabajo : null;
     return (
-      <div key={f.k} className={`cjd-f ${hoja ? "" : "otro"} ${f.quien ? "" : "sinq"}`}>
-        <span className="q">{f.quien}</span>
-        <span className="d">{f.detalle}
-          <span className="cjd-tags">
-            <span className="cjd-t">{ICONO[f.flujo] ?? f.categoria ?? "otro"}{f.maquina ? ` · ${f.maquina}` : ""}{f.socio ? ` · ${f.socio}` : ""}</span>
-            {f.sin_gaveta && <span className="cjd-t ba">{FUERA[f.sin_gaveta] ?? f.sin_gaveta}: no mueve la gaveta</span>}
-            {f.reportar && <span className={`cjd-t ${f.reportado_at ? "ok" : "av"}`}>{f.reportado_at ? `✓ reportó ${f.reportar}` : `⏳ por reportar · ${f.reportar}`}</span>}
-            {trabajo && <label className="cjd-hizo">📅 se hizo el <input type="date" disabled={!puedeEditar} max={dia.hoy} value={trabajo} onChange={(e) => { void hizo(f, e.target.value); }} /></label>}
-            {!hoja && <span className="cjd-tenue">desde otro módulo</span>}
-          </span>
-        </span>
-        <span className={`m n ${f.sin_gaveta ? "fuera" : f.efecto >= 0 ? "ent" : "sal"}`}>{f.efecto < 0 ? "−" : ""}{money(f.monto)}</span>
-        <span className="s n">{f.efecto ? money(saldo) : ""}</span>
-        <span className="x">{hoja && puedeAnular && <button type="button" aria-label={`Anular ${f.quien} ${f.detalle}`} title={`Anular${f.por ? ` · lo escribió ${f.por}` : ""}`} onClick={() => { void anular(f); }}>✕</button>}</span>
+      <span className="cjd-tags">
+        <span className="cjd-t">{ICONO[f.flujo] ?? f.categoria ?? "otro"}{f.maquina ? ` · ${f.maquina}` : ""}{f.socio ? ` · ${f.socio}` : ""}</span>
+        {f.sin_gaveta && <span className="cjd-t ba">{FUERA[f.sin_gaveta] ?? f.sin_gaveta}: no mueve la gaveta</span>}
+        {f.reportar && <span className={`cjd-t ${f.reportado_at ? "ok" : "av"}`}>{f.reportado_at ? `✓ reportó ${f.reportar}` : `⏳ por reportar · ${f.reportar}`}</span>}
+        {trabajo && <label className="cjd-hizo">📅 se hizo el <input type="date" disabled={!puedeEditar} max={dia.hoy} value={trabajo} onChange={(e) => { void hizo(f, e.target.value); }} /></label>}
+        {!hoja && <span className="cjd-tenue">desde otro módulo</span>}
+      </span>
+    );
+  };
+  const botonAnular = (f: Fila) => f.origen === "hoja" && puedeAnular && <button type="button" aria-label={`Anular ${f.quien} ${f.detalle}`} title={`Anular${f.por ? ` · lo escribió ${f.por}` : ""}`} onClick={() => { void anular(f); }}>✕</button>;
+  const avisoCola = (c: EnCola) => (
+    <span className="cjd-tags">{c.estado === "error" ? <>
+      <span className="cjd-t av">No se guardó: {c.error}</span>
+      <button type="button" className="cjd-link" onClick={() => { cambiar((x) => x.map((y) => (y.id === c.id ? { ...y, estado: "espera" } : y))); void procesar(dia.fecha); }}>Reintentar</button>
+      <button type="button" className="cjd-link" onClick={() => { setBloque(c.bloque); setBorradores((s) => ({ ...s, [c.bloque]: c.b })); cambiar((x) => x.filter((y) => y.id !== c.id)); }}>Corregir</button>
+    </> : <span className="cjd-tenue">guardando…</span>}</span>
+  );
+  const pie = <>
+    {Math.abs(t.descuadre) > 0.005 && <p className="alertBox">Hay {money(t.descuadre)} que la hoja no explica: avise para revisarlo.</p>}
+    {dia.anulados.length > 0 && <details className="cjd-anul"><summary>Anulados de este día ({dia.anulados.length})</summary>{dia.anulados.map((f) => <p key={f.k}><s>{[f.quien, f.detalle].filter(Boolean).join(" · ")} {money(f.monto)}</s> {f.anulado_motivo}</p>)}</details>}
+  </>;
+
+  // ── Lo último arriba: el saldo se suma en el orden en que se registró y después se da la vuelta ──
+  const ultimo = () => {
+    let s = dia.anterior;
+    const todas = dia.filas.map((f) => { s = Math.round((s + f.efecto) * 100) / 100; return { f, queda: s }; }).reverse();
+    const palabras = norm(busca).split(" ").filter(Boolean);
+    const textoDe = (f: Fila) => `${norm([f.quien, f.detalle, ICONO[f.flujo] ?? "", f.categoria, f.maquina, f.socio, f.reportar, f.por].filter(Boolean).join(" "))} ${f.monto.toFixed(2)} ${f.monto.toFixed(2).replace(".", ",")} ${money(f.monto)}`;
+    const vistas = todas.filter(({ f }) => (!ver || f.bloque === ver) && palabras.every((w) => textoDe(f).includes(w)));
+    const entro = vistas.reduce((x, { f }) => x + Math.max(f.efecto, 0), 0);
+    const salio = vistas.reduce((x, { f }) => x + Math.max(-f.efecto, 0), 0);
+    const tipos = BLOQUES.map((x) => x.b).filter((b) => b !== "TRANSPORTE" || dia.caja.es_matriz);
+    return (
+      <div className="cjd-hoja">
+        {puedeEditar && (
+          <div className="cjd-captura">
+            <div className="cjd-tipos" role="radiogroup" aria-label="Tipo de operación">
+              {tipos.map((b) => <button key={b} type="button" role="radio" aria-checked={bloque === b} className={`b-${b}`} onClick={() => cambiarBloque(b)}>{CORTO[b]}</button>)}
+              <small><kbd>←</kbd> <kbd>→</kbd> tipo · <kbd>Enter</kbd> guarda</small>
+            </div>
+            {captura(bloque, BLOQUES.find((x) => x.b === bloque)?.que ?? "")}
+          </div>
+        )}
+        <div className="cjh-herr">
+          <input className="cjh-busca" type="search" value={busca} placeholder="🔍 Buscar por nombre, detalle o monto" aria-label="Buscar en el día" onChange={(e) => setBusca(e.target.value)} />
+          <div className="cjh-seg" role="group" aria-label="Qué ver">
+            <button type="button" aria-pressed={!ver} onClick={() => setVer("")}>Todo</button>
+            {tipos.map((b) => <button key={b} type="button" aria-pressed={ver === b} onClick={() => setVer(b)}>{b === "INGRESO" ? "⬇ Ingresos" : b === "EGRESO" ? "⬆ Piladora" : "🚜 Transporte"}</button>)}
+          </div>
+        </div>
+        <div className="cjd-scroll" ref={scroll}>
+          <div className="cjd-f lista cab"><span /><span>¿Quién o qué?</span><span>¿Qué se hizo?</span><span className="n">Entradas</span><span className="n">Salidas</span><span className="n">Saldo</span><span /></div>
+          {[...cola].reverse().map((c) => (
+            <div key={c.id} className={`cjd-f lista b-${c.bloque} ${c.estado === "error" ? "err" : "cola"} ${c.b.q ? "" : "sinq"}`}>
+              <span className="i">{MARCA[c.bloque]}</span><span className="q">{c.b.q}</span><span className="d">{c.b.d}{avisoCola(c)}</span>
+              <span className="m n">{c.bloque === "INGRESO" ? money(cuenta(c.b.m)) : ""}</span><span className="m n">{c.bloque === "INGRESO" ? "" : money(cuenta(c.b.m))}</span><span className="s" /><span className="x" />
+            </div>
+          ))}
+          {vistas.map(({ f, queda }) => {
+            const entra = f.efecto ? f.efecto > 0 : f.bloque === "INGRESO";
+            return (
+              <div key={f.k} className={`cjd-f lista b-${f.bloque} ${f.origen === "hoja" ? "" : "otro"} ${f.quien ? "" : "sinq"} ${nuevos.has(f.k) ? "nuevo" : ""}`}>
+                <span className="i" title={CORTO[f.bloque]}>{MARCA[f.bloque]}</span>
+                <span className="q">{f.quien}</span>
+                <span className="d">{f.detalle}{etiquetas(f)}</span>
+                <span className={`m n ${f.sin_gaveta ? "fuera" : "ent"}`}>{entra ? money(f.monto) : ""}</span>
+                <span className={`m n ${f.sin_gaveta ? "fuera" : "sal"}`}>{entra ? "" : money(f.monto)}</span>
+                <span className="s n">{f.efecto ? money(queda) : ""}</span>
+                <span className="x">{botonAnular(f)}</span>
+              </div>
+            );
+          })}
+          {vistas.length === 0 && <p className="cjd-nada">{dia.filas.length ? "Nada de este día coincide con lo que buscas." : "Nada todavía en este día."}</p>}
+          <div className="cjd-f lista inicial"><span className="i" /><span className="q">Saldo anterior</span><span className="d">con lo que arrancó el día</span><span className="m" /><span className="m" /><span className="s n">{money(dia.anterior)}</span><span className="x" /></div>
+        </div>
+        <div className="cjd-f lista total"><span className="i" /><span className="q">{ver || palabras.length ? `Solo lo que se ve (${vistas.length})` : "Totales del día"}</span><span className="d" /><span className="m n ent">{money(entro)}</span><span className="m n sal">{money(salio)}</span><span className="s n">{money(t.disponible)}</span><span className="x" /></div>
+        {pie}
       </div>
     );
   };
@@ -319,6 +431,10 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
       <div className="cjd-dia">
         <button type="button" aria-label="Día anterior" disabled={dia.fecha <= dia.caja.abierta} onClick={() => irA(mover(dia.fecha, -1))}>◀</button>
         <div><b>{larga(dia.fecha)}</b><small>{dia.fecha === dia.hoy ? "hoy" : "un día anterior: lo que escribas queda con esta fecha"}</small></div>
+        <div className="cjd-vistas" role="group" aria-label="Cómo ver la hoja">
+          <button type="button" aria-pressed={vista === "ultimo"} onClick={() => verComo("ultimo")}>⬆ Lo último arriba</button>
+          <button type="button" aria-pressed={vista === "bloques"} onClick={() => verComo("bloques")}>📑 Por bloques (como el Excel)</button>
+        </div>
         <input type="date" aria-label="Ir a un día" min={dia.caja.abierta} max={dia.hoy} value={dia.fecha} onChange={(e) => { if (e.target.value) irA(e.target.value); }} />
         {dia.fecha !== dia.hoy && <button type="button" className="cjd-hoy" onClick={() => irA("")}>Hoy</button>}
         <button type="button" aria-label="Día siguiente" disabled={dia.fecha >= dia.hoy} onClick={() => irA(mover(dia.fecha, 1))}>▶</button>
@@ -330,7 +446,7 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
         <div className="fuerte"><small>Saldo disponible</small><b>{money(t.disponible)}</b><span>solo la gaveta; el banco va aparte</span></div>
       </div>
       <div className="cjd-cuerpo">
-        <div className="cjd-hoja">
+        {vista === "ultimo" ? ultimo() : <div className="cjd-hoja">
           <div className="cjd-f cab"><span>¿Quién o qué?</span><span>¿Qué se hizo?</span><span className="n">Monto</span><span className="n">Saldo</span><span /></div>
           {BLOQUES.filter((x) => x.b !== "TRANSPORTE" || dia.caja.es_matriz).map(({ b, titulo, sub, que }) => {
             const filas = dia.filas.filter((f) => f.bloque === b);
@@ -342,11 +458,7 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
                 {cola.filter((c) => c.bloque === b).map((c) => (
                   <div key={c.id} className={`cjd-f ${c.estado === "error" ? "err" : "cola"}`}>
                     <span className="q">{c.b.q}</span>
-                    <span className="d">{c.b.d}<span className="cjd-tags">{c.estado === "error" ? <>
-                      <span className="cjd-t av">No se guardó: {c.error}</span>
-                      <button type="button" className="cjd-link" onClick={() => { cambiar((x) => x.map((y) => (y.id === c.id ? { ...y, estado: "espera" } : y))); void procesar(dia.fecha); }}>Reintentar</button>
-                      <button type="button" className="cjd-link" onClick={() => { setBorradores((s) => ({ ...s, [b]: c.b })); cambiar((x) => x.filter((y) => y.id !== c.id)); }}>Corregir</button>
-                    </> : <span className="cjd-tenue">guardando…</span>}</span></span>
+                    <span className="d">{c.b.d}{avisoCola(c)}</span>
                     <span className="m n">{money(cuenta(c.b.m))}</span><span /><span />
                   </div>
                 ))}
@@ -355,9 +467,8 @@ export function CajaDia({ cajaId, matriz, productos, bodegaId, categorias, regla
             );
           })}
           <div className="cjd-fin"><span>Saldo disponible (mañana arranca con esto)</span><b>{money(t.disponible)}</b></div>
-          {Math.abs(t.descuadre) > 0.005 && <p className="alertBox">Hay {money(t.descuadre)} que la hoja no explica: avise para revisarlo.</p>}
-          {dia.anulados.length > 0 && <details className="cjd-anul"><summary>Anulados de este día ({dia.anulados.length})</summary>{dia.anulados.map((f) => <p key={f.k}><s>{[f.quien, f.detalle].filter(Boolean).join(" · ")} {money(f.monto)}</s> {f.anulado_motivo}</p>)}</details>}
-        </div>
+          {pie}
+        </div>}
         <aside className="cjd-lado">
           {dia.caja.tipo !== "BANCO" && <Conteo key={dia.fecha} dia={dia} puede={puedeEditar} onGuardar={async (lineas, apartado) => {
             try { await apiPut(`/cash/dia/${cajaId}/conteo`, { fecha: dia.fecha, lineas, apartado }); await cargar(dia.fecha); avisar("Conteo anotado", "success"); } catch (e) { avisar(e instanceof Error ? e.message : "No se pudo guardar", "error"); }
