@@ -272,7 +272,13 @@ export async function importFromFirebase(options: { full?: boolean } = {}): Prom
             const snap = await negocio.collection(COLLECTION).where("numeroTicket", "in", faltan.slice(i, i + 10)).get();
             for (const d of snap.docs) numeros.add(norm(d.get("numeroTicket")));
           }
-          const quitados = await quitarEnEsperaBorrados(idScope ?? "principal", numeros);
+          // Solo vale para pesajes que Firebase ya tuvo ocasión de conocer: los más nuevos llegaron por WiFi y la tablet
+          // los sube a Firebase cuando el operador quiere. Los borrados los avisa la propia tablet (/bascula/eliminados).
+          const marca = Math.max(
+            await getWatermark(`${statePrefix}${COLLECTION}`),
+            await getWatermark(`${statePrefix}${WAITING_COLLECTION}`)
+          );
+          const quitados = await quitarEnEsperaBorrados(idScope ?? "principal", numeros, marca);
           if (quitados) console.log(`[bascula-firebase] ${quitados} ticket(s) en espera ya no están en la báscula: se quitaron de pendientes.`);
         }
       } catch (e) {

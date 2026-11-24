@@ -13,7 +13,8 @@ const tablet = async (path, body, key = KEY, method = "POST") => {
   const t = await r.text(); let d = t; try { d = JSON.parse(t); } catch {}
   return { status: r.status, ok: r.ok, data: d };
 };
-const base = 900000 + Math.floor(Math.random() * 9000);
+// Numeración de la tablet (la serie 900 001+ es solo del ERP y la tablet no la borra ni la renumera).
+const base = 700000 + Math.floor(Math.random() * 9000);
 const tk = (n, extra = {}) => ({ numeroTicket: `${String(n).slice(0, -3)} ${String(n).slice(-3)}`, modo: "principal", cliente: "AGRICULTOR SIMULACRO", placa: "SIM-001", calidad: "GRANO 0.11", calificacion: 12, pesoBruto: 5000, pesoTara: 1000, actualizadoEn: Date.now(), ...extra });
 const fila = async (n) => (await q("SELECT id, gross_weight::float g, tare_weight::float t, net_weight::float net, quintals::float qq, weighing_ticket_id, liquidated_at FROM mobile_synced_tickets WHERE regexp_replace(raw_payload->>'numeroTicket','[^0-9]','','g') = $1::text OR ltrim(regexp_replace(raw_payload->>'numeroTicket','[^0-9]','','g'),'0') = $1::text", [String(n)]));
 

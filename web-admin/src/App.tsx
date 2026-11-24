@@ -15751,6 +15751,20 @@ Motivo (obligatorio):`, ""));
                   {basculaSync ? basculaSync.pendientes : "—"}
                 </div>
               </div>
+              {/* Tablet: cuándo se comunicó y si le falta algo por enviar (lo informa la app v11.58 o posterior) */}
+              {basculaSync?.tablet?.last_seen_at && (
+                <div style={{ textAlign: "center", minWidth: 150 }} title={`${basculaSync.tablet.modelo ?? "Tablet"}${basculaSync.tablet.app_version ? ` · app v${basculaSync.tablet.app_version}` : ""}`}>
+                  <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>📱 Tablet</div>
+                  <div style={{ fontWeight: 700, color: (basculaSync.tablet.pendientes ?? 0) > 0 ? "#b45309" : undefined }}>
+                    {new Date(basculaSync.tablet.last_seen_at).toLocaleString("es-EC", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}
+                    {basculaSync.tablet.pendientes != null && (
+                      <small className="muted" style={{ display: "block", fontWeight: 600 }}>
+                        {basculaSync.tablet.pendientes === 0 ? "nada por enviar" : `${basculaSync.tablet.pendientes} por enviar`}
+                      </small>
+                    )}
+                  </div>
+                </div>
+              )}
               {/* Último envío recibido */}
               <div style={{ textAlign: "center", minWidth: 150 }}>
                 <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Último envío</div>

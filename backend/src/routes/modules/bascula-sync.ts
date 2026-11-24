@@ -7,13 +7,24 @@ import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, requireAuth } from "../../auth/require-auth.js";
 import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
-import { dentroDelCorteSql, leerCorteBascula } from "../../services/bascula-corte.js";
+import { dentroDelCorteSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
+import { SERIE_EMERGENCIA } from "../../utils/manual-bascula-ticket.js";
 import {
   createDeviceToken,
   hashDeviceToken,
+  informeDeTablet,
+  rechazarTabletBloqueada,
   requireBootstrapKey,
   requireDeviceCredential
 } from "../../services/bascula-device-auth.js";
+import {
+  catalogoParaTablet,
+  estadosParaTablet,
+  noBorradoEnTabletSql,
+  registrarEliminadoEnTablet,
+  ticketDeLaTabletSql,
+  type ResultadoEliminado
+} from "../../services/bascula-tablet.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SINCRONIZACIÓN DIRECTA POR WiFi (tablet de báscula → ERP en la red local).
@@ -57,6 +68,15 @@ const registerDeviceSchema = z.object({
 });
 
 const deviceStatusSchema = z.object({ activo: z.boolean() });
+const firmaQuerySchema = z.object({ firma: z.string().trim().max(64).optional().default("") });
+const eliminadosSchema = z.object({
+  deviceId: z.string().optional(),
+  eliminados: z.array(z.object({
+    numeroTicket: z.union([z.string(), z.number()]).transform((v) => String(v)),
+    modo: z.string().optional().default("principal"),
+    eliminadoEn: z.coerce.number().int().positive()
+  })).min(1).max(200)
+});
 const pullQuerySchema = z.object({
   after: z.coerce.number().int().nonnegative().optional().default(0),
   limit: z.coerce.number().int().min(1).max(500).optional().default(100)
@@ -73,18 +93,22 @@ function formatTicketNumber(value: number): string {
 basculaSyncRouter.post("/register-device", asyncRoute(async (req, res) => {
   requireBootstrapKey(req);
   const body = registerDeviceSchema.parse(req.body);
+  // Una tablet bloqueada por el administrador no se reactiva sola volviendo a registrarse.
+  await rechazarTabletBloqueada(body.deviceId);
   const token = createDeviceToken();
-  await pool.query(
-    `INSERT INTO bascula_devices (device_id, token_hash, modelo, last_seen_at)
-     VALUES ($1, $2, $3, now())
+  const alta = await pool.query(
+    `INSERT INTO bascula_devices (device_id, token_hash, modelo, last_seen_at, app_version)
+     VALUES ($1, $2, $3, now(), $4)
      ON CONFLICT (device_id) DO UPDATE
        SET token_hash = EXCLUDED.token_hash,
            modelo = EXCLUDED.modelo,
-           activo = true,
+           app_version = COALESCE(EXCLUDED.app_version, bascula_devices.app_version),
            updated_at = now(),
-           last_seen_at = now()`,
-    [body.deviceId, hashDeviceToken(token), body.modelo || null]
+           last_seen_at = now()
+       WHERE bascula_devices.activo`,
+    [body.deviceId, hashDeviceToken(token), body.modelo || null, informeDeTablet(req).version]
   );
+  if (!alta.rowCount) await rechazarTabletBloqueada(body.deviceId);
   res.status(201).json({ ok: true, deviceId: body.deviceId, token });
 }));
 
@@ -100,7 +124,48 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
     enEspera: body.enEspera ?? false
   });
 
-  res.status(201).json({ ok: true, via: "wifi-directo", ...result });
+  // serverTime: la tablet compara su reloj con el del ERP y avisa si está mal puesto.
+  res.status(201).json({ ok: true, via: "wifi-directo", serverTime: Date.now(), ...result });
+}));
+
+// POST /api/bascula/eliminados
+// Pesajes EN ESPERA que se borraron en la tablet: salen de pendientes (reversible). Nunca toca lo ingresado o completo.
+basculaSyncRouter.post("/eliminados", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const body = eliminadosSchema.parse(req.body);
+  const resultados: Array<{ numeroTicket: string; resultado: ResultadoEliminado }> = [];
+  for (const item of body.eliminados) {
+    if (item.modo.trim().toLowerCase() !== "principal") {
+      resultados.push({ numeroTicket: item.numeroTicket, resultado: "no_existe" });
+      continue;
+    }
+    const cuando = new Intl.DateTimeFormat("es-EC", {
+      timeZone: "America/Guayaquil", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false
+    }).format(new Date(Math.min(item.eliminadoEn, Date.now())));
+    const resultado = await inTransaction((client) => registrarEliminadoEnTablet(client, item, cuando));
+    resultados.push({ numeroTicket: item.numeroTicket, resultado });
+  }
+  res.json({ ok: true, serverTime: Date.now(), resultados });
+}));
+
+// GET /api/bascula/estados
+// En qué quedó cada ticket de la tablet dentro del ERP. Con la misma firma no se vuelve a descargar nada.
+basculaSyncRouter.get("/estados", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const { firma } = firmaQuerySchema.parse(req.query);
+  const actual = await estadosParaTablet(pool);
+  res.json(actual.firma === firma
+    ? { ok: true, igual: true, firma, serverTime: Date.now() }
+    : { ok: true, serverTime: Date.now(), ...actual });
+}));
+
+// GET /api/bascula/catalogo
+// Nombres de los agricultores registrados (y sus otros nombres), para que la tablet los sugiera tal como están en el ERP.
+basculaSyncRouter.get("/catalogo", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const { firma } = firmaQuerySchema.parse(req.query);
+  const actual = await catalogoParaTablet(pool);
+  res.json(actual.firma === firma ? { ok: true, igual: true, firma } : { ok: true, ...actual });
 }));
 
 // GET /api/bascula/pull
@@ -108,6 +173,7 @@ basculaSyncRouter.post("/sync", asyncRoute(async (req, res) => {
 // el ERP. No consulta Firebase ni devuelve el historial completo en cada ciclo.
 // La tablet los fusiona por (modo, número) y nunca reemplaza un ticket local
 // diferente: una colisión se conserva para revisión humana.
+// La serie de emergencia (900 001+) NO se envía: la tablet numera con «el mayor + 1» y seguiría en 900 002.
 basculaSyncRouter.get("/pull", asyncRoute(async (req, res) => {
   await requireDeviceCredential(req);
   const query = pullQuerySchema.parse(req.query);
@@ -117,8 +183,9 @@ basculaSyncRouter.get("/pull", asyncRoute(async (req, res) => {
     mobile_updated_at: string;
   }>(
     `SELECT raw_payload, en_espera, mobile_updated_at::text
-       FROM mobile_synced_tickets
+       FROM mobile_synced_tickets t
       WHERE raw_payload->>'origen' = 'ERP_MANUAL'
+        AND ${ticketDeLaTabletSql("t")}
         AND mobile_updated_at > $1::bigint
       ORDER BY mobile_updated_at ASC, id ASC
       LIMIT $2`,
@@ -142,11 +209,15 @@ basculaSyncRouter.get("/pull", asyncRoute(async (req, res) => {
 // Room después de una desinstalación, sin depender de la cuota de Firebase.
 basculaSyncRouter.get("/restore", asyncRoute(async (req, res) => {
   await requireDeviceCredential(req);
+  // Los 5 000 más nuevos, sin la serie de emergencia ni lo que la propia tablet borró.
   const result = await pool.query<{ raw_payload: unknown; en_espera: boolean }>(
-    `SELECT raw_payload, en_espera
-       FROM mobile_synced_tickets
-      ORDER BY mobile_updated_at ASC, synced_at ASC
-      LIMIT 5000`
+    `SELECT raw_payload, en_espera FROM (
+       SELECT raw_payload, en_espera, mobile_updated_at, synced_at
+         FROM mobile_synced_tickets t
+        WHERE COALESCE(${numeroTicketSql("t")}, 0) <= ${SERIE_EMERGENCIA} AND ${noBorradoEnTabletSql("t")}
+        ORDER BY mobile_updated_at DESC, synced_at DESC
+        LIMIT 5000
+     ) x ORDER BY mobile_updated_at ASC, synced_at ASC`
   );
 
   res.json({
@@ -181,6 +252,8 @@ basculaSyncRouter.post("/delete-and-renumber", asyncRoute(async (req, res) => {
         WHERE COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal') = 'principal'
           AND lower(COALESCE(NULLIF(raw_payload->>'modo', ''), 'principal')) = $1
           AND COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0')::bigint >= $2
+          -- La serie de emergencia 900 001+ no es de la tablet: no se corre (900 001 quedaría en 900 000).
+          AND COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0')::bigint <= ${SERIE_EMERGENCIA}
         ORDER BY COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0')::bigint ASC
         FOR UPDATE`,
       [body.modo, body.numeroTicket]
@@ -253,11 +326,13 @@ basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
               WHERE lower(coalesce(raw_payload->>'modo', 'principal')) = 'principal'
             )::int AS principal_count,
             max(mobile_updated_at)::text AS last_updated
-       FROM mobile_synced_tickets`
+       FROM mobile_synced_tickets t
+      WHERE COALESCE(${numeroTicketSql("t")}, 0) <= ${SERIE_EMERGENCIA} AND ${noBorradoEnTabletSql("t")}`
   );
 
   res.json({
     ok: true,
+    serverTime: Date.now(),
     principalCount: result.rows[0]?.principal_count ?? 0,
     lastUpdated: result.rows[0]?.last_updated ?? null
   });
@@ -268,14 +343,14 @@ basculaSyncRouter.get("/sync-state", asyncRoute(async (req, res) => {
 // La clave evita confundir otro servicio del puerto 4000 con este servidor.
 basculaSyncRouter.get("/discover", asyncRoute(async (req, res) => {
   const auth = await requireDeviceCredential(req);
-  res.json({ ok: true, service: "BASCULA-ERP", version: 2, auth: auth.mode });
+  res.json({ ok: true, service: "BASCULA-ERP", version: 3, auth: auth.mode, serverTime: Date.now() });
 }));
 
 // Administracion web. Nunca devuelve token_hash ni borra historial: bloquear
 // una tablet solo invalida su credencial individual y es reversible.
 basculaSyncRouter.get("/devices", requireAuth, requireAdmin, asyncRoute(async (_req, res) => {
   const result = await pool.query(
-    `SELECT device_id, modelo, activo, created_at, updated_at, last_seen_at
+    `SELECT device_id, modelo, activo, created_at, updated_at, last_seen_at, app_version, pendientes
        FROM bascula_devices
       ORDER BY activo DESC, last_seen_at DESC NULLS LAST, created_at DESC`
   );
@@ -289,7 +364,7 @@ basculaSyncRouter.patch("/devices/:deviceId", requireAuth, requireAdmin, asyncRo
     `UPDATE bascula_devices
         SET activo = $2, updated_at = now()
       WHERE device_id = $1
-      RETURNING device_id, modelo, activo, created_at, updated_at, last_seen_at`,
+      RETURNING device_id, modelo, activo, created_at, updated_at, last_seen_at, app_version, pendientes`,
     [deviceId, body.activo]
   );
   if (!result.rowCount) throw new ApiError(404, "La tablet indicada no esta registrada.");
@@ -302,7 +377,7 @@ basculaSyncRouter.patch("/devices/:deviceId", requireAuth, requireAdmin, asyncRo
 // y agregados; no toca ni bloquea la tabla.
 basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
   const corte = await leerCorteBascula();
-  const [pend, last] = await Promise.all([
+  const [pend, last, tablet] = await Promise.all([
     // "Pendiente" = pesaje del modo principal que aún no se ingresó como materia
     // prima ni se liquidó (mismo criterio que la lista de la vista Báscula,
     // incluido el corte «Contar tickets desde»).
@@ -317,6 +392,11 @@ basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
     ),
     pool.query<{ t: string | null }>(
       "SELECT max(synced_at) AS t FROM mobile_synced_tickets"
+    ),
+    // La tablet que se comunicó de último: cuándo, con qué versión y cuántos tickets le faltan por enviar.
+    pool.query<{ modelo: string | null; app_version: string | null; pendientes: number | null; last_seen_at: string | null }>(
+      `SELECT modelo, app_version, pendientes, last_seen_at FROM bascula_devices
+        WHERE activo ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`
     )
   ]);
 
@@ -324,6 +404,7 @@ basculaSyncRouter.get("/status", requireAuth, asyncRoute(async (_req, res) => {
     ok: true,
     pendientes: pend.rows[0]?.n ?? 0,
     ultimoEnvio: last.rows[0]?.t ?? null,
+    tablet: tablet.rows[0] ?? null,
     deviceKeyRequerida: Boolean(env.deviceSyncKey)
   });
 }));

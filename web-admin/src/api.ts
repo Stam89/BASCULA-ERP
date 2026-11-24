@@ -314,6 +314,8 @@ export type BasculaSyncStatus = {
   ok: boolean;
   pendientes: number;
   ultimoEnvio: string | null;
+  /** La tablet que se comunicó de último (la versión y los pendientes los informa la app v11.58 o posterior). */
+  tablet?: { modelo: string | null; app_version: string | null; pendientes: number | null; last_seen_at: string | null } | null;
   deviceKeyRequerida: boolean;
 };
 
@@ -329,6 +331,8 @@ export type BasculaDevice = {
   created_at: string;
   updated_at: string;
   last_seen_at: string | null;
+  app_version?: string | null;
+  pendientes?: number | null;
 };
 
 export async function apiGetBasculaDevices(): Promise<BasculaDevice[]> {

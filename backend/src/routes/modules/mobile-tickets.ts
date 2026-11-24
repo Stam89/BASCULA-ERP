@@ -660,15 +660,20 @@ export async function enEsperaPendientes(negocioScope: string): Promise<string[]
   );
   return r.rows.map((x) => x.numero);
 }
-export async function quitarEnEsperaBorrados(negocioScope: string, numerosEnFirebase: Set<string>): Promise<number> {
+/**
+ * `hastaMs` = lo más nuevo que Firebase ha recibido de la báscula. Un pesaje más nuevo que eso llegó por WiFi y Firebase
+ * todavía no lo conoce: que no esté allá NO prueba que se borró (así se quitó por error el #512, al minuto de pesarlo).
+ */
+export async function quitarEnEsperaBorrados(negocioScope: string, numerosEnFirebase: Set<string>, hastaMs = Number.MAX_SAFE_INTEGER): Promise<number> {
   const r = await pool.query(
     `UPDATE mobile_synced_tickets t
         SET quitado_at = now(), quitado_motivo = 'Se borró en la app de báscula (estaba en espera del 2º pesaje)'
       WHERE t.en_espera AND t.weighing_ticket_id IS NULL AND t.liquidated_at IS NULL AND t.quitado_at IS NULL
+        AND t.mobile_updated_at <= $3::bigint
         AND COALESCE(NULLIF(t.raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
         AND NOT (COALESCE(NULLIF(ltrim(regexp_replace(COALESCE(t.raw_payload->>'numeroTicket', ''), '[^0-9]', '', 'g'), '0'), ''), '0') = ANY($2::text[]))
       RETURNING t.id`,
-    [negocioScope, [...numerosEnFirebase]]
+    [negocioScope, [...numerosEnFirebase], Math.trunc(hastaMs)]
   );
   return r.rowCount ?? 0;
 }
@@ -1027,10 +1032,14 @@ export async function importBasculaTickets(
   rawTickets: unknown[],
   deviceId = "bascula",
   options: { enEspera?: boolean; idScope?: string } = {}
-): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number; skipped: number }> {
+): Promise<{ imported: Array<{ numeroTicket: string; id: string }>; count: number; skipped: number;
+  rechazados: Array<{ numeroTicket: string; motivo: string }>; porRevisar: string[] }> {
   const enEspera = options.enEspera ?? false;
   const idScope = options.idScope?.trim();
   const imported: Array<{ numeroTicket: string; id: string }> = [];
+  // Para que la tablet le diga al operador CUÁL ticket no entró y por qué, y cuáles ya estaban procesados en el ERP.
+  const rechazados: Array<{ numeroTicket: string; motivo: string }> = [];
+  const porRevisar: string[] = [];
   let skipped = 0;
   for (const raw of rawTickets) {
     // Tolerancia por ticket: en una sincronización COMPLETA (historial de meses)
@@ -1042,6 +1051,8 @@ export async function importBasculaTickets(
     if (!parsed.success) {
       skipped++;
       const nro = (raw as { numeroTicket?: unknown })?.numeroTicket;
+      const falla = parsed.error.issues[0];
+      rechazados.push({ numeroTicket: String(nro ?? ""), motivo: `Dato no válido${falla?.path.length ? ` en ${falla.path.join(".")}` : ""}` });
       console.warn(`[bascula-import] ticket omitido (formato inválido)${nro != null ? ` #${String(nro)}` : ""}: ${parsed.error.issues[0]?.message ?? "sin detalle"}`);
       continue;
     }
@@ -1053,6 +1064,7 @@ export async function importBasculaTickets(
     const canonicalNumber = canonicalBasculaTicketNumber(t.numeroTicket);
     if (!canonicalNumber) {
       skipped++;
+      rechazados.push({ numeroTicket: t.numeroTicket, motivo: "No tiene número de ticket" });
       continue;
     }
     const stableKey = basculaTicketStableKey(t.numeroTicket, t.modo, idScope);
@@ -1121,17 +1133,24 @@ export async function importBasculaTickets(
         quintals = EXCLUDED.quintals,
         mobile_updated_at = EXCLUDED.mobile_updated_at,
         synced_at = now(),
-        raw_payload = EXCLUDED.raw_payload,
+        -- «borradoEnTablet»: la tablet avisó que lo borró. La copia vieja de Firebase (misma versión) no quita esa marca.
+        raw_payload = CASE
+          WHEN $14::boolean AND EXCLUDED.mobile_updated_at = mobile_synced_tickets.mobile_updated_at AND mobile_synced_tickets.raw_payload ? 'borradoEnTablet'
+            THEN EXCLUDED.raw_payload || jsonb_build_object('borradoEnTablet', mobile_synced_tickets.raw_payload->'borradoEnTablet')
+          ELSE EXCLUDED.raw_payload END,
         en_espera = EXCLUDED.en_espera,
-        -- Quitado de pendientes: si la báscula lo MODIFICA después (p. ej. completa el 2º pesaje), vuelve solo.
-        quitado_at = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at THEN NULL ELSE mobile_synced_tickets.quitado_at END,
-        quitado_motivo = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at THEN NULL ELSE mobile_synced_tickets.quitado_motivo END
+        -- Quitado de pendientes: si la báscula lo MODIFICA después (p. ej. completa el 2º pesaje), vuelve solo. También si
+        -- la misma tablet que avisó que lo borró lo vuelve a mandar (p. ej. restauró un respaldo): lo tiene otra vez.
+        quitado_at = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at
+                            OR (NOT $14::boolean AND mobile_synced_tickets.raw_payload ? 'borradoEnTablet') THEN NULL ELSE mobile_synced_tickets.quitado_at END,
+        quitado_motivo = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at
+                            OR (NOT $14::boolean AND mobile_synced_tickets.raw_payload ? 'borradoEnTablet') THEN NULL ELSE mobile_synced_tickets.quitado_motivo END
       WHERE mobile_synced_tickets.mobile_updated_at <= EXCLUDED.mobile_updated_at
         AND mobile_synced_tickets.weighing_ticket_id IS NULL
         AND mobile_synced_tickets.liquidated_at IS NULL
       RETURNING id`,
       [id, deviceId, clienteName, t.pesoBruto, t.pesoTara, netWeight, t.calificacion, quintals, ts, JSON.stringify(idScope ? { ...t, firebaseNegocioId: idScope } : t),
-       farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera]
+       farmer?.id ?? null, farmer?.accionista_id ?? null, enEspera, deviceId.startsWith("firebase-auto")]
     );
     if (saved.rowCount) {
       imported.push({ numeroTicket: t.numeroTicket, id: String(saved.rows[0].id) });
@@ -1140,7 +1159,7 @@ export async function importBasculaTickets(
       // En el segundo caso el ERP conserva lo que ya compró y paga, pero deja MARCADO el cambio para que se revise
       // (el control de integridad lo muestra durante 7 días).
       const numero = String(t.numeroTicket).replace(/\D/g, "").replace(/^0+/, "") || "0";
-      await pool.query(
+      const marcado = await pool.query(
         `UPDATE mobile_synced_tickets
             SET raw_payload = jsonb_set(raw_payload, '{cambioPosterior}', $5::jsonb)
           WHERE COALESCE(NULLIF(raw_payload->>'firebaseNegocioId', ''), 'principal') = $1
@@ -1168,6 +1187,7 @@ export async function importBasculaTickets(
          JSON.stringify({ pesoBruto: t.pesoBruto, pesoTara: t.pesoTara, calificacion: t.calificacion, cliente: clienteName, placa: (t.placa ?? "").trim(), en: new Date().toISOString() }),
          t.pesoTara, t.calificacion, clienteName, (t.placa ?? "").trim()]
       );
+      if (marcado.rowCount) porRevisar.push(t.numeroTicket);
       // 💲 El PRECIO/QQ que se escribe en la báscula DESPUÉS de ingresar el ticket sí se trae (Liquidaciones lo sugiere).
       // Solo ese campo del ticket: no toca pesos, inventario ni cuentas. Un ticket ya liquidado no cambia.
       await pool.query(
@@ -1188,10 +1208,11 @@ export async function importBasculaTickets(
       // Un ticket que falle al guardar (dato raro que pasa el esquema pero no la
       // BD) no debe tumbar toda la sincronización completa: se salta y se sigue.
       skipped++;
+      rechazados.push({ numeroTicket: t.numeroTicket, motivo: "El ERP no pudo guardarlo" });
       console.warn(`[bascula-import] ticket omitido (error al guardar) #${String(t.numeroTicket)}: ${(err as Error).message}`);
     }
   }
-  return { imported, count: imported.length, skipped };
+  return { imported, count: imported.length, skipped, rechazados, porRevisar };
 }
 
 // Importa tickets en el formato NATIVO de la app de báscula (por ejemplo desde

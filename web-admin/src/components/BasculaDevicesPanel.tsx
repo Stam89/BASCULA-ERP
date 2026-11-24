@@ -78,7 +78,11 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
                 <div className="basculaDeviceInfo">
                   <strong>{device.modelo || "Tablet Bascula"}</strong>
                   <span title={device.device_id}>ID: {idCorto(device.device_id)}</span>
-                  <small>Ultimo contacto: {fecha(device.last_seen_at)}</small>
+                  <small>
+                    Ultimo contacto: {fecha(device.last_seen_at)}
+                    {device.app_version ? ` · app v${device.app_version}` : ""}
+                    {device.pendientes != null ? ` · ${device.pendientes === 0 ? "nada por enviar" : `${device.pendientes} por enviar`}` : ""}
+                  </small>
                 </div>
                 <label className="basculaDeviceToggle">
                   <input type="checkbox" checked={device.activo} disabled={busy === device.device_id}
