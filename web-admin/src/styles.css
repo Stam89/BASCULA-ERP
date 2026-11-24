@@ -6918,8 +6918,12 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 /* Hoja en el celular: cada movimiento es una tarjeta, sin mover de lado para llegar al monto (2026-11-03). */
 @media (max-width: 700px) {
   .cjh-tabla { display: block; min-width: 0; }
-  .cjh-tabla thead { display: none; }
-  .cjh-tabla tbody, .cjh-tabla tfoot { display: block; }
+  .cjh-cabeza tr.cjh-nueva td:nth-child(2) { grid-column: 1 / -1; } .cjh-cabeza tr:last-child td { box-shadow: none; }
+  .cjh-nueva .cjh-op { width: 100%; font-size: 15px; padding: 8px; margin: 4px 0; }
+  .cjh-cabeza { position: static; } .cjh-cabeza tr.cjh-cab { display: none; }
+  .cjh-tabla thead, .cjh-tabla tbody, .cjh-tabla tfoot { display: block; }
+  .cjh-tabla tbody tr.cjh-dia td:first-child, .cjh-vacio td { grid-column: 1 / -1; }
+  .cjh-seg { flex: 1 1 100%; } .cjh-seg button { flex: 1; min-height: 38px; }
   .cjh-tabla tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px 8px; padding: 8px 10px; border-bottom: 1px solid #e5e7eb; }
   .cjh-tabla td, .cjh-tabla tbody tr:nth-child(even):not(.cjh-nueva) td { display: block; border: 0; padding: 0; background: transparent !important; width: auto; min-width: 0; }
   .cjh-tabla td:empty { display: none; }
@@ -6961,6 +6965,29 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .cjh-acc button.cjh-banco { font-size: 14px; padding: 1px 6px; opacity: .55; }
 .cjh-acc button.cjh-banco.is-on { opacity: 1; background: #fef3c7; border-color: #f59e0b; box-shadow: 0 0 0 2px rgba(245, 158, 11, .25); }
 .cjh-aviso { display: block; margin-top: 4px; color: #92400e; font-weight: 600; }
+/* Caja con lo último arriba (2026-11-24): la captura queda fija bajo los títulos. */
+.cjh-herr { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e5e7eb; }
+.cjh-herr .cjh-busca { flex: 1 1 220px; min-width: 0; margin: 0; padding: 7px 10px; font-size: 13px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; }
+.cjh-seg { display: inline-flex; border: 1px solid #cbd5e1; border-radius: 8px; overflow: hidden; }
+.cjh-seg button { border: 0; border-radius: 0; padding: 6px 11px; font-size: 12.5px; font-weight: 700; background: #fff; color: #475569; cursor: pointer; min-height: 0; }
+.cjh-seg button + button { border-left: 1px solid #e2e8f0; }
+.cjh-seg button[aria-pressed="true"] { background: var(--c-fill); color: var(--c-on-fill); }
+.cjh-cabeza { position: sticky; top: 0; z-index: 3; }
+.cjh-cabeza th { position: static; box-shadow: 0 -8px 0 #f1f5f9; }
+.cjh-cabeza tr:last-child td { box-shadow: 0 4px 8px -4px rgba(15, 23, 42, .25); }
+.cjh-nueva td.cjh-fecha input { display: block; }
+.cjh-op { display: block; box-sizing: border-box; width: 100%; margin-top: 4px; padding: 5px 4px; font-size: 12px; font-weight: 700; border: 1px solid var(--c-tint-3); border-radius: 6px; background: #fff; color: #1e293b; }
+.cjh-extra__total { font-size: 13px; color: #92400e; } .cjh-extra__total b { font-size: 15px; color: #0f172a; }
+.cjh-tabla tbody tr.cjh-dia td { background: #eef2f7 !important; font-size: 12px; font-weight: 800; color: #334155; padding: 4px 8px; }
+.cjh-dia td:first-child::first-letter { text-transform: uppercase; }
+.cjh-tabla tr.cjh-dia td small { display: inline; margin-left: 8px; font-weight: 500; }
+.cjh-vacio td { padding: 18px !important; text-align: center; color: #64748b; }
+.cjh-tabla tbody tr.is-nuevo td { animation: cjhNuevo 6s ease-out; }
+@keyframes cjhNuevo { 0%, 60% { background: #dcfce7; } 100% { background: transparent; } }
+.cjx-acciones__btn.is-cascara { background: #ecfccb; border-color: #a3e635; color: #365314; }
+.cjx-acciones__btn.is-venta { background: #dbeafe; border-color: #93c5fd; color: #1e3a8a; }
+.cjx-acciones__btn.is-gasto { background: #fef3c7; border-color: #fcd34d; color: #78350f; }
+.cjx-acciones__btn kbd { font-size: 10.5px; padding: 0 5px; border: 1px solid currentColor; border-radius: 4px; opacity: .6; }
 .cjh-nueva td { background: #fffbeb !important; padding: 3px; border-color: #fde68a; }
 .cjh-nueva input { width: 100%; box-sizing: border-box; padding: 6px 7px; border: 1px solid transparent; border-radius: 4px; background: #fff; font-size: 13px; outline: none; }
 .cjh-nueva input:focus { border-color: var(--c-brand); box-shadow: 0 0 0 2px color-mix(in srgb, var(--c-accent) 18%, transparent); }

@@ -647,7 +647,7 @@ cashRouter.get("/registers/:id/movements", asyncRoute(async (req, res) => {
     `SELECT cm.*, sup.name AS proveedor_nombre
        FROM cash_movements cm
        LEFT JOIN suppliers sup ON sup.id = cm.supplier_id
-      WHERE cm.cash_register_id = $1 ORDER BY cm.created_at DESC`,
+      WHERE cm.cash_register_id = $1 ORDER BY cm.created_at DESC, cm.registro DESC`,
     [req.params.id]
   );
   res.json(result.rows);

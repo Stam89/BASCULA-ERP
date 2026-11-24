@@ -20961,14 +20961,17 @@ Motivo (obligatorio):`, ""));
                         {!cajaDelDia && (caja.tipo ?? "EFECTIVO") !== "BANCO" && (
                           <button type="button" className="cjx-acciones__btn" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadrar</button>
                         )}
+                        {visibles.includes("anticipo") && <button type="button" className={`cjx-acciones__btn is-cascara ${cajaSubTab === "anticipo" ? "is-on" : ""}`} title="Anticipo o pago al agricultor" onClick={() => abrir("anticipo")}>🌾 Arroz en cáscara</button>}
+                        {visibles.includes("venta_detalle") && <button type="button" className={`cjx-acciones__btn is-venta ${cajaSubTab === "venta_detalle" ? "is-on" : ""}`} title="Venta por dólares, libras o QQ" onClick={() => abrir("venta_detalle")}>🛒 Venta Detalle</button>}
+                        {visibles.includes("movimiento") && <button type="button" className="cjx-acciones__btn is-gasto" title="Egreso con todos los datos (F3)" onClick={() => abrirMovimientoCaja("EXPENSE")}>🧾 Compra / Gasto <kbd>F3</kbd></button>}
                         <div className="cj-dd">
                           <button type="button" className={`cjx-acciones__btn ${cajaMenu === "acciones" || (cajaSubTab !== "resumen" && cajaSubTab !== "historial") ? "is-on" : ""}`}
                             aria-haspopup="menu" aria-expanded={cajaMenu === "acciones"} onClick={() => setCajaMenu(cajaMenu === "acciones" ? null : "acciones")}>
-                            ＋ Otros registros <span className="cj-caret">▾</span>
+                            Más operaciones <span className="cj-caret">▾</span>
                           </button>
                           {cajaMenu === "acciones" && (
                             <div className="cj-menu" role="menu">
-                              {acciones.filter((x) => visibles.includes(x.key)).map((x) => (
+                              {acciones.filter((x) => visibles.includes(x.key) && x.key !== "anticipo" && x.key !== "venta_detalle").map((x) => (
                                 <button key={x.key} type="button" role="menuitem" className="cj-menu-item" title={x.hint} onClick={() => abrir(x.key)}>
                                   <span className="cj-menu-ico">{x.icon}</span><span className="cj-menu-label">{x.label}</span>
                                 </button>

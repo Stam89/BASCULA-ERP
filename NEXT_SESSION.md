@@ -2,6 +2,12 @@
 
 Actualizado: 2026-11-24
 
+## 2026-11-24 · Hoja de Caja con lo último arriba
+- `CajaHoja.tsx`: lo más nuevo arriba, saldo inicial al fondo, captura fija bajo los títulos (thead sticky). El saldo de cada fila se calcula hacia adelante y luego se invierte.
+  Orden «Como se registró» (por defecto) o «Por fecha» (se recuerda por equipo). Buscador, Todo/Entradas/Salidas y renglón por día.
+- «Tipo de operación» (0 automático, 1 venta, 2 pago arroz, 3 compra, 4 gasto): fija el destino; arroz y compra calculan cantidad × precio. El tipo se queda para la siguiente fila.
+- Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
+
 ## 2026-11-24 · App de la báscula v11.58 (código 249) y su parte en el ERP
 - App en `C:\Users\Usuario\AndroidStudioProjects\BASCULA` (fuera del repo, sin git). Copia de la 11.57: `C:\BASCULA-Respaldos\app-bascula-v11.57-antes-20261123`. Base Room sigue en v6.
   **Pendiente del dueño: instalarla ENCIMA en la tablet** (Menú › Preparar actualización, sin desinstalar). Se probó completa en una tablet virtual, no en la física.

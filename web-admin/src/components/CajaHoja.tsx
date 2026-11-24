@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { money } from "../format";
 import { CLASE_DE_CATEGORIA, NOMBRE_CORTO, categoriaPorNombreCorto, detectarMaquina, nombreCortoPorConcepto } from "./cajaHojaMaquina";
@@ -19,6 +19,8 @@ export type HojaMov = {
   reversed_reason?: string | null; subcategoria?: string | null; proveedor_nombre?: string | null; medio?: string | null;
   es_fondo?: boolean; fondo_estado?: string | null; responsable?: string | null; codigo?: string | null;
   maq_activo?: string | null; area?: string | null;
+  /** Orden real en que se guardó (la fecha puede ser de un día anterior). */
+  registro?: string | number | null;
 };
 export type HojaCredito = {
   id: string; amount: string | number; balance: string | number; status: string; created_at: string;
@@ -68,7 +70,7 @@ const fechaCorta = (iso: string) => new Date(iso).toLocaleString("es-EC", { day:
 // Caja simplificada (pedido del dueño 2026-11-03): columnas Fecha · Concepto · Entradas · Salidas · Saldo. La categoría
 // y «¿De quién?» van como etiquetas bajo el concepto (se llenan solas por lo escrito y se cambian con un clic); el
 // código queda 001 por dentro. Los movimientos de otros módulos se ven siempre, en gris, para que el saldo cuadre fila a fila.
-const CELDAS = ["sujeto", "concepto", "categoria", "quien", "entrada", "salida", "actividad", "cantidad", "tarifa", "cuadrilla", "responsable", "acreedor", "cliente"] as const;
+const CELDAS = ["sujeto", "concepto", "categoria", "quien", "entrada", "salida", "actividad", "cantidad", "tarifa", "cuadrilla", "responsable", "acreedor", "cliente", "opCant", "opPrecio"] as const;
 const CODIGO = "001";
 // Para reconocer la máquina en el concepto: «Diésel cose 10,1» → COS101 (como «COS.10.1»).
 export const claveMaq = (x: string) => sinTilde(x).toUpperCase().replace(/\bCOSE\b/g, "COS").replace(/[^A-Z0-9]/g, "");
@@ -82,10 +84,20 @@ const CATEGORIA_FIJA: Partial<Record<HojaDestino["tipo"], string>> = {
 };
 const numero = (x: string) => Number(x.replace(",", "."));
 const etiquetaActividad = (a: ActividadHoja) => `${a.name} · $${a.unit_rate}`;
+// ⚡ Tipo de operación (pedido del dueño 2026-11-24): «automático» lo lee de lo escrito, como siempre; los otros fijan qué es.
+type Op = "" | "venta" | "arroz" | "compra" | "gasto";
+const OPS: Array<{ clave: Op; texto: string; tecla: string }> = [
+  { clave: "", texto: "0 · Automático", tecla: "0" }, { clave: "venta", texto: "1 · Venta", tecla: "1" }, { clave: "arroz", texto: "2 · Pago arroz", tecla: "2" },
+  { clave: "compra", texto: "3 · Compra", tecla: "3" }, { clave: "gasto", texto: "4 · Gasto", tecla: "4" }
+];
+const DETALLE_CANTIDAD = / · [\d.,]+( qq)? × \$[\d.,]+$/i;
+type Orden = "registro" | "fecha";
+const leerOrden = (): Orden => { try { return localStorage.getItem("bascula-erp:caja-orden") === "fecha" ? "fecha" : "registro"; } catch { return "registro"; } };
+const diaLargo = (iso: string) => new Date(iso).toLocaleDateString("es-EC", { weekday: "long", day: "2-digit", month: "long", timeZone: "America/Guayaquil" });
 const PAGO_GAVETA = "";
 type Campos = {
   sujeto: string; concepto: string; catTxt: string; quienTxt: string; quienManual: boolean; catManual: boolean; entrada: string; salida: string; montoManual: boolean; pago: string;
-  responsable: string; acreedor: string; actTxt: string; cantTxt: string; tarifaTxt: string; cuadTxt: string; clienteTxt: string; fiado: boolean;
+  responsable: string; acreedor: string; actTxt: string; cantTxt: string; tarifaTxt: string; cuadTxt: string; clienteTxt: string; fiado: boolean; op: Op; opCant: string; opPrecio: string;
 };
 type FilaEnCola = { id: number; fila: HojaNueva; campos: Campos; estado: "espera" | "enviando" | "listo" | "error"; error?: string };
 
@@ -170,6 +182,14 @@ export function CajaHoja({
   const [fiado, setFiado] = useState(false);
   // 🚀 Cola: Enter limpia la fila al instante y lo escrito se guarda en orden. Antes la fila quedaba bloqueada hasta releer
   // la caja (1 a 3 segundos) y lo que se escribía en ese rato se perdía o caía en otra casilla.
+  const [op, setOp] = useState<Op>("");
+  const [opCant, setOpCant] = useState("");
+  const [opPrecio, setOpPrecio] = useState("");
+  const opVisto = useRef(false);
+  const [orden, setOrdenState] = useState<Orden>(leerOrden);
+  const setOrden = (o: Orden) => { setOrdenState(o); try { localStorage.setItem("bascula-erp:caja-orden", o); } catch { /* solo se recuerda por equipo */ } };
+  const [busca, setBusca] = useState("");
+  const [ver, setVer] = useState<"todo" | "INCOME" | "EXPENSE">("todo");
   const [cola, setCola] = useState<FilaEnCola[]>([]);
   const colaRef = useRef<FilaEnCola[]>([]);
   const corriendo = useRef(false);
@@ -250,6 +270,16 @@ export function CajaHoja({
     if (paga) return paga;
     return diceFondo(txt) ? destinos.find((d) => d.tipo === "fondo") ?? null : null;
   };
+  const detectarVenta = (txt: string) => { const d = detectarQuien(txt); return d?.tipo === "venta" ? d : null; };
+  // Pago de arroz: el agricultor escrito en el primer recuadro (o en la línea).
+  const agricultorEscrito = () => {
+    const t = sinTilde(sujeto);
+    if (!t && !concepto.trim()) return null;
+    const exacto = agricultores.find((a) => sinTilde(a.nombre) === t);
+    if (exacto) return exacto;
+    const empieza = t.length >= 3 ? agricultores.filter((a) => sinTilde(a.nombre).startsWith(t)) : [];
+    return empieza.length === 1 ? empieza[0] : leerPersona(texto, agricultores);
+  };
   const quien = resolverQuien(quienTxt);
   const tipoQuien = quien?.tipo;
   const esVenta = tipoQuien === "venta";
@@ -261,9 +291,25 @@ export function CajaHoja({
     : cat ? (cat.tipo === "INGRESO" ? "INCOME" : "EXPENSE") : null;
   // Mientras escribe el concepto, «¿Para qué?» aparece solo (si la cajera no lo eligió a mano).
   useEffect(() => {
-    if (!quienManual && conQuien) setQuienTxt(detectarQuien(texto)?.valor ?? "");
+    if (!conQuien || quienManual) return;
+    if (op === "venta") setQuienTxt((detectarVenta(texto) ?? destinos.find((d) => d.tipo === "venta"))?.valor ?? "");
+    else if (op === "arroz") setQuienTxt(agricultorEscrito()?.valor ?? "");
+    else setQuienTxt(detectarQuien(texto)?.valor ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [texto, quienManual, destinos]);
+  }, [texto, quienManual, destinos, op]);
+
+  // ⚡ Cantidad × precio llena el monto (pago de arroz por QQ, compra por unidades). Se puede escribir el monto directo.
+  const conCantidad = op === "arroz" || op === "compra";
+  const totalOp = r2(numero(opCant) * numero(opPrecio));
+  useEffect(() => {
+    if (conCantidad && !montoManual) setSalida(totalOp > 0 ? totalOp.toFixed(2) : "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conCantidad, montoManual, totalOp]);
+  const elegirOp = (o: Op) => {
+    setOp(o); setError(""); setQuienManual(false); setQuienTxt(""); setCatManual(false); opVisto.current = false;
+    if (o !== "arroz" && o !== "compra") { if (opCant || opPrecio) { setOpCant(""); setOpPrecio(""); } if (!montoManual) setSalida(""); }
+    enfocar("sujeto");
+  };
 
   // 🛒 Lo que dice la venta y cuánto da con la tarifa del producto.
   const ventaLeida = esVenta ? leerVenta(texto, productos) : null;
@@ -322,9 +368,9 @@ export function CajaHoja({
 
   // Memoria: el mismo concepto escrito antes sugiere su categoría.
   const catPorConcepto = useMemo(() => {
-    const m = new Map<string, string>(memoria.map((x) => [sinTilde(x.concepto), x.category]));
+    const m = new Map<string, string>(memoria.map((x) => [sinTilde(x.concepto.replace(DETALLE_CANTIDAD, "")), x.category]));
     for (const x of [...movimientos].sort((a, b) => (a.created_at < b.created_at ? -1 : 1))) {
-      if (x.description && !x.reference_type && !x.reversal_of) m.set(sinTilde(x.description), x.category);
+      if (x.description && !x.reference_type && !x.reversal_of) m.set(sinTilde(x.description.replace(DETALLE_CANTIDAD, "")), x.category);
     }
     return m;
   }, [movimientos, memoria]);
@@ -362,23 +408,72 @@ export function CajaHoja({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [texto, tipoQuien, quien?.id, catManual, catFija, codigosCat, reglas]);
 
-  // Saldo acumulado con TODOS los movimientos (también los de otros módulos aunque estén escondidos).
+  // Saldo acumulado con TODOS los movimientos, en el orden elegido: como se fueron REGISTRANDO (por defecto) o por su fecha.
+  // El saldo de cada fila es el que quedó justo después de ella; luego se muestran de la más nueva a la más vieja.
   const filas = useMemo(() => {
+    const reg = (m: HojaMov) => Number(m.registro ?? 0);
+    const porFecha = (a: HojaMov, b: HojaMov) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : reg(a) - reg(b));
+    const conRegistro = movimientos.every((m) => reg(m) > 0);
+    const enOrden = [...movimientos].sort(orden === "registro" && conRegistro ? (a, b) => reg(a) - reg(b) : porFecha);
     let saldo = saldoInicial;
-    const orden = [...movimientos].sort((a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0));
-    const conSaldo = orden.map((m) => {
+    const conSaldo = enOrden.map((m, n) => {
       saldo = r2(saldo + (m.movement === "INCOME" ? 1 : -1) * Number(m.amount));
-      return { k: "mov" as const, t: m.created_at, m, saldo };
+      return { k: "mov" as const, t: m.created_at, pos: n, m, saldo };
     });
-    const visibles = conSaldo.filter((f) => verOtros || !origenExterno(f.m));
-    // Los egresos a crédito van en su hora, sin mover el saldo (son Cuentas por Pagar).
-    const todas: Array<typeof visibles[number] | { k: "cred"; t: string; c: HojaCredito; saldo: number }> = [...visibles];
+    // Los egresos a crédito van después del último movimiento de su hora, sin mover el saldo (son Cuentas por Pagar).
+    type Fila = typeof conSaldo[number] | { k: "cred"; t: string; pos: number; c: HojaCredito; saldo: number };
+    const todas: Fila[] = conSaldo.filter((f) => verOtros || !origenExterno(f.m));
     for (const c of creditos) {
       const previo = [...conSaldo].reverse().find((f) => f.t <= c.created_at);
-      todas.push({ k: "cred", t: c.created_at, c, saldo: previo ? previo.saldo : saldoInicial });
+      todas.push({ k: "cred", t: c.created_at, pos: (previo?.pos ?? -1) + 0.5, c, saldo: previo ? previo.saldo : saldoInicial });
     }
-    return todas.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
-  }, [movimientos, creditos, verOtros, origenExterno, saldoInicial]);
+    return todas.sort((a, b) => b.pos - a.pos || (a.t < b.t ? 1 : -1));
+  }, [movimientos, creditos, verOtros, origenExterno, saldoInicial, orden]);
+
+  // 🔎 Buscar y filtrar no cambia los saldos: cada fila conserva el suyo.
+  const filasVistas = useMemo(() => {
+    const t = sinTilde(busca);
+    const soloMonto = /^[\d.,]+$/.test(t) ? numero(t) : NaN;
+    return filas.filter((f) => {
+      const mov = f.k === "mov" ? f.m.movement : "EXPENSE";
+      if (ver !== "todo" && mov !== ver) return false;
+      if (!t) return true;
+      const monto = Number(f.k === "mov" ? f.m.amount : f.c.amount);
+      if (Number.isFinite(soloMonto) && Math.abs(monto - soloMonto) < 0.005) return true;
+      const campos = f.k === "mov" ? [f.m.description, nombreCat.get(f.m.category), f.m.subcategoria, f.m.proveedor_nombre, f.m.responsable, f.m.maq_activo] : [f.c.description, f.c.proveedor_nombre];
+      return sinTilde([...campos, fechaCorta(f.t)].filter(Boolean).join(" ")).includes(t);
+    });
+  }, [filas, busca, ver, nombreCat]);
+  const totVistos = useMemo(() => ({
+    entra: r2(filasVistas.reduce((x, f) => x + (f.k === "mov" && f.m.movement === "INCOME" ? Number(f.m.amount) : 0), 0)),
+    sale: r2(filasVistas.reduce((x, f) => x + (f.k === "mov" && f.m.movement === "EXPENSE" ? Number(f.m.amount) : 0), 0))
+  }), [filasVistas]);
+  // Un renglón por cada grupo seguido del mismo día, con lo que entró y salió en él.
+  const bloques = useMemo(() => {
+    const lista: Array<{ dia: string; t: string; entra: number; sale: number; filas: typeof filasVistas }> = [];
+    for (const f of filasVistas) {
+      const dia = diaEc(new Date(f.t));
+      let b = lista[lista.length - 1];
+      if (!b || b.dia !== dia) { b = { dia, t: f.t, entra: 0, sale: 0, filas: [] }; lista.push(b); }
+      b.filas.push(f);
+      if (f.k === "mov") { if (f.m.movement === "INCOME") b.entra = r2(b.entra + Number(f.m.amount)); else b.sale = r2(b.sale + Number(f.m.amount)); }
+    }
+    return lista;
+  }, [filasVistas]);
+  // ✨ Lo recién guardado se marca un momento, para encontrarlo aunque lleve fecha de otro día.
+  const conocidos = useRef<Set<string> | null>(null);
+  const [nuevos, setNuevos] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    const ids = movimientos.map((m) => m.id);
+    const previos = conocidos.current;
+    conocidos.current = new Set(ids);
+    if (!previos || !ids.some((x) => previos.has(x))) return;
+    const recien = ids.filter((x) => !previos.has(x));
+    if (!recien.length || recien.length > 12) return;
+    setNuevos(new Set(recien));
+    const reloj = setTimeout(() => setNuevos(new Set()), 6000);
+    return () => clearTimeout(reloj);
+  }, [movimientos]);
 
   const totEntradas = r2(movimientos.filter((m) => m.movement === "INCOME").reduce((s, m) => s + Number(m.amount), 0));
   const totSalidas = r2(movimientos.filter((m) => m.movement === "EXPENSE").reduce((s, m) => s + Number(m.amount), 0));
@@ -387,14 +482,17 @@ export function CajaHoja({
   const noMueveGaveta = (f: HojaNueva) => !!(f.banco || f.pagadoPor || f.credito || f.venta?.fiado);
   const efectoCola = r2(cola.filter((c) => c.estado !== "error" && !noMueveGaveta(c.fila)).reduce((s, c) => s + (c.fila.movement === "INCOME" ? c.fila.amount : -c.fila.amount), 0));
 
-  // La hoja abre al final (lo último y la fila de captura).
+  // Lo último está arriba: al guardar, la hoja vuelve al inicio.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el) el.scrollTop = 0;
   }, [filas.length, cola.length]);
 
   // Foco al instante (quien escribe rápido no pierde letras); si la celda aún está deshabilitada, en cuanto se habilite.
-  const enfocar = (c: Celda) => {
+  const enfocar = (celda: Celda) => {
+    // En un pago de arroz o una compra, antes del monto se pasa por cantidad y precio (una vez por fila).
+    const c: Celda = celda === "salida" && conCantidad && !opVisto.current && !montoManual ? "opCant" : celda;
+    if (c === "opCant") opVisto.current = true;
     const ir = () => { const el = refs.current[c]; if (!el || el.disabled) return false; el.focus(); el.select(); return true; };
     if (!ir()) setTimeout(ir, 0);
   };
@@ -403,10 +501,11 @@ export function CajaHoja({
     setQuienTxt(""); setQuienManual(false); setCatManual(false); setMontoManual(false); setPago(PAGO_GAVETA); setPideMaquina(null);
     setResponsable(""); setRespManual(false); setAcreedor(""); setActTxt(""); setCantTxt(""); setTarifaTxt(""); setCuadTxt("CUADRILLA");
     setCuadManual({ act: false, cant: false, tarifa: false }); setClienteTxt("CONSUMIDOR FINAL"); setFiado(false);
+    setOpCant(""); setOpPrecio(""); opVisto.current = false;
     enfocar("sujeto");
   };
 
-  const limpiarTodo = () => { setFecha(hoy); limpiar(); };
+  const limpiarTodo = () => { setFecha(hoy); setOp(""); limpiar(); };
 
   // ── Cola de guardado ─────────────────────────────────────────────────────
   const cambiarCola = (f: (c: FilaEnCola[]) => FilaEnCola[]) => { colaRef.current = f(colaRef.current); setCola(colaRef.current); };
@@ -439,7 +538,7 @@ export function CajaHoja({
     }
   };
   const encolar = (fila: HojaNueva) => {
-    const campos: Campos = { sujeto, concepto, catTxt, quienTxt, quienManual, catManual, entrada, salida, montoManual, pago, responsable, acreedor, actTxt, cantTxt, tarifaTxt, cuadTxt, clienteTxt, fiado };
+    const campos: Campos = { sujeto, concepto, catTxt, quienTxt, quienManual, catManual, entrada, salida, montoManual, pago, responsable, acreedor, actTxt, cantTxt, tarifaTxt, cuadTxt, clienteTxt, fiado, op, opCant, opPrecio };
     idCola.current += 1;
     const id = idCola.current;
     cambiarCola((c) => [...c, { id, fila, campos, estado: "espera" }]);
@@ -453,6 +552,7 @@ export function CajaHoja({
     setSujeto(v.sujeto); setConcepto(v.concepto); setCatTxt(v.catTxt); setQuienTxt(v.quienTxt); setQuienManual(v.quienManual || true); setCatManual(v.catManual); setEntrada(v.entrada); setSalida(v.salida);
     setMontoManual(true); setPago(v.pago); setResponsable(v.responsable); setRespManual(true); setAcreedor(v.acreedor); setActTxt(v.actTxt); setCantTxt(v.cantTxt); setTarifaTxt(v.tarifaTxt);
     setCuadTxt(v.cuadTxt); setCuadManual({ act: true, cant: true, tarifa: true }); setClienteTxt(v.clienteTxt); setFiado(v.fiado);
+    setOp(v.op); setOpCant(v.opCant); setOpPrecio(v.opPrecio); opVisto.current = true;
     cambiarCola((l) => l.filter((x) => x.id !== c.id));
     enfocar("sujeto");
   };
@@ -460,6 +560,10 @@ export function CajaHoja({
   const guardar = (forzada?: HojaCategoria | null) => {
     setError(""); setPideMaquina(null);
     let destino = conQuien ? resolverQuien(quienTxt) : null;
+    if (op === "arroz" && destino?.tipo !== "agricultor") {
+      setError(`¿A qué agricultor? Elígelo de la lista del primer recuadro. Si es nuevo, créalo en «🌾 Arroz en cáscara».`); enfocar("sujeto"); return;
+    }
+    if (op === "venta" && destino?.tipo !== "venta") { setError("Elegiste Venta: en «¿Para qué?» tiene que ir una venta."); enfocar("quien"); return; }
     if (conQuien && !destino) { setError(`No hay «${quienTxt.trim()}» en ¿Para qué?. Elígelo de la lista.`); enfocar("quien"); return; }
     // Quien escribe rápido llega al monto antes de que la categoría aparezca en la celda: se calcula aquí también.
     const catSola = catManual ? "" : nombreCat.get(categoriaDe(sujeto, concepto) ?? "") ?? "";
@@ -474,6 +578,7 @@ export function CajaHoja({
     const tipoFila: "INCOME" | "EXPENSE" | null = t && SIEMPRE_SALIDA.has(t) ? "EXPENSE" : t && SIEMPRE_ENTRADA.has(t) ? "INCOME"
       : elegida ? (elegida.tipo === "INGRESO" ? "INCOME" : "EXPENSE") : null;
     if (!tipoFila) { setError(catTxt.trim() ? `No hay una categoría «${catTxt.trim()}». Elígela de la lista.` : "Escribe la categoría."); enfocar("categoria"); return; }
+    if ((op === "compra" || op === "gasto") && tipoFila === "INCOME") { setError(`Elegiste ${op === "compra" ? "Compra" : "Gasto"} y eso es una entrada: cambia la categoría o pon el tipo en Automático.`); enfocar("categoria"); return; }
     // Una entrada o un gasto corriente que nombra una máquina sigue siendo de esta caja.
     if (tipoFila === "INCOME" && destino?.tipo === "planta") destino = destinos[0];
     let deOtro = !!destino && destino.tipo !== "propio";
@@ -497,7 +602,9 @@ export function CajaHoja({
     if (elegida && !saltaFormulario(destino, elegida.codigo) && esCompleja(elegida.codigo, tipoFila)) { onFormularioCompleto(tipoFila, elegida.codigo, texto, monto > 0 ? monto : null); limpiar(); return; }
     if (t !== "cuadrilla" && !(monto > 0)) { setError(`Escribe el monto en ${nombreMonto}.`); enfocar(celdaMonto); return; }
     if (texto.length < 2) { setError("Escribe qué se hizo."); enfocar("concepto"); return; }
-    const base: HojaNueva = { movement: tipoFila, category: elegida?.codigo ?? "", amount: monto, description: texto, codigo: CODIGO, medio,
+    const conDetalle = conCantidad && totalOp > 0 && Math.abs(totalOp - monto) < 0.005;
+    const descripcion = `${op === "arroz" && !concepto.trim() ? unir(sujeto, "Pago de arroz en cáscara") : texto}${conDetalle ? ` · ${numero(opCant)}${op === "arroz" ? " QQ" : ""} × $${numero(opPrecio)}` : ""}`;
+    const base: HojaNueva = { movement: tipoFila, category: elegida?.codigo ?? "", amount: monto, description: descripcion, codigo: CODIGO, medio,
       destino: destino ?? undefined, fecha: fecha !== hoy ? fecha : undefined };
     if (t === "venta") {
       const v = leerVenta(texto, productos);
@@ -537,6 +644,7 @@ export function CajaHoja({
     if (c === "sujeto") {
       const t = (valor ?? sujeto).trim();
       if (valor !== undefined) setSujeto(valor);
+      if (op === "arroz" && t) { enfocar("salida"); return; }
       if (concepto.trim()) { siguiente("concepto", undefined, t); return; }
       if (!t) { enfocar("concepto"); return; }
       // Quien escribe toda la línea en el primer recuadro («comida», «20 lb de 0,11») sigue como antes: pasa a «qué se hizo».
@@ -551,6 +659,8 @@ export function CajaHoja({
       const cTxt = valor ?? concepto;
       if (valor !== undefined && valor !== concepto) setConcepto(valor);
       const txt = unir(s, cTxt);
+      if (op === "venta") { enfocar("entrada"); return; }
+      if (op === "arroz") { enfocar("salida"); return; }
       const detectado = !quienManual ? detectarQuien(txt) : quien;
       if (detectado && !quienManual) setQuienTxt(detectado.valor);
       const tq = detectado?.tipo;
@@ -588,6 +698,8 @@ export function CajaHoja({
     } else if (c === "cantidad") enfocar(tarifaTxt ? "salida" : "tarifa");
     else if (c === "tarifa" || c === "cuadrilla" || c === "responsable" || c === "acreedor") enfocar("salida");
     else if (c === "cliente") enfocar("entrada");
+    else if (c === "opCant") enfocar("opPrecio");
+    else if (c === "opPrecio") enfocar("salida");
   };
   const tecla = (_c: Celda) => (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") { e.preventDefault(); limpiarTodo(); return; }
@@ -604,18 +716,20 @@ export function CajaHoja({
 
   const opcionesCat = useMemo(() => [
     ...(hayPlanta ? NOMBRE_CORTO.filter((n) => categorias.some((c) => c.codigo === n.codigo)).map((n) => ({ valor: n.valor, detalle: n.detalle, tono: "is-out" })) : []),
-    ...categorias.map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" }))
-  ], [categorias, hayPlanta]);
+    ...categorias.filter((c) => (op !== "compra" && op !== "gasto") || c.tipo !== "INGRESO")
+      .map((c) => ({ valor: c.nombre, detalle: c.tipo === "INGRESO" ? "+ entrada" : "− salida", tono: c.tipo === "INGRESO" ? "is-in" : "is-out" }))
+  ], [categorias, hayPlanta, op]);
   const opcionesConcepto = useMemo(() => sugerencias.map((x) => ({ valor: x })), [sugerencias]);
   // Primer recuadro: máquinas, lo de las reglas, y las personas ya usadas.
   const opcionesSujeto = useMemo(() => {
     const vistos = new Set<string>(); const lista: Opcion[] = [];
+    if (op === "arroz") return agricultores.map((a) => ({ valor: a.nombre, detalle: a.detalle }));
     const poner = (valor: string, detalle?: string) => { const k = sinTilde(valor); if (k && !vistos.has(k)) { vistos.add(k); lista.push({ valor, detalle }); } };
     for (const m of maquinasPlanta) { poner(m.area, "área"); if (sinTilde(m.section) !== "otros") poner(`${m.section} ${m.area}`, "máquina"); }
     for (const r of reglas) if (r.quien) poner(r.quien, r.categoria_nombre ?? undefined);
     for (const k of catPorSujeto.keys()) poner(k.toUpperCase());
     return lista;
-  }, [maquinasPlanta, reglas, catPorSujeto]);
+  }, [maquinasPlanta, reglas, catPorSujeto, op, agricultores]);
   const opcionesQuien = useMemo(() => destinos.map((d) => ({ valor: d.valor, detalle: d.detalle, tono: d.tipo === "propio" ? "" : d.tipo === "socio" || SIEMPRE_ENTRADA.has(d.tipo) ? "is-in" : "is-out" })), [destinos]);
   const opcionesActividad = useMemo(() => actividades.map((a) => ({ valor: etiquetaActividad(a) })), [actividades]);
   const opcionesCliente = useMemo(() => clientes.map((c) => ({ valor: c })), [clientes]);
@@ -634,10 +748,23 @@ export function CajaHoja({
 
   return (
     <div className="cjh">
+      <div className="cjh-herr">
+        <input type="search" className="cjh-busca" value={busca} placeholder="🔎 Buscar por nombre, concepto, fecha o monto" aria-label="Buscar movimientos" onChange={(e) => setBusca(e.target.value)} />
+        <span className="cjh-seg" role="group" aria-label="Qué ver">
+          {([["todo", "Todo"], ["INCOME", "Entradas"], ["EXPENSE", "Salidas"]] as const).map(([k, t]) => (
+            <button key={k} type="button" aria-pressed={ver === k} onClick={() => setVer(k)}>{t}</button>
+          ))}
+        </span>
+        <span className="cjh-seg" role="group" aria-label="Orden de la hoja" title="Lo más nuevo va arriba. «Como se registró» sigue el orden en que se guardó; «Por fecha», el día de cada movimiento. El saldo se calcula según el orden elegido.">
+          {([["registro", "Como se registró"], ["fecha", "Por fecha"]] as const).map(([k, t]) => (
+            <button key={k} type="button" aria-pressed={orden === k} onClick={() => setOrden(k)}>{t}</button>
+          ))}
+        </span>
+      </div>
       <div className="cjh-scroll" ref={scrollRef}>
         <table className="cjh-tabla">
-          <thead>
-            <tr>
+          <thead className="cjh-cabeza">
+            <tr className="cjh-cab">
               <th>Fecha</th>
               <th>Concepto</th>
               <th className="num">Entradas $</th>
@@ -645,116 +772,24 @@ export function CajaHoja({
               <th className="num">Saldo $</th>
               <th />
             </tr>
-          </thead>
-          <tbody>
-            <tr className="cjh-inicial">
-              <td colSpan={2}>Saldo inicial de la caja</td>
-              <td /><td />
-              <td className="num"><b>{money(saldoInicial)}</b></td>
-              <td />
-            </tr>
-            {filas.map((f) => {
-              if (f.k === "cred") {
-                const c = f.c;
-                const anulado = c.status === "CANCELLED";
-                const abonado = Number(c.amount) - Number(c.balance);
-                return (
-                  <tr key={`cred-${c.id}`} className={`cjh-cred ${anulado ? "is-anulado" : ""}`}>
-                    <td className="cjh-fecha">{fechaCorta(c.created_at)}</td>
-                    <td>
-                      {c.description ?? "—"}
-                      <span className="cjh-tags"><span className="cjh-tag">{etiquetaCat(c.categoria)}</span></span>
-                      <small>💳 A crédito · 🏪 {c.proveedor_nombre ?? "—"}{anulado ? " · ANULADO" : Number(c.balance) < 0.005 ? " · pagada" : abonado > 0.005 ? ` · saldo ${money(Number(c.balance))}` : " · en Por Pagar"}</small>
-                    </td>
-                    <td />
-                    <td className="num cjh-sin">{money(Number(c.amount))}<small>no sale de caja</small></td>
-                    <td className="num">{money(f.saldo)}</td>
-                    <td className="cjh-acc">
-                      {puedeAnular && !anulado && abonado < 0.005 && !c.transporte && <button type="button" onClick={() => onAnularCredito(c)}>Anular</button>}
-                    </td>
-                  </tr>
-                );
-              }
-              const m = f.m;
-              const anulado = !!m.reversed_at;
-              const esAnulacion = !!m.reversal_of;
-              const origen = origenExterno(m);
-              const entra = m.movement === "INCOME";
-              return (
-                <tr key={m.id} className={`${entra ? "is-in" : "is-out"} ${anulado ? "is-anulado" : ""} ${esAnulacion ? "is-reverso" : ""} ${origen ? "is-externo" : ""}`}>
-                  <td className="cjh-fecha">{fechaCorta(m.created_at)}</td>
-                  <td>
-                    {m.description || etiquetaCat(m.category)}
-                    <span className="cjh-tags">
-                      <span className="cjh-tag">{etiquetaCat(m.category)}</span>
-                      {quienDeMovimiento(m) && <span className="cjh-tag is-quien">{quienDeMovimiento(m)}</span>}
-                      {m.codigo && m.codigo !== CODIGO && <span className="cjh-tag">cód. {m.codigo}</span>}
-                    </span>
-                    {(m.subcategoria || m.proveedor_nombre || origen || anulado || esAnulacion || (mixto && m.medio === "BANCO") || m.maq_activo || m.area) && (
-                      <small>
-                        {[
-                          m.subcategoria,
-                          m.proveedor_nombre ? `🏪 ${m.proveedor_nombre}` : "",
-                          (m.maq_activo || m.area) ? `🔧 ${[m.area, m.maq_activo].filter(Boolean).join(" · ")}` : "",
-                          mixto && m.medio === "BANCO" ? "🏦 Banco" : "",
-                          origen ? `↪ ${origen}` : "",
-                          esAnulacion ? "Anulación" : "",
-                          anulado ? `ANULADO${m.reversed_reason ? `: ${m.reversed_reason}` : ""}` : ""
-                        ].filter(Boolean).join(" · ")}
-                      </small>
-                    )}
-                    {m.es_fondo && (
-                      <small className={m.fondo_estado === "LIQUIDADO" ? "cjh-ok" : "cjh-warn"}>
-                        {m.fondo_estado === "LIQUIDADO" ? "✅ Fondo liquidado" : "⏳ Fondo por liquidar"}{m.responsable ? ` · 👤 ${m.responsable}` : ""}
-                      </small>
-                    )}
-                  </td>
-                  <td className="num cjh-entra">{entra ? money(Number(m.amount)) : ""}</td>
-                  <td className="num cjh-sale">{entra ? "" : money(Number(m.amount))}</td>
-                  <td className={`num cjh-saldo ${f.saldo < 0 ? "is-neg" : ""}`}>{money(f.saldo)}</td>
-                  <td className="cjh-acc">
-                    {m.es_fondo && m.fondo_estado === "POR_LIQUIDAR" && !anulado && !esAnulacion && (
-                      <button type="button" title="Registrar el gasto real y el vuelto que regresa a caja" onClick={() => onLiquidarFondo(m)}>💸 Liquidar</button>
-                    )}
-                    {!m.reference_type && !anulado && !esAnulacion && !m.es_fondo && (
-                      <button type="button" title="Registrar otra vez este movimiento (se puede cambiar)" onClick={() => onRepetir(m)}>🔁</button>
-                    )}
-                    {puedeAnular && !anulado && !esAnulacion && <button type="button" onClick={() => onAnular(m)}>Anular</button>}
-                  </td>
-                </tr>
-              );
-            })}
-            {/* Lo que se está guardando: la fila ya quedó libre para seguir escribiendo. */}
-            {cola.map((c) => (
-              <tr key={`cola-${c.id}`} className={`cjh-cola ${c.estado === "error" ? "is-error" : ""}`}>
-                <td className="cjh-fecha">{c.estado === "error" ? "⚠️ No se guardó" : "⏳ Guardando…"}</td>
-                <td>{c.fila.description}{c.estado === "error" && <small>{c.error}</small>}</td>
-                <td className="num cjh-entra">{c.fila.movement === "INCOME" ? money(c.fila.amount) : ""}</td>
-                <td className="num cjh-sale">{c.fila.movement === "EXPENSE" ? money(c.fila.amount) : ""}</td>
-                <td />
-                <td className="cjh-acc">
-                  {c.estado === "error" && (<>
-                    <button type="button" onClick={() => corregir(c)}>Corregir</button>
-                    <button type="button" onClick={() => reintentar(c)}>Reintentar</button>
-                    <button type="button" onClick={() => cambiarCola((l) => l.filter((x) => x.id !== c.id))}>Quitar</button>
-                  </>)}
-                </td>
-              </tr>
-            ))}
             {/* Fila de captura: como escribir la siguiente línea del Excel. */}
             <tr className="cjh-nueva">
               <td className="cjh-fecha">
                 <input type="date" value={fecha} max={hoy} min={abiertaEl ? diaEc(new Date(abiertaEl)) : undefined}
                   className={fecha !== hoy ? "is-otra" : ""} aria-label="Fecha del movimiento" title="Cambia la fecha si el movimiento es de un día anterior"
                   onChange={(e) => setFecha(e.target.value || hoy)} />
+                <select className="cjh-op" value={op} aria-label="Tipo de operación" title="Qué vas a registrar. Con el cuadro elegido, escribe 1, 2, 3 o 4"
+                  onChange={(e) => elegirOp(e.target.value as Op)}>
+                  {OPS.filter((o) => (o.clave !== "venta" || destinos.some((d) => d.tipo === "venta")) && (o.clave !== "arroz" || agricultores.length > 0)).map((o) => <option key={o.clave} value={o.clave}>{o.texto}</option>)}
+                </select>
               </td>
               <td>
                 <div className="cjh-dos">
                   <CeldaSugerida inputRef={(el) => { refs.current.sujeto = el; }} value={sujeto} opciones={opcionesSujeto} minimo={1} elegirPrimera={false}
-                    placeholder="¿Quién o qué? Ej: Danny · Secadora 3" disabled={false} ariaLabel="Cliente, persona o máquina"
+                    placeholder={op === "arroz" ? "¿Qué agricultor?" : op === "venta" ? "Cliente (si no, Enter)" : op === "compra" ? "¿A quién se compra?" : "¿Quién o qué? Ej: Danny · Secadora 3"} disabled={false} ariaLabel="Cliente, persona o máquina"
                     onChange={setSujeto} onEnter={(v) => siguiente("sujeto", v)} onEscape={limpiarTodo} />
                   <CeldaSugerida inputRef={(el) => { refs.current.concepto = el; }} value={concepto} opciones={opcionesConcepto} minimo={2} elegirPrimera={false}
-                    placeholder="¿Qué se hizo? Ej: reparación · cambio de bandas · comida" disabled={false} ariaLabel="Concepto o descripción"
+                    placeholder={op === "arroz" ? "Detalle (opcional)" : op === "venta" ? "¿Qué se vendió? Ej: 20 lb de 0,11" : op === "compra" ? "¿Qué se compró?" : "¿Qué se hizo? Ej: reparación · cambio de bandas · comida"} disabled={false} ariaLabel="Concepto o descripción"
                     onChange={setConcepto} onEnter={(v) => siguiente("concepto", v)} onEscape={limpiarTodo} />
                 </div>
                 <div className="cjh-nueva__tags">
@@ -811,10 +846,21 @@ export function CajaHoja({
               </td>
             </tr>
             {/* Lo poco que falta según lo que sea: debajo de la misma fila, sin cambiar de pantalla. */}
-            {(esVenta || esCuadrilla || esFondo || conCredito || tipoQuien === "agricultor" || tipoQuien === "cobro" || tipoQuien === "pago") && (
+            {(conCantidad || esVenta || esCuadrilla || esFondo || conCredito || tipoQuien === "agricultor" || tipoQuien === "cobro" || tipoQuien === "pago") && (
               <tr className="cjh-extra">
                 <td colSpan={6}>
                   <div className="cjh-extra__fila">
+                    {conCantidad && (<>
+                      <label><span>{op === "arroz" ? "🌾 Quintales" : "📦 Cantidad"}</span>
+                        <input ref={(el) => { refs.current.opCant = el; }} value={opCant} inputMode="decimal" aria-label={op === "arroz" ? "Quintales" : "Cantidad"} onKeyDown={pasa("opCant")}
+                          onChange={(e) => { setOpCant(e.target.value.replace(/[^\d.,]/g, "")); setMontoManual(false); }} />
+                      </label>
+                      <label><span>× Precio $</span>
+                        <input ref={(el) => { refs.current.opPrecio = el; }} value={opPrecio} inputMode="decimal" aria-label="Precio" onKeyDown={pasa("opPrecio")}
+                          onChange={(e) => { setOpPrecio(e.target.value.replace(/[^\d.,]/g, "")); setMontoManual(false); }} />
+                      </label>
+                      <span className="cjh-extra__total">{totalOp > 0 ? <>Total <b>{money(totalOp)}</b></> : "o escribe el monto directo en Salidas"}</span>
+                    </>)}
                     {esVenta && (<>
                       <span className="cjh-extra__nota">🛒 {ventaLeida
                         ? <>{ventaLeida.producto.label}{calculo ? ` · ${formatoCantidad(calculo.libras, 3)} lb = ${formatoCantidad(calculo.qq, 3)} QQ` : ""}</>
@@ -863,12 +909,121 @@ export function CajaHoja({
                 </td>
               </tr>
             )}
+          </thead>
+          <tbody>
+            {/* Lo que se está guardando: la fila ya quedó libre para seguir escribiendo. */}
+            {[...cola].reverse().map((c) => (
+              <tr key={`cola-${c.id}`} className={`cjh-cola ${c.estado === "error" ? "is-error" : ""}`}>
+                <td className="cjh-fecha">{c.estado === "error" ? "⚠️ No se guardó" : "⏳ Guardando…"}</td>
+                <td>{c.fila.description}{c.estado === "error" && <small>{c.error}</small>}</td>
+                <td className="num cjh-entra">{c.fila.movement === "INCOME" ? money(c.fila.amount) : ""}</td>
+                <td className="num cjh-sale">{c.fila.movement === "EXPENSE" ? money(c.fila.amount) : ""}</td>
+                <td />
+                <td className="cjh-acc">
+                  {c.estado === "error" && (<>
+                    <button type="button" onClick={() => corregir(c)}>Corregir</button>
+                    <button type="button" onClick={() => reintentar(c)}>Reintentar</button>
+                    <button type="button" onClick={() => cambiarCola((l) => l.filter((x) => x.id !== c.id))}>Quitar</button>
+                  </>)}
+                </td>
+              </tr>
+            ))}
+            {filasVistas.length === 0 && (
+              <tr className="cjh-vacio"><td colSpan={6}>{filas.length ? "Ningún movimiento coincide con lo que buscas." : "Todavía no hay movimientos en esta caja."}</td></tr>
+            )}
+            {bloques.map((b, n) => (
+              <Fragment key={`${b.dia}-${n}`}>
+              <tr className="cjh-dia">
+                <td colSpan={2}>{diaLargo(b.t)}<small>{b.filas.length} {b.filas.length === 1 ? "movimiento" : "movimientos"}</small></td>
+                <td className="num">{b.entra > 0 ? `+ ${money(b.entra)}` : ""}</td>
+                <td className="num">{b.sale > 0 ? `− ${money(b.sale)}` : ""}</td>
+                <td /><td />
+              </tr>
+              {b.filas.map((f) => {
+              if (f.k === "cred") {
+                const c = f.c;
+                const anulado = c.status === "CANCELLED";
+                const abonado = Number(c.amount) - Number(c.balance);
+                return (
+                  <tr key={`cred-${c.id}`} className={`cjh-cred ${anulado ? "is-anulado" : ""}`}>
+                    <td className="cjh-fecha">{fechaCorta(c.created_at)}</td>
+                    <td>
+                      {c.description ?? "—"}
+                      <span className="cjh-tags"><span className="cjh-tag">{etiquetaCat(c.categoria)}</span></span>
+                      <small>💳 A crédito · 🏪 {c.proveedor_nombre ?? "—"}{anulado ? " · ANULADO" : Number(c.balance) < 0.005 ? " · pagada" : abonado > 0.005 ? ` · saldo ${money(Number(c.balance))}` : " · en Por Pagar"}</small>
+                    </td>
+                    <td />
+                    <td className="num cjh-sin">{money(Number(c.amount))}<small>no sale de caja</small></td>
+                    <td className="num">{money(f.saldo)}</td>
+                    <td className="cjh-acc">
+                      {puedeAnular && !anulado && abonado < 0.005 && !c.transporte && <button type="button" onClick={() => onAnularCredito(c)}>Anular</button>}
+                    </td>
+                  </tr>
+                );
+              }
+              const m = f.m;
+              const anulado = !!m.reversed_at;
+              const esAnulacion = !!m.reversal_of;
+              const origen = origenExterno(m);
+              const entra = m.movement === "INCOME";
+              return (
+                <tr key={m.id} className={`${entra ? "is-in" : "is-out"} ${anulado ? "is-anulado" : ""} ${esAnulacion ? "is-reverso" : ""} ${origen ? "is-externo" : ""} ${nuevos.has(m.id) ? "is-nuevo" : ""}`}>
+                  <td className="cjh-fecha">{fechaCorta(m.created_at)}</td>
+                  <td>
+                    {m.description || etiquetaCat(m.category)}
+                    <span className="cjh-tags">
+                      <span className="cjh-tag">{etiquetaCat(m.category)}</span>
+                      {quienDeMovimiento(m) && <span className="cjh-tag is-quien">{quienDeMovimiento(m)}</span>}
+                      {m.codigo && m.codigo !== CODIGO && <span className="cjh-tag">cód. {m.codigo}</span>}
+                    </span>
+                    {(m.subcategoria || m.proveedor_nombre || origen || anulado || esAnulacion || (mixto && m.medio === "BANCO") || m.maq_activo || m.area) && (
+                      <small>
+                        {[
+                          m.subcategoria,
+                          m.proveedor_nombre ? `🏪 ${m.proveedor_nombre}` : "",
+                          (m.maq_activo || m.area) ? `🔧 ${[m.area, m.maq_activo].filter(Boolean).join(" · ")}` : "",
+                          mixto && m.medio === "BANCO" ? "🏦 Banco" : "",
+                          origen ? `↪ ${origen}` : "",
+                          esAnulacion ? "Anulación" : "",
+                          anulado ? `ANULADO${m.reversed_reason ? `: ${m.reversed_reason}` : ""}` : ""
+                        ].filter(Boolean).join(" · ")}
+                      </small>
+                    )}
+                    {m.es_fondo && (
+                      <small className={m.fondo_estado === "LIQUIDADO" ? "cjh-ok" : "cjh-warn"}>
+                        {m.fondo_estado === "LIQUIDADO" ? "✅ Fondo liquidado" : "⏳ Fondo por liquidar"}{m.responsable ? ` · 👤 ${m.responsable}` : ""}
+                      </small>
+                    )}
+                  </td>
+                  <td className="num cjh-entra">{entra ? money(Number(m.amount)) : ""}</td>
+                  <td className="num cjh-sale">{entra ? "" : money(Number(m.amount))}</td>
+                  <td className={`num cjh-saldo ${f.saldo < 0 ? "is-neg" : ""}`}>{money(f.saldo)}</td>
+                  <td className="cjh-acc">
+                    {m.es_fondo && m.fondo_estado === "POR_LIQUIDAR" && !anulado && !esAnulacion && (
+                      <button type="button" title="Registrar el gasto real y el vuelto que regresa a caja" onClick={() => onLiquidarFondo(m)}>💸 Liquidar</button>
+                    )}
+                    {!m.reference_type && !anulado && !esAnulacion && !m.es_fondo && (
+                      <button type="button" title="Registrar otra vez este movimiento (se puede cambiar)" onClick={() => onRepetir(m)}>🔁</button>
+                    )}
+                    {puedeAnular && !anulado && !esAnulacion && <button type="button" onClick={() => onAnular(m)}>Anular</button>}
+                  </td>
+                </tr>
+              );
+              })}
+              </Fragment>
+            ))}
+            <tr className="cjh-inicial">
+              <td colSpan={2}>Saldo inicial de la caja</td>
+              <td /><td />
+              <td className="num"><b>{money(saldoInicial)}</b></td>
+              <td />
+            </tr>
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={2}>TOTALES DE LA SESIÓN</td>
-              <td className="num cjh-entra">{money(totEntradas)}</td>
-              <td className="num cjh-sale">{money(totSalidas)}</td>
+              <td colSpan={2}>{busca.trim() || ver !== "todo" ? `SOLO LO QUE SE VE (${filasVistas.length})` : "TOTALES DE LA SESIÓN"}</td>
+              <td className="num cjh-entra">{money(busca.trim() || ver !== "todo" ? totVistos.entra : totEntradas)}</td>
+              <td className="num cjh-sale">{money(busca.trim() || ver !== "todo" ? totVistos.sale : totSalidas)}</td>
               <td className="num cjh-saldo"><b>{money(saldoFinal)}</b></td>
               <td />
             </tr>
@@ -884,7 +1039,7 @@ export function CajaHoja({
         )}
         {error ? <span className="cjh-error">⚠️ {error}</span> : (
           <span>Primero quién o qué máquina (si no hay, <kbd>Enter</kbd>) y luego qué se hizo: <i>Secadora 3</i> → <i>cambio de bandas</i>. También en una sola línea: <i>comida</i> · <i>20 lb de 0,11</i> · <i>abono Gabino</i> · <i>cuadrilla embarque 315 x 0,20</i>.
-            {" "}<kbd>Enter</kbd> en el monto guarda y sigues con la próxima · <kbd>Esc</kbd> limpia{opcionesPago.length > 0 && <> · <b>💳</b> = no salió de la gaveta</>}
+            {" "}<kbd>Enter</kbd> en el monto guarda y sigues con la próxima · <kbd>Esc</kbd> limpia · el <b>tipo</b> se queda para la siguiente fila{opcionesPago.length > 0 && <> · <b>💳</b> = no salió de la gaveta</>}
             {movimientos.some((m) => origenExterno(m)) && <span className="cjh-leyenda">En gris: lo que se registró desde otros módulos (pedidos, anticipos, compras…).</span>}</span>
         )}
         {pagoElegido && !error && <span className="cjh-aviso">{pagoElegido.icono} {pagoElegido.titulo}: {pagoElegido.detalle}.</span>}
@@ -904,6 +1059,7 @@ function MenuPago({ ancla, valor, opciones, onElegir, onCerrar }: {
   onElegir: (clave: string) => void; onCerrar: () => void;
 }) {
   const r = ancla.getBoundingClientRect();
+  const abajo = window.innerHeight - r.bottom > 260;
   useEffect(() => {
     const fuera = (e: MouseEvent) => { if (!(e.target as HTMLElement | null)?.closest?.(".cjh-pagos") && e.target !== ancla) onCerrar(); };
     const esc = (e: globalThis.KeyboardEvent) => { if (e.key === "Escape") onCerrar(); };
@@ -912,7 +1068,7 @@ function MenuPago({ ancla, valor, opciones, onElegir, onCerrar }: {
   }, [ancla, onCerrar]);
   const todas = [{ clave: PAGO_GAVETA, icono: "💵", titulo: "De la gaveta", detalle: "efectivo de esta caja" }, ...opciones];
   return createPortal(
-    <ul className="cjh-lista cjh-pagos" role="menu" style={{ right: Math.max(8, window.innerWidth - r.right), bottom: window.innerHeight - r.top + 4, width: 290, left: "auto" }}>
+    <ul className="cjh-lista cjh-pagos" role="menu" style={{ right: Math.max(8, window.innerWidth - r.right), ...(abajo ? { top: r.bottom + 4 } : { bottom: window.innerHeight - r.top + 4 }), width: 290, left: "auto" }}>
       {todas.map((o) => (
         <li key={o.clave} role="menuitem" className={o.clave === valor ? "is-on" : ""} onMouseDown={(e) => { e.preventDefault(); onElegir(o.clave); }}>
           <span>{o.icono} {o.titulo}</span><small>{o.detalle}</small>
@@ -933,10 +1089,10 @@ function CeldaSugerida({ value, opciones, minimo, elegirPrimera, onChange, onEnt
 }) {
   const [abierta, setAbierta] = useState(false);
   const [idx, setIdx] = useState(-1);
-  // La lista se dibuja fija sobre la celda (la hoja tiene scroll y la fila de captura está al fondo).
-  const [pos, setPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
+  // La lista se dibuja fija sobre la celda (la hoja tiene scroll): hacia abajo si hay sitio.
+  const [pos, setPos] = useState<{ left: number; top?: number; bottom?: number; width: number } | null>(null);
   const caja = useRef<HTMLDivElement | null>(null);
-  const ubicar = () => { const r = caja.current?.getBoundingClientRect(); if (r) setPos({ left: r.left, bottom: window.innerHeight - r.top + 2, width: Math.max(r.width, 240) }); };
+  const ubicar = () => { const r = caja.current?.getBoundingClientRect(); if (r) setPos({ left: r.left, width: Math.max(r.width, 240), ...(window.innerHeight - r.bottom > 230 || r.top < 230 ? { top: r.bottom + 2 } : { bottom: window.innerHeight - r.top + 2 }) }); };
   const t = sinTilde(value);
   const lista = useMemo(() => {
     if (t.length < minimo) return [];
@@ -976,7 +1132,7 @@ function CeldaSugerida({ value, opciones, minimo, elegirPrimera, onChange, onEnt
           }
         }} />
       {visible && createPortal(
-        <ul className="cjh-lista" role="listbox" style={pos ? { left: pos.left, bottom: pos.bottom, width: pos.width } : undefined}>
+        <ul className="cjh-lista" role="listbox" style={pos ? { left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.top !== undefined ? Math.max(140, Math.min(260, window.innerHeight - pos.top - 8)) : undefined } : undefined}>
           {lista.map((o, i) => (
             <li key={o.valor} role="option" aria-selected={i === marcada} className={`${i === marcada ? "is-on" : ""} ${o.tono ?? ""}`}
               onMouseDown={(e) => { e.preventDefault(); onEnter(tomar(o)); }}>
