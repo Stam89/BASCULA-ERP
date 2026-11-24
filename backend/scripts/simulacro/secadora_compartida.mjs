@@ -54,7 +54,7 @@ try {
   check(filas.find((f) => f.id === repServ.id)?.accionista_id === matriz && filas.find((f) => f.id === repServ.id)?.operation_type === "SECADO_PILADO"
     && filas.find((f) => f.id === repSocio.id)?.accionista_id === socio.id, "A7. cada registro conserva su dueño y su tipo (no se mezclan)");
   const repetido = await llenar([extra.id], socio.id, true);
-  check(repetido.status === 409 && /arranc/.test(JSON.stringify(repetido.data)), "A8. el mismo dueño y tipo: con el motor encendido ya no se suma", mostrar(repetido));
+  check(repetido.ok && repetido.data.sumados === 1, "A8. el mismo dueño y tipo: se suma aunque el motor esté encendido", mostrar(repetido));
   const verSocio = exigir(await api("GET", "/process-flow/drying/reports", undefined, socio.id), `A9. secados de ${socio.name}`);
   const verMatriz = exigir(await api("GET", "/process-flow/drying/reports", undefined, matriz), "A10. secados de la Matriz");
   check(verSocio.some((r) => r.id === repSocio.id) && !verSocio.some((r) => r.id === repServ.id) && verMatriz.some((r) => r.id === repServ.id) && !verMatriz.some((r) => r.id === repSocio.id),

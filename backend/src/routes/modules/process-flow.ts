@@ -2143,7 +2143,7 @@ export async function quitarTicketDeSecado(client: PoolClient, dryingId: string,
 }
 
 // ➕ SUMAR TICKETS a un secado ya registrado (pedido del dueño 2026-10-29: «faltó agregar un peso y el motor aún no
-// se enciende»). Solo mientras el motor NO arranca (sin hora de inicio) y sin combustible cerrado. Los tickets pasan
+// se enciende»; desde 2026-11-24 también con el motor encendido o reabierto). Solo EN PROCESO y sin combustible cerrado. Los tickets pasan
 // al lote del secado, suben los QQ/kg del túnel y del informe, y el pago del llenado de la cuadrilla se ajusta a los
 // QQ nuevos (si ya se pagó, no se deja).
 export async function sumarTicketsASecado(client: PoolClient, dryingId: string, entryIdsIn: string[], createdBy: string | null) {
@@ -2158,15 +2158,17 @@ export async function sumarTicketsASecado(client: PoolClient, dryingId: string, 
   if (rep.status !== "IN_PROGRESS" || rep.dry_end_at || rep.motor_fuel_id) {
     throw new ApiError(409, `El secado del túnel ${t} ya terminó: no se le puede sumar arroz.`);
   }
-  if (rep.dry_start_at) {
-    throw new ApiError(409, `El motor del túnel ${t} ya arrancó (tiene hora de inicio): ya no se le puede sumar peso a ese secado. Si de verdad no ha arrancado, borra primero la hora de inicio de la corrida.`);
-  }
   if (String(rep.dry_method ?? "TUNEL").toUpperCase() === "TENDAL") throw new ApiError(400, "A un secado en tendal no se le suman tickets así.");
   const pagado = await client.query(
-    "SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND momento = 'LLENADO' AND paid_at IS NOT NULL LIMIT 1",
+    "SELECT 1 FROM cuadrilla_entries WHERE origen = 'SECADORA' AND referencia_id = $1 AND paid_at IS NOT NULL LIMIT 1",
     [dryingId]
   );
-  if (pagado.rowCount) throw new ApiError(409, `La cuadrilla del llenado del túnel ${t} ya se pagó: no se le puede sumar peso.`);
+  if (pagado.rowCount) throw new ApiError(409, `La cuadrilla del túnel ${t} ya se pagó: no se le puede sumar peso.`);
+  const enProduccion = await client.query(
+    `SELECT 1 FROM processing_batch_drying_lots WHERE drying_report_id = $1
+     UNION ALL SELECT 1 FROM processing_batches WHERE drying_report_id = $1 AND status <> 'CANCELLED' LIMIT 1`, [dryingId]
+  );
+  if (enProduccion.rowCount) throw new ApiError(409, "El arroz de este secado ya entró a Producción: anula primero ese proceso.");
 
   const entryIds = [...new Set(entryIdsIn)];
   const entries = (await client.query(
@@ -2812,7 +2814,7 @@ function calculateDryingHours(start?: string | Date | null, end?: string | Date 
 }
 
 // 🤝 Secadora compartida: solo se suma a un túnel que SIGUE secando (sin hora final). Si el arroz es del mismo dueño
-// y tipo que un secado del túnel, se SUMA a ese secado (sumarTicketsASecado, solo antes de encender el motor).
+// y tipo que un secado del túnel, se SUMA a ese secado (sumarTicketsASecado, mientras siga en proceso).
 async function assertTunnelCompartible(client: PoolClient, tunnelNumber: number) {
   const activos = await client.query(
     `SELECT d.dry_end_at FROM drying_tunnel_reports d WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS'`,

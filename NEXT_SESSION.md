@@ -402,7 +402,7 @@ Actualizado: 2026-11-24
 - Secadoras: la tarjeta de un túnel ocupado (sin hora final) ofrece «➕ Agregar más arroz a esta secadora» (antes «🤝 Mi
   arroz se echó…»). Guarda con `compartir_secadora: true`. En `createDryingBatch`, cada grupo cuyo dueño+tipo ya tiene un
   secado EN PROCESO en ese túnel se SUMA a él (`sumarTicketsASecado`); los demás quedan como registro compartido.
-- `sumarTicketsASecado`: solo sin `dry_start_at` (motor sin arrancar), sin hora final ni combustible, no tendal y con el
+- `sumarTicketsASecado`: (desde 2026-11-24 también con el motor encendido o reabierto) solo EN PROCESO, sin hora final ni combustible, no tendal y con el
   llenado de la cuadrilla sin pagar (409 si no). Tickets → lote (y sus inventory_movements), drying_tunnel_report_lots,
   QQ/kg del túnel y del informe (`report_data.lots`), farmer del lote (NULL si son varios) y asignaciones LLENADO por QQ
   escaladas + `upsertCuadrillaSecadoraEntry` (en SACOS no se escalan). Respuesta del batch trae `sumados`.

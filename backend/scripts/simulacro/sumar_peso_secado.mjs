@@ -1,6 +1,6 @@
 // ➕ Faltó un peso (pedido del dueño 2026-10-29): a una secadora ya llena se le SUMA un ticket del mismo dueño y tipo
-// mientras el motor no arranca (sin hora de inicio). Sube QQ/kg del secado y el pago del llenado de la cuadrilla; con el
-// motor encendido ya no se deja. Otro dueño en la misma secadora sigue siendo un registro aparte. SOLO copia.
+// mientras siga en proceso (también con el motor encendido, 2026-11-24). Sube QQ/kg del secado y el pago del llenado de la cuadrilla;
+// finalizado ya no se deja. Otro dueño en la misma secadora sigue siendo un registro aparte. SOLO copia.
 import { montar, check, resumen } from "./sim_base.mjs";
 import { revisar } from "./consistencia.mjs";
 const S = await montar({ copiar: process.argv[2] !== "nocopia", liberarTuneles: false });
@@ -14,7 +14,9 @@ try {
   const pend = await q("SELECT id, farmer_id, quintals::float qq FROM mobile_synced_tickets WHERE liquidated_at IS NULL AND weighing_ticket_id IS NULL AND quintals > 5 AND lower(coalesce(raw_payload->>'modo','principal')) = 'principal' ORDER BY quintals DESC LIMIT 3");
   if (pend.length < 3) throw new Error(`la copia no tiene 3 tickets pendientes (${pend.length})`);
   // El caso real: la secadora 1 (motor 1) ya está llena y el motor todavía no arranca.
-  const tunel = 1, motor = 1;
+  const libreDe = (await q("SELECT tunnel_number t, motor_number m FROM drying_tunnel_reports WHERE status = 'IN_PROGRESS' AND dry_start_at IS NULL AND tunnel_number IS NOT NULL ORDER BY tunnel_number LIMIT 1"))[0];
+  if (!libreDe) throw new Error("la copia no tiene una secadora llena y sin hora de inicio");
+  const tunel = Number(libreDe.t), motor = Number(libreDe.m);
   const base = (await q(`SELECT d.id, d.total_quintals::float qq, d.dry_start_at, l.accionista_id, l.operation_type, a.name
                            FROM drying_tunnel_reports d JOIN lots l ON l.id = d.lot_id LEFT JOIN accionistas a ON a.id = l.accionista_id
                           WHERE d.tunnel_number = $1 AND d.status = 'IN_PROGRESS' ORDER BY d.created_at LIMIT 1`, [tunel]))[0];
@@ -63,9 +65,19 @@ try {
   // ── C. Con el motor encendido ya no se suma ──
   exigir(await api("POST", `/process-flow/drying/motor/${motor}/sync-run`, { dry_start_at: new Date().toISOString() }), "C1. arranca el motor (hora de inicio)");
   const tarde = await llenar([c.id], socio.id, true);
-  check(tarde.status === 409 && /arranc/.test(JSON.stringify(tarde.data)), "C2. con el motor encendido ya no se suma peso", mostrar(tarde));
-  const libre = await q("SELECT lot_id FROM weighing_tickets WHERE id = $1", [c.id]);
-  check(!libre[0].lot_id, "C3. ese ticket queda libre (no se metió a medias)");
+  const qc = Number((await q("SELECT quintals::float qq FROM weighing_tickets WHERE id = $1", [c.id]))[0].qq);
+  const tot = (await q("SELECT total_quintals::float qq, dry_start_at FROM drying_tunnel_reports WHERE id = $1", [rep.id]))[0];
+  check(tarde.ok && Math.abs(tot.qq - (qa + qb + qc)) < 0.01, "C2. con el motor encendido también se suma", { ...tot, r: mostrar(tarde).slice(0, 60) });
+  check(Boolean(tot.dry_start_at), "C3. sin perder la hora de inicio");
+  const cuad2 = await llenadoCuadrilla(rep.id);
+  check(cuad0 > 0 ? Math.abs(cuad2 - cuad0 * (qa + qb + qc) / qa) < 0.02 : true, "C4. y la cuadrilla sube con él", { cuad2 });
+  await q("UPDATE drying_tunnel_reports SET status = 'COMPLETED' WHERE id = $1", [rep.id]);
+  const otro = (await q("SELECT id FROM weighing_tickets WHERE lot_id IS NULL AND id <> ALL($1::uuid[]) LIMIT 1", [[b.id, c.id, d.id]]))[0];
+  const { sumarTicketsASecado } = await import("../../dist/routes/modules/process-flow.js");
+  const { inTransaction } = await import("../../dist/db/transaction.js");
+  let fin = ""; try { await inTransaction((cl) => sumarTicketsASecado(cl, rep.id, [otro?.id ?? c.id], null)); } catch (e) { fin = e.message; }
+  check(/ya terminó/.test(fin), "C5. finalizado ya no se suma", fin);
+  await q("UPDATE drying_tunnel_reports SET status = 'IN_PROGRESS' WHERE id = $1", [rep.id]);
 
   const h = (await revisar(q)).filter((x) => !/báscula cambió/i.test(x.regla));
   check(h.length === 0, "Z. integridad sin hallazgos", h.map((x) => x.regla + " " + JSON.stringify(x.filas ?? x.error).slice(0, 250)));

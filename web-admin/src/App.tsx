@@ -16680,7 +16680,7 @@ Motivo (obligatorio):`, ""));
                                 onClick={() => setSecadoraCompartida((cur) => ({ ...cur, [secadora]: true }))}>
                                 ➕ Agregar más arroz a esta secadora
                               </button>
-                              <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Un peso que faltó del mismo dueño (antes de encender el motor) o el arroz de otro dueño / un servicio.</p>
+                              <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>Un peso que faltó del mismo dueño (mientras el secado siga en proceso) o el arroz de otro dueño / un servicio.</p>
                               {secadoDelTunel[t]?.sinInicio && (
                                 <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px dashed #fca5a5" }}>
                                   <p className="muted" style={{ fontSize: 12.5, margin: "0 0 6px" }}>🔀 ¿Se anotó en la secadora equivocada? (el motor aún no arranca)</p>
@@ -16705,7 +16705,7 @@ Motivo (obligatorio):`, ""));
                         <h3 style={{ marginTop: 0, paddingBottom: 8, borderBottom: "2px solid #e2e8f0" }}>🌀 {secadora} · Túnel {t}{compartida ? <> <span className="chip warn">🤝 Compartida</span></> : null}</h3>
                         {compartida && (
                           <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 10, padding: "8px 12px", margin: "0 0 12px", fontSize: 13 }}>
-                            Ya tiene: <strong>{ocupadoPor}</strong>. Si lo que marques es <strong>del mismo dueño y tipo</strong>, se <strong>suma a ese secado</strong> (solo mientras el motor no tenga hora de inicio). Si es de <strong>otro dueño o un servicio</strong>, queda como otro registro en la misma secadora: las mismas horas, el combustible se reparte por QQ y al pilar cada uno va por su lado.{" "}
+                            Ya tiene: <strong>{ocupadoPor}</strong>. Si lo que marques es <strong>del mismo dueño y tipo</strong>, se <strong>suma a ese secado</strong> (mientras siga en proceso). Si es de <strong>otro dueño o un servicio</strong>, queda como otro registro en la misma secadora: las mismas horas, el combustible se reparte por QQ y al pilar cada uno va por su lado.{" "}
                             <button type="button" className="btnGhost" style={{ padding: "2px 8px" }}
                               onClick={() => setSecadoraCompartida((cur) => { const next = { ...cur }; delete next[secadora]; return next; })}>
                               Cancelar
