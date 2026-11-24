@@ -45,6 +45,8 @@ export type OpcionesApi = {
   accionistaId?: string | null;
   /** 📴 No mostrar el aviso rojo de «sin conexión» (el envío se guarda en el celular y se manda después). */
   silencioSinConexion?: boolean;
+  /** 📒 Renglón de la Caja del día: viaja en la cabecera y queda en la misma transacción (backend http/caja-contexto.ts). */
+  renglon?: unknown;
 };
 
 function authHeaders(opts?: OpcionesApi): Record<string, string> {
@@ -239,6 +241,7 @@ async function enviarJsonUnaVez<T>(method: "POST" | "PUT" | "PATCH", path: strin
   const enviar = () => {
     const extra: Record<string, string> = { "X-Envio-Id": envioId };
     if (confirmados.length) extra["X-Confirmar"] = confirmados.join(",");
+    if (opts?.renglon) extra["X-Caja-Renglon"] = btoa(Array.from(new TextEncoder().encode(JSON.stringify(opts.renglon)), (b) => String.fromCharCode(b)).join(""));
     if (confirmados.includes("SOBREGIRO")) extra["X-Confirmar-Sobregiro"] = "1";
     return conConexion(fetch(`${API_URL}/api/v1${path}`, {
       method,

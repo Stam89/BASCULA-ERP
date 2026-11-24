@@ -68,7 +68,7 @@ try {
   check(await gaveta() === inicial - 5, "D3. la gaveta sigue igual tras anular", await gaveta());
   const vivos = await q("SELECT count(*)::int n FROM cash_movements WHERE id = ANY($1) AND reversed_at IS NULL", [[egreso.id, banco.id]]);
   check(vivos[0].n === 0, "D4. las dos líneas quedan anuladas", vivos);
-  exigir(await api("DELETE", `/fomentos/${fom.id}/entregas/${ent.id}`, undefined, ceyro), "D5. ya se puede quitar la entrega");
+  check((await q("SELECT 1 FROM fomento_entregas WHERE id=$1", [ent.id])).length === 0, "D5. al anular, la entrega sale del fomento");
 
   // E. Fomento de un socio transferido por la Matriz.
   const fomS = exigir(await api("POST", "/fomentos", { farmer_name: "SIM SOCIO TRANSFERENCIA", cuadras: 2, inicio: "2026-10-01" }, rovinson), "E0. fomento de ROVINSON");

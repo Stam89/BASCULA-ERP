@@ -2,6 +2,11 @@
 
 Actualizado: 2026-11-23
 
+## 2026-11-23 · Caja del día (Matriz)
+- Pantalla `components/CajaDia.tsx` + `cajaDiaLeer.ts` (lector por bloque) + `cajaDiaGuardar.ts` (qué es, qué falta y a qué ruta va; cabecera `X-Caja-Renglon`). Va junto a «Hoja de siempre» (botón, se recuerda por equipo: `bascula-erp:caja-vista`). Los socios siguen con su hoja.
+- Servidor: `/cash/dia` (`caja-dia.ts`), `caja-renglon.ts`, `caja-contexto.ts`, migración 20261144. Simulacro `caja_dia`. El conteo se anota y NO ajusta el saldo.
+- No se guardan desde aquí: sacos (formulario), préstamos, nómina con monto distinto al pendiente. Máquina y Transporte, solo efectivo.
+
 ## Último cambio: ➖ Quitar un peso de una secadora en proceso (2026-11-23)
 
 - Secadoras › editar un secado en proceso: botón «Quitar» por peso (`quitarTicketDeSecado`, POST /process-flow/drying/:id/quitar-ticket), también con el

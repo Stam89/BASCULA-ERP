@@ -23,7 +23,7 @@ try {
   const listaC = exigir(await api("GET", "/fomentos/para-caja", undefined, ceyro), "A. lista de Caja de CEYRO");
   const enC = listaC.find((f) => f.id === fom.id);
   check(enC?.es_de_otro_socio === true && enC?.accionista_nombre === "ROVINSON", "A1. en la caja de CEYRO sale el fomento de ROVINSON, marcado «de ROVINSON»", enC && { es: enC.es_de_otro_socio, de: enC.accionista_nombre });
-  check(listaC.every((f) => f.status === "ACTIVOS"), "A2. solo fomentos activos");
+  check(listaC.every((f) => ["ACTIVOS", "APROBADOS"].includes(f.status)), "A2. solo fomentos activos o aprobados en cero");
   const listaR = exigir(await api("GET", "/fomentos/para-caja", undefined, rovinson), "A. lista de Caja de ROVINSON");
   check(listaR.every((f) => !f.es_de_otro_socio), "A3. un socio solo ve sus fomentos en su caja");
 
@@ -52,7 +52,10 @@ try {
   const deStalyn = await api("POST", `/fomentos/${fom.id}/entregas`, { valor: 10, cash_register_id: cajaC.id }, stalyn);
   check(!deStalyn.ok, "C3. otro socio no entrega fomentos de ROVINSON", mostrar(deStalyn));
   const pago = await api("POST", `/fomentos/${fom.id}/pagos`, { fecha: "2026-10-22", valor: 10, cash_register_id: cajaC.id }, ceyro);
-  check(!pago.ok, "C4. el pago del agricultor de un fomento de ROVINSON no entra a la caja de CEYRO", mostrar(pago));
+  // Desde la Caja del día (2026-11-23) la Matriz sí recibe esa devolución y se la debe al socio.
+  check(pago.ok, "C4. la devolución del fomento de ROVINSON entra a la caja de CEYRO", mostrar(pago));
+  const movPago = (await q("SELECT id FROM cash_movements WHERE reference_type='fomento_pagos' AND reference_id=$1", [pago.data.id]))[0];
+  exigir(await api("POST", `/cash/movements/${movPago.id}/reverse`, { reason: "SIM anular devolucion" }, ceyro), "C5. y se anula");
 
   const h1 = await revisar(q);
   check(h1.length === 0, "D. control de integridad sin hallazgos", h1.map((y) => y.regla + " " + JSON.stringify(y.filas ?? y.error).slice(0, 200)));
@@ -62,7 +65,7 @@ try {
   const fin = await par();
   check(Math.abs(fin.ceyroDebe - antes.ceyroDebe) < 0.01 && Math.abs(fin.rovDebe - antes.rovDebe) < 0.01, "E1. las cuentas vuelven a como estaban", { antes, fin });
   check(Math.abs(await saldoCaja(cajaC.id) - c0) < 0.01, "E2. la caja de CEYRO vuelve a como estaba");
-  exigir(await api("DELETE", `/fomentos/${fom.id}/entregas/${e.id}`, undefined, rovinson), "E3. ROVINSON borra la entrega anulada de su fomento");
+  check((await q("SELECT 1 FROM fomento_entregas WHERE id=$1", [e.id])).length === 0, "E3. al anular, la entrega sale del fomento de ROVINSON");
   const h2 = await revisar(q);
   check(h2.length === 0, "F. integridad al final sin hallazgos", h2.map((y) => y.regla + " " + JSON.stringify(y.filas ?? y.error).slice(0, 200)));
 } catch (err) { console.log("ERROR", err?.stack ?? err); check(false, "excepción"); } finally {

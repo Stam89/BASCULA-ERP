@@ -65,6 +65,7 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
+import { CajaDia } from "./components/CajaDia";
 import { CajaHoja, claveMaq, type HojaCredito, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
 import { CajaResumenGlobal } from "./components/CajaResumenGlobal";
 
@@ -5469,6 +5470,10 @@ export function App() {
   const matrizAccionista = accionistas.find((a) => a.tipo === "MATRIZ") ?? null;
   const matrizName = matrizAccionista?.name?.trim() || appSettings.business_name.trim() || "Matriz";
   const esMatrizActiva = matrizAccionista?.id === activeAccionistaId;
+  // 📒 Caja de la Matriz: «Hoja del día» (nueva) o la hoja de siempre. Se recuerda en cada equipo.
+  const [cajaVista, setCajaVistaState] = useState<"dia" | "hoja">(() => { try { return localStorage.getItem("bascula-erp:caja-vista") === "hoja" ? "hoja" : "dia"; } catch { return "dia"; } });
+  const setCajaVista = (v: "dia" | "hoja") => { setCajaVistaState(v); try { localStorage.setItem("bascula-erp:caja-vista", v); } catch { /* sin almacenamiento */ } };
+  const cajaDelDia = esMatrizActiva && cajaVista === "dia";
   // 🧭 Caja hoja › «¿De quién?»: operadores y máquinas de Transporte (si la carga del inicio falló —p. ej. la pestaña
   // se abrió antes de iniciar sesión—, se vuelven a pedir al entrar a la Caja de la Matriz).
   useEffect(() => {
@@ -20913,6 +20918,7 @@ Motivo (obligatorio):`, ""));
                         const mixta = caja.tipo === "MIXTO" && cashSummary?.saldo_efectivo !== undefined;
                         const gaveta = mixta ? Number(cashSummary!.saldo_efectivo) : saldoActual;
                         const abiertaHoy = caja.opened_at ? fechaLocal(new Date(caja.opened_at)) === hoy : true;
+                        if (cajaDelDia) return null; // la hoja del día trae sus propios saldos
                         return (
                           <div className="cjk">
                             <div className="cjk-card is-saldo">
@@ -20938,7 +20944,7 @@ Motivo (obligatorio):`, ""));
                           (arroz en cáscara, ventas, fomentos, sacos, mantenimiento, socios, nómina y el formulario completo)
                           va en «Otros registros»; el Resumen global y «¿Cuándo se hizo?» en «Más». */}
                       <div className="cjx-acciones">
-                        {(caja.tipo ?? "EFECTIVO") !== "BANCO" && (
+                        {!cajaDelDia && (caja.tipo ?? "EFECTIVO") !== "BANCO" && (
                           <button type="button" className="cjx-acciones__btn" title="Contar billetes y monedas sin cerrar la caja" onClick={() => { abrirCuadreDia().catch(() => undefined); }}>🧮 Cuadrar</button>
                         )}
                         <div className="cj-dd">
@@ -21163,10 +21169,16 @@ Motivo (obligatorio):`, ""));
                 {(cajaSubTab === "resumen" || cajaEnCapa) && (
                   <div className="cajaMovimientosPanel cj-card cj-col-list" style={{ padding: 0, overflow: "hidden" }}>
                     <div className="cj-panel-head">
-                      <span>📋 Hoja de movimientos de la sesión</span>
-                      <span className="cj-count">{cashMovements.length + cajaCreditos.length}</span>
+                      <span>{cajaDelDia ? "📒 Hoja del día" : "📋 Hoja de movimientos de la sesión"}</span>
+                      {!cajaDelDia && <span className="cj-count">{cashMovements.length + cajaCreditos.length}</span>}
+                      {esMatrizActiva && (
+                        <span className="cjd-vistas" style={{ marginLeft: "auto" }}>
+                          <button type="button" aria-pressed={cajaDelDia} onClick={() => setCajaVista("dia")}>📒 Hoja del día</button>
+                          <button type="button" aria-pressed={!cajaDelDia} onClick={() => setCajaVista("hoja")}>📋 Hoja de siempre</button>
+                        </span>
+                      )}
                     </div>
-                    {cajaCreditos.some((c) => c.status !== "CANCELLED") && (
+                    {!cajaDelDia && cajaCreditos.some((c) => c.status !== "CANCELLED") && (
                       <div style={{ padding: "8px 16px", background: "#f5f3ff", borderBottom: "1px solid #ede9fe", fontSize: 12.5, color: "#5b21b6" }}>
                         💳 A crédito en esta sesión: <strong>{money(cajaCreditos.filter((c) => c.status !== "CANCELLED").reduce((s, c) => s + Number(c.amount), 0))}</strong> en Cuentas por Pagar · no afecta el saldo de la caja
                       </div>
@@ -21177,6 +21189,21 @@ Motivo (obligatorio):`, ""));
                         && !["PAGO_AGRICULTOR", "FOMENTOS", "PAGO_SERVICIO_PILADO"].includes(c.codigo)
                         && (esSocioH ? (c.aplicable_a === "SOCIO" || c.aplicable_a === "AMBOS" || (c.codigo === "COMPRA_SACOS" && manejaSacosPropios))
                           : (c.aplicable_a === "MATRIZ" || c.aplicable_a === "AMBOS")));
+                      if (cajaDelDia && dashboard.current_cash_register && matrizAccionista) return (
+                        <CajaDia
+                          cajaId={dashboard.current_cash_register.id}
+                          matriz={{ id: matrizAccionista.id, nombre: matrizName }}
+                          productos={productosVentaDetalle()}
+                          bodegaId={finishedWarehouse?.id ?? null}
+                          categorias={categoriasHoja.filter((c) => !["REPUESTOS", "MANTENIMIENTO_EQUIPO", CATEGORIA_MATERIALES, "COMPRA_ACTIVO_FIJO", "RETIRO_BANCO", "FALTANTE_CAJA", "SOBRANTE_CAJA", "GASTO_POR_SOCIO", "GASTO_DE_TRANSPORTE", "PRESTAMO_TERCERO", "DEVOLUCION_FOMENTO", "VENTA_DETALLE", "VENTA_MAYOR"].includes(c.codigo) && !esCategoriaSacos(c.codigo))}
+                          reglas={reglasHoja} memoria={memoriaHoja}
+                          puedeEditar={canEdit("Caja")} puedeAnular={canAnular}
+                          onCambio={async () => { const id = dashboard.current_cash_register?.id; if (id) await refreshCaja(id); setPorAsignarKey((k) => k + 1); await Promise.all([refreshReceivables(), cargarCreditosTransporte()]).catch(() => undefined); }}
+                          onNomina={() => { setCajaSubTab("nomina"); loadSemana().catch(() => undefined); }}
+                          onFormulario={() => abrirMovimientoCaja("EXPENSE")}
+                          avisar={(m, t) => addToast(m, t)}
+                        />
+                      );
                       const sug = new Set<string>();
                       for (const m of cashMovements) if (m.description && !m.reference_type) sug.add(m.description.trim());
                       for (const sc of subcategoriasGastos) sug.add(sc);
