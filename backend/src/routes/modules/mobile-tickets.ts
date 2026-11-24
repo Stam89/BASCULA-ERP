@@ -21,6 +21,7 @@ import { agricultorPorNombre, nombreNormalSql, vincularTicketsPendientesSeguro }
 import { aplicarCambioBascula, descartarCambioBascula, listarCambiosBascula } from "../../services/cambio-bascula.js";
 import { buildManualBasculaPayload, esSerieEmergencia, formatBasculaTicketNumber, SERIE_EMERGENCIA, siguienteEmergencia } from "../../utils/manual-bascula-ticket.js";
 import { fechaDeTicket, hoyEc } from "../../utils/fechas.js";
+import { vieneDeInternet } from "../../utils/red-local.js";
 
 export const mobileTicketsRouter = Router();
 
@@ -919,7 +920,7 @@ mobileTicketsRouter.post("/:id/create-lot", requireAuth, resolveAccionista, exig
 // DEVICE_SYNC_KEY en X-Device-Key. Si falta la configuración, se rechaza todo.
 mobileTicketsRouter.post("/sync", asyncRoute(async (req, res) => {
   const provided = req.headers["x-device-key"];
-  if (!env.deviceSyncKey || provided !== env.deviceSyncKey) {
+  if (!env.deviceSyncKey || provided !== env.deviceSyncKey || vieneDeInternet(req)) {
     throw new ApiError(401, "Dispositivo no autorizado para sincronizar tickets.");
   }
   const body = syncSchema.parse(req.body);

@@ -38,5 +38,8 @@ logs/
 
 # Volcados de la base de datos (pg_dump): son DATOS, nunca se versionan
 backend/backups/
+
+# Instalador de la app de la tablet que el ERP ofrece (se copia a mano al publicar una versión)
+backend/app-tablet/
 *.dump
 *.tsbuildinfo

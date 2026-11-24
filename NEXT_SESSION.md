@@ -1,6 +1,18 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-23
+Actualizado: 2026-11-24
+
+## 2026-11-24 · App de la báscula v11.58 (código 249) y su parte en el ERP
+- App en `C:\Users\Usuario\AndroidStudioProjects\BASCULA` (fuera del repo, sin git). Copia de la 11.57: `C:\BASCULA-Respaldos\app-bascula-v11.57-antes-20261123`. Base Room sigue en v6.
+  **Pendiente del dueño: instalarla ENCIMA en la tablet** (Menú › Preparar actualización, sin desinstalar). Se probó completa en una tablet virtual, no en la física.
+- Envío: WiFi del local → buscar la PC en la red → `https://erp.ceyroerp.com`; sin exigir internet (antes, con WiFi sin internet no enviaba nada), reintento cada 30 s…, borrados
+  avisados al ERP, rechazados con motivo, serie 900 001+ fuera de la numeración, tablet vacía no empieza en 000 001, credencial renovada sola.
+- Servidor: `services/bascula-tablet.ts` (estados, nombres, borrados), `bascula-device-auth.ts` (tablet bloqueada no revive; versión y pendientes), rutas `/api/bascula/eliminados|estados|catalogo|app`,
+  migración 20261145. Firebase ya no quita un pesaje en espera que no conoce. Panel «📱 Tablet» en Báscula. Simulacros `tablet_bascula`, `bascula_movil`, `ticket_quitado`.
+- `utils/red-local.ts`: la clave de instalación (va dentro del APK, y el APK está en una página pública) solo sirve desde la red del local; por internet, solo la credencial propia de la tablet.
+- **Versiones nuevas desde el ERP** (para 11.58 en adelante): poner en `backend/app-tablet/` (no se versiona) el APK y `bascula-update.json` `{versionCode, versionName, archivo, sha256, notes}`; la tablet lo
+  ofrece sola (revisa cada 12 h o en Menú › Actualizaciones). Compilar SIN `-PDEVICE_SYNC_KEY` y firmar con la misma firma de siempre (`~/.android/debug.keystore`).
+- El emulador de pruebas usa clave inventada, DNS cortado y la base `bascula_erp_ensayo`: nunca la clave real ni el ERP real.
 
 ## 2026-11-23 · Caja del día (Matriz)
 - Pantalla `components/CajaDia.tsx` + `cajaDiaLeer.ts` (lector por bloque) + `cajaDiaGuardar.ts` (qué es, qué falta y a qué ruta va; cabecera `X-Caja-Renglon`). Va junto a «Hoja de siempre» (botón, se recuerda por equipo: `bascula-erp:caja-vista`). Los socios siguen con su hoja.

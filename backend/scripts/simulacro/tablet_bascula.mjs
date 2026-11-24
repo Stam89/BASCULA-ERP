@@ -1,6 +1,8 @@
 // 📟 Tablet de báscula ↔ ERP (2026-11-23): la serie 900 001+ no viaja a la tablet, los borrados en espera se avisan, estados y
 // catálogo con firma, tablet bloqueada, un ticket malo no frena a los demás y Firebase no quita lo que no conoce. SOLO copia.
 process.env.DEVICE_SYNC_KEY = "clave-de-prueba-simulacro";
+process.env.BASCULA_APP_DIR = `${process.env.TEMP ?? "/tmp"}/app-tablet-simulacro-${process.pid}`;
+import fs from "fs";
 import path from "path";
 import { fileURLToPath, pathToFileURL } from "url";
 import { montar, check, resumen } from "./sim_base.mjs";
@@ -49,6 +51,27 @@ try {
   check((await conTok("/discover")).ok, "A10. reactivada: su credencial vuelve a servir");
   check((await llamar("/estados", { key: "" })).status === 401 && (await llamar("/catalogo", { key: "" })).status === 401
     && (await llamar("/eliminados", { key: "", body: { eliminados: [{ numeroTicket: "1", eliminadoEn: 1 }] } })).status === 401, "A11. las rutas nuevas exigen credencial");
+
+  // ── A'. Por internet la clave de instalación no sirve; la credencial propia, sí ─
+  const web = { "cf-connecting-ip": "186.3.4.5", "cf-ray": "sim" };
+  check((await llamar("/register-device", { body: { deviceId: DEV + "x" }, extra: web })).status === 403, "A12. por internet no se registra una tablet nueva");
+  check((await llamar("/sync", { body: { tickets: [tk(N + 900)] }, extra: web })).status === 403 && !(await fila(N + 900)), "A13. ni entran tickets con la clave de instalación");
+  check((await llamar("/restore", { extra: web })).status === 403, "A14. ni se descarga el historial");
+  check((await conTok("/discover", { extra: web })).ok, "A15. la tablet ya registrada sí entra por internet con su credencial");
+  const viejo = await fetch("http://127.0.0.1:4001/api/v1/tickets/sync", { method: "POST", headers: { "content-type": "application/json", "x-device-key": KEY, ...web }, body: JSON.stringify({ tickets: [] }) });
+  check(viejo.status === 401, "A16. la ruta antigua tampoco acepta la clave por internet");
+
+  // ── A''. Instalador de la app desde el ERP ───────────────────────────────
+  check((await llamar("/app", { key: "" })).status === 401 && (await llamar("/app/apk", { key: "" })).status === 401, "A17. el instalador exige la credencial de la tablet");
+  check((await conTok("/app")).data.disponible === false && (await conTok("/app/apk")).status === 404, "A18. sin versión publicada no ofrece nada");
+  fs.mkdirSync(process.env.BASCULA_APP_DIR, { recursive: true });
+  fs.writeFileSync(path.join(process.env.BASCULA_APP_DIR, "Sim.apk"), "instalador de mentira");
+  fs.writeFileSync(path.join(process.env.BASCULA_APP_DIR, "bascula-update.json"), JSON.stringify({ versionCode: 999, versionName: "99.9", archivo: "Sim.apk", sha256: "b".repeat(64), notes: "Prueba" }));
+  const ap = await conTok("/app");
+  check(ap.data.disponible && ap.data.versionCode === 999 && ap.data.tamano === 21 && !("ruta" in ap.data), "A19. ofrece la versión publicada (sin rutas del servidor)", mostrar(ap));
+  const baja = await fetch("http://127.0.0.1:4001/api/bascula/app/apk", { headers: { "x-device-key": token, "x-device-id": DEV } });
+  check(baja.ok && /android/.test(baja.headers.get("content-type")) && (await baja.text()) === "instalador de mentira", "A20. y se descarga completa", baja.headers.get("content-type"));
+  fs.rmSync(process.env.BASCULA_APP_DIR, { recursive: true, force: true });
 
   // ── B. Serie de emergencia 900 001+: nunca viaja a la tablet ─────────────
   const st0 = (await conTok("/sync-state")).data.principalCount;

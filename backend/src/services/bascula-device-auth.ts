@@ -2,8 +2,9 @@ import crypto from "node:crypto";
 import { pool } from "../db/pool.js";
 import { env } from "../config/env.js";
 import { ApiError } from "../http/error-handler.js";
+import { vieneDeInternet } from "../utils/red-local.js";
 
-type DeviceRequest = { headers: Record<string, unknown> };
+type DeviceRequest = { ip?: string | null; headers: Record<string, unknown> };
 
 function header(req: DeviceRequest, name: string): string {
   const value = req.headers[name];
@@ -24,10 +25,19 @@ export function isBootstrapKey(provided: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
 }
 
+// La clave de instalación va dentro del APK, y el APK se descarga de una página pública: quien la saque de ahí no puede
+// usarla por internet. Por internet solo entra una tablet ya registrada, con su credencial propia.
+function exigirRedDelLocal(req: DeviceRequest): void {
+  if (vieneDeInternet(req)) {
+    throw new ApiError(403, "La tablet se registra solo desde el WiFi del local.");
+  }
+}
+
 export function requireBootstrapKey(req: DeviceRequest): void {
   if (!isBootstrapKey(header(req, "x-device-key"))) {
     throw new ApiError(401, "Clave de instalacion no autorizada.");
   }
+  exigirRedDelLocal(req);
 }
 
 /** 403 si el administrador bloqueó esa tablet: ni la clave de instalación ni un registro nuevo la destraban. */
@@ -56,6 +66,7 @@ export async function requireDeviceCredential(req: DeviceRequest): Promise<{
   // Compatibilidad controlada: APK anteriores siguen funcionando durante la
   // migracion, y la misma clave permite dar de alta una instalacion nueva.
   if (isBootstrapKey(provided)) {
+    exigirRedDelLocal(req);
     await rechazarTabletBloqueada(deviceId || null);
     return { mode: "legacy", deviceId: deviceId || null };
   }

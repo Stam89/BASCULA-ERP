@@ -9,6 +9,7 @@ import { env } from "../../config/env.js";
 import { importBasculaTickets } from "./mobile-tickets.js";
 import { dentroDelCorteSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
 import { SERIE_EMERGENCIA } from "../../utils/manual-bascula-ticket.js";
+import { appPublicada } from "../../services/bascula-app.js";
 import {
   createDeviceToken,
   hashDeviceToken,
@@ -166,6 +167,22 @@ basculaSyncRouter.get("/catalogo", asyncRoute(async (req, res) => {
   const { firma } = firmaQuerySchema.parse(req.query);
   const actual = await catalogoParaTablet(pool);
   res.json(actual.firma === firma ? { ok: true, igual: true, firma } : { ok: true, ...actual });
+}));
+
+// GET /api/bascula/app y /app/apk
+// Versión vigente de la app de la tablet y su instalador. Piden la credencial de la tablet.
+basculaSyncRouter.get("/app", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const app = appPublicada();
+  if (!app) { res.json({ ok: true, disponible: false }); return; }
+  const { versionCode, versionName, sha256, notes, tamano } = app;
+  res.json({ ok: true, disponible: true, versionCode, versionName, sha256, notes, tamano });
+}));
+basculaSyncRouter.get("/app/apk", asyncRoute(async (req, res) => {
+  await requireDeviceCredential(req);
+  const app = appPublicada();
+  if (!app) throw new ApiError(404, "No hay una versión publicada de la app.");
+  res.sendFile(app.ruta, { headers: { "Content-Type": "application/vnd.android.package-archive", "Cache-Control": "no-store" } });
 }));
 
 // GET /api/bascula/pull
