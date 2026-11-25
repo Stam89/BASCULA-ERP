@@ -24,6 +24,7 @@ export const WIPE_TABLES = [
   "drying_tunnel_report_lots",
   "weighing_tickets",
   "mobile_synced_tickets",
+  "ticket_fotos",
   "mobile_advance_applications",
   "insumo_movements",
   "production_yields",

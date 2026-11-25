@@ -7208,3 +7208,12 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .cajaTable tr.bajSeccion td { background: #f1f5f9; font-weight: 700; font-size: 12.5px; color: #334155; padding: 6px 10px; }
 .cajaTable tr.bajAnterior td:first-child { box-shadow: inset 3px 0 0 #f59e0b; }
 .bajAnterior-tag { color: #b45309; font-weight: 600; }
+
+.fotosTicket { width: min(920px, 96vw); max-height: 92vh; overflow: auto; }
+.fotosTicket__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.fotosTicket__head h3 { margin: 0; }
+.fotosTicket__lista { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); gap: 12px; margin-top: 10px; }
+.fotosTicket__lista figure { margin: 0; }
+.fotosTicket__lista img { width: 100%; border-radius: 10px; display: block; }
+.fotosTicket__lista figcaption { margin-top: 4px; font-size: 12.5px; color: var(--c-muted); }
+.fotosTicket__espera { display: grid; place-items: center; min-height: 160px; border: 1px dashed var(--c-border); border-radius: 10px; color: var(--c-muted); padding: 12px; text-align: center; }

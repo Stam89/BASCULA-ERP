@@ -4,6 +4,7 @@ import { startFirebaseAutoImport } from "./integrations/bascula-firebase.js";
 import { ensureLaborTables } from "./routes/modules/labor.js";
 import { lanAddresses } from "./utils/red.js";
 import { iniciarProgramadorResumenDiario } from "./services/resumen-diario.js";
+import { iniciarLimpiezaDeFotos } from "./services/ticket-fotos.js";
 
 
 // Auditoría 2026-11-19: el vigilante levantó el ERP ~50 veces en dos semanas sin dejar el motivo. Una promesa
@@ -40,4 +41,6 @@ app.listen(env.port, "0.0.0.0", () => {
   // Resumen diario por correo: revisa cada minuto si toca enviarlo. Nace APAGADO (solo actúa si el
   // administrador lo activó) y cualquier fallo queda anotado sin afectar al resto del servidor.
   try { iniciarProgramadorResumenDiario(); } catch (e) { console.error("resumen diario (arranque):", e); }
+  // Fotos del camión: borra las de más de 6 meses.
+  iniciarLimpiezaDeFotos();
 });

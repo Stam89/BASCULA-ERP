@@ -65,6 +65,7 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
+import { FotosTicket } from "./components/FotosTicket";
 import { CajaDia } from "./components/CajaDia";
 import { CajaHoja, claveMaq, type HojaCredito, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
 import { CajaResumenGlobal } from "./components/CajaResumenGlobal";
@@ -363,6 +364,8 @@ type BasculaTicket = {
   quitado_at?: string | null;
   quitado_motivo?: string | null;
   ingreso_en_lote?: boolean;
+  /** 📷 Cuántas fotos del camión tiene. */
+  fotos?: number;
   numero: string | null;
   modo: string | null;
   fecha_app: string | null;
@@ -2760,6 +2763,7 @@ export function App() {
   const [orderPackage, setOrderPackage] = useState<OrderPackageState>(defaultOrderPackage);
   // ── Tickets sincronizados de la app de báscula ──────────────────────────────
   const [basculaTickets, setBasculaTickets] = useState<BasculaTicket[]>([]);
+  const [fotosTicket, setFotosTicket] = useState<BasculaTicket | null>(null);
   // Báscula en pestañas: los tickets (donde se ingresa la materia prima) van solos; corregir el
   // accionista y la sincronización en su propia pestaña, para que la página no se haga larga.
   const [basculaVista, setBasculaVistaState] = useState<"tickets" | "corregir" | "sync">(() => {
@@ -16130,7 +16134,13 @@ Motivo (obligatorio):`, ""));
                       const quitado = !!t.quitado_at && !t.weighing_ticket_id && !liquidated;
                       return (
                         <tr key={t.id} style={quitado || antesCorte ? { opacity: 0.6 } : desconocido ? { background: "rgba(220,38,38,0.06)" } : undefined}>
-                          <td className="bt-num" style={{ fontWeight: 600 }}>#{t.numero ?? "—"}</td>
+                          <td className="bt-num" style={{ fontWeight: 600 }}>#{t.numero ?? "—"}
+                            {Number(t.fotos) > 0 && (
+                              <button type="button" className="btnGhost" style={{ padding: "0 4px", marginLeft: 4 }} title="Ver las fotos del camión"
+                                aria-label={`Ver ${t.fotos} foto(s) del ticket ${t.numero ?? ""}`}
+                                onClick={() => setFotosTicket(t)}>📷{Number(t.fotos) > 1 ? ` ${t.fotos}` : ""}</button>
+                            )}
+                          </td>
                           <td className="bt-fecha" style={{ whiteSpace: "nowrap" }}>{t.fecha_app || "—"}</td>
                           <td className="bt-cli">
                             {linked ? (
@@ -16191,6 +16201,11 @@ Motivo (obligatorio):`, ""));
               </div>
             )}
           </div>
+          )}
+
+          {fotosTicket && (
+            <FotosTicket ticketId={fotosTicket.id} titulo={`Ticket #${fotosTicket.numero ?? "—"} · ${fotosTicket.farmer_vinculado || fotosTicket.farmer_name || ""}${fotosTicket.placa ? ` · ${fotosTicket.placa}` : ""}`}
+              onCerrar={() => setFotosTicket(null)} />
           )}
 
           {/* Modal: captura de emergencia compatible con el formato nativo de BASCULA. */}

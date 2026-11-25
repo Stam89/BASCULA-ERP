@@ -1,4 +1,4 @@
-import { Router } from "express";
+import express, { Router } from "express";
 import { z } from "zod";
 import { pool } from "../../db/pool.js";
 import { inTransaction } from "../../db/transaction.js";
@@ -10,6 +10,7 @@ import { importBasculaTickets } from "./mobile-tickets.js";
 import { dentroDelCorteSql, leerCorteBascula, numeroTicketSql } from "../../services/bascula-corte.js";
 import { SERIE_EMERGENCIA } from "../../utils/manual-bascula-ticket.js";
 import { appPublicada } from "../../services/bascula-app.js";
+import { guardarFotoDeTablet, MAX_BYTES_FOTO } from "../../services/ticket-fotos.js";
 import {
   createDeviceToken,
   hashDeviceToken,
@@ -168,6 +169,27 @@ basculaSyncRouter.get("/catalogo", asyncRoute(async (req, res) => {
   const actual = await catalogoParaTablet(pool);
   res.json(actual.firma === firma ? { ok: true, igual: true, firma } : { ok: true, ...actual });
 }));
+
+// POST /api/bascula/fotos?id=…&numero=…&tomadaEn=…   (cuerpo: la foto JPG)
+// Foto del camión. Va aparte del pesaje: si el ticket aún no llegó responde 404 y la tablet la guarda para después.
+const fotoSchema = z.object({
+  id: z.string().uuid().transform((v) => v.toLowerCase()),
+  numero: z.string().trim().min(1).max(20),
+  tomadaEn: z.coerce.number().int().positive()
+});
+basculaSyncRouter.post("/fotos",
+  // Primero la credencial, para no recibir archivos de un desconocido.
+  (req, _res, next) => { requireDeviceCredential(req).then(() => next(), next); },
+  express.raw({ type: ["image/jpeg", "application/octet-stream"], limit: MAX_BYTES_FOTO }),
+  asyncRoute(async (req, res) => {
+    const q = fotoSchema.parse(req.query);
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw new ApiError(400, "Falta la foto.");
+    const contenido = req.body;
+    const r = await inTransaction((client) => guardarFotoDeTablet(client, {
+      id: q.id, numeroTicket: q.numero, tomadaEn: q.tomadaEn, deviceId: String(req.headers["x-device-id"] ?? "").slice(0, 160) || null, contenido
+    }));
+    res.status(201).json({ ok: true, ...r });
+  }));
 
 // GET /api/bascula/app y /app/apk
 // Versión vigente de la app de la tablet y su instalador. Piden la credencial de la tablet.

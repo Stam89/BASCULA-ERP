@@ -31,6 +31,8 @@ export async function montar({ puerto = 4001, copiar = true, liberarTuneles = tr
   process.env.DATABASE_URL = `postgresql://${encodeURIComponent(env.PGUSER)}:${encodeURIComponent(env.PGPASSWORD)}@${env.PGHOST}:${env.PGPORT}/${COPIA}`;
   process.env.PORT = String(puerto);
   process.env.APP_MODE = "test";
+  // Las fotos de prueba nunca van a la carpeta real.
+  process.env.FOTOS_BASCULA_DIR = `${SP}/fotos-simulacro`;
   const DIST = pathToFileURL(path.join(BACKEND, "dist")).href;
   const { app } = await import(`${DIST}/app.js`);
   const { signToken } = await import(`${DIST}/auth/jwt.js`);

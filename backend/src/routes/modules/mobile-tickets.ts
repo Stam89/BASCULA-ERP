@@ -1,3 +1,5 @@
+import fs from "fs";
+import { rutaDeFoto } from "../../services/ticket-fotos.js";
 import crypto from "crypto";
 import { Router } from "express";
 import { z } from "zod";
@@ -366,6 +368,7 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
             t.raw_payload->>'fecha' AS fecha_app,
             t.raw_payload->>'placa' AS placa,
             t.raw_payload->>'calidad' AS calidad,
+            (SELECT count(*)::int FROM ticket_fotos tf WHERE tf.mobile_ticket_id = t.id) AS fotos,
             fv.full_name AS farmer_vinculado
      FROM mobile_synced_tickets t
      LEFT JOIN farmers fv ON fv.id = t.farmer_id
@@ -377,6 +380,21 @@ mobileTicketsRouter.get("/", requireAuth, resolveAccionista, exigirLecturaEn(["B
     params
   );
   res.json(result.rows);
+}));
+
+// 📷 Fotos del camión de un ticket (las toma la tablet) y cada archivo.
+mobileTicketsRouter.get("/:id/fotos", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (req, res) => {
+  const id = z.string().uuid().parse(req.params.id);
+  const r = await pool.query("SELECT id, tomada_en, bytes FROM ticket_fotos WHERE mobile_ticket_id = $1 ORDER BY tomada_en", [id]);
+  res.json(r.rows);
+}));
+mobileTicketsRouter.get("/fotos/:fotoId", requireAuth, resolveAccionista, exigirLecturaEn(["Bascula", "Liquidaciones"]), asyncRoute(async (req, res) => {
+  const id = z.string().uuid().parse(req.params.fotoId);
+  const f = (await pool.query("SELECT archivo FROM ticket_fotos WHERE id = $1", [id])).rows[0];
+  if (!f) throw new ApiError(404, "Foto no encontrada");
+  const ruta = rutaDeFoto(f.archivo);
+  if (!fs.existsSync(ruta)) throw new ApiError(404, "El archivo de esa foto ya no está (se guardan 6 meses).");
+  res.sendFile(ruta, { headers: { "Content-Type": "image/jpeg", "Cache-Control": "private, max-age=86400" }, dotfiles: "allow" });
 }));
 
 // Contexto mínimo para que el ingreso manual muestre el mismo número visible
