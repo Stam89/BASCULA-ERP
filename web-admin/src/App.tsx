@@ -981,6 +981,8 @@ type LiqRecord = {
   /** true = un administrador la desbloqueó y se puede editar precio/descuentos. */
   edit_unlocked?: boolean;
   status?: string;
+  /** Por qué no se descontó el fomento. */
+  nota_fomento?: string | null;
 };
 
 type Insumo = {
@@ -2868,10 +2870,16 @@ export function App() {
     key: string; parte_id?: string; activo_id?: string; maquina: string;
     qq: string; precio: string; tipo: "propia" | "tercero"; prestador: string;
     qq_sugerido: number; automatica: boolean;
+    /** 🚜 De Transporte, pero su parte aún no está ingresado: la máquina y el operador se ponen después. */
+    pendiente?: boolean;
   };
   const nuevaLiqCosechadora = (): LiqCosechadoraLine => ({
     key: safeUUID(), maquina: "Cosechadora externa", qq: "", precio: "",
     tipo: "tercero", prestador: "", qq_sugerido: 0, automatica: false
+  });
+  const nuevaLiqCosechaPendiente = (): LiqCosechadoraLine => ({
+    key: safeUUID(), maquina: "Cosechadora de Transporte · parte por ingresar", qq: "", precio: "",
+    tipo: "propia", prestador: "", qq_sugerido: 0, automatica: false, pendiente: true
   });
   const [liqCosechadoras, setLiqCosechadoras] = useState<LiqCosechadoraLine[]>([]);
   // Fomentos ACTIVOS del agricultor, de CUALQUIER socio (visibilidad global para el
@@ -2882,6 +2890,10 @@ export function App() {
   // Distribución MANUAL de pago entre fondeadores (≥2 fomentos): monto que el
   // operador asigna a cada fomento. Vacío = usa el sugerido LIFO.
   const [liqFomentoDist, setLiqFomentoDist] = useState<Record<string, string>>({});
+  // 🌱 No descontar el fomento en esta liquidación (el arroz viene a nombre del fomentado pero es de un pariente, pedido del
+  // dueño 2026-11-25): el fomento queda como está y se cobra después desde Fomentos.
+  const [liqSinFomento, setLiqSinFomento] = useState(false);
+  const [liqFomentoMotivo, setLiqFomentoMotivo] = useState("");
   // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
   const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string; tipo?: string }>>([]);
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
@@ -2898,6 +2910,8 @@ export function App() {
   // prellena el monto a descontar con el saldo de cada uno.
   useEffect(() => {
     setLiqFomentoDist({});
+    setLiqSinFomento(false);
+    setLiqFomentoMotivo("");
     if (!liqFarmerId) { setLiqFomentosList([]); setLiqFomentoMontos({}); return; }
     // Se manda también el nombre: los fomentos antiguos no traen farmer_id.
     const nombre = farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "";
@@ -4991,6 +5005,7 @@ export function App() {
     gross_total: number;
     advances_total: number;
     other_disc_total: number;
+    nota_fomento?: string | null;
     discount_breakdown: DiscountBreakdown;
     net_total: number;
     pending_total: number;
@@ -5020,6 +5035,7 @@ export function App() {
           existing.gross_total    += Number(r.gross_amount);
           existing.advances_total += Number(r.advances_discount);
           existing.other_disc_total += Number(r.other_discounts);
+          existing.nota_fomento = existing.nota_fomento ?? r.nota_fomento ?? null;
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.discount_breakdown.fomento += Number(bd.fomento);
@@ -5045,6 +5061,7 @@ export function App() {
           existing.gross_total    += Number(r.gross_amount);
           existing.advances_total += Number(r.advances_discount);
           existing.other_disc_total += Number(r.other_discounts);
+          existing.nota_fomento = existing.nota_fomento ?? r.nota_fomento ?? null;
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.discount_breakdown.fomento += Number(bd.fomento);
@@ -5070,6 +5087,7 @@ export function App() {
         gross_total:        Number(r.gross_amount),
         advances_total:     Number(r.advances_discount),
         other_disc_total:   Number(r.other_discounts),
+        nota_fomento:       r.nota_fomento ?? null,
         discount_breakdown: { fomento: Number(bd.fomento), bascula: Number(bd.bascula), flete: Number(bd.flete), cosechadora: Number(bd.cosechadora) },
         net_total:          Number(r.net_amount),
         pending_total:      Number(r.pending_balance),
@@ -5103,7 +5121,7 @@ export function App() {
     const r2 = (n: number) => Math.round(n * 100) / 100;
     const manual = Number(liqDiscounts.bascula || 0) + Number(liqDiscounts.cosechadora || 0) + liqFleteTotal;
     const disponible = Math.max(0, r2(liqGrossTotal - manual));
-    let restante = disponible;
+    let restante = liqSinFomento ? 0 : disponible;
     const items = liqFomentosList.map((f) => {
       const abono = r2(Math.min(restante, f.saldo));
       restante = r2(restante - abono);
@@ -5112,10 +5130,11 @@ export function App() {
       return { ...f, abono, tocado, renovado: tocado && nuevoSaldo > 0.005, nuevoSaldo };
     });
     return { disponible, items, total: r2(items.reduce((s, i) => s + i.abono, 0)) };
-  }, [liqFomentosList, liqGrossTotal, liqDiscounts, liqFleteTotal]);
+  }, [liqFomentosList, liqGrossTotal, liqDiscounts, liqFleteTotal, liqSinFomento]);
+  const liqFomentoDeuda = Math.round(liqFomentosList.reduce((s, f) => s + Number(f.saldo || 0), 0) * 100) / 100;
   // Distribución de pago entre fondeadores: activa con ≥2 fomentos. Cada fomento usa
   // el monto asignado por el operador; si no tecleó, hereda el sugerido LIFO.
-  const liqDistActiva = liqFomentosList.length >= 2;
+  const liqDistActiva = !liqSinFomento && liqFomentosList.length >= 2;
   const liqFomentoResuelto = useMemo(() => {
     const r2 = (n: number) => Math.round(n * 100) / 100;
     return liqFomentoLifo.items.map((it) => {
@@ -14669,6 +14688,11 @@ Motivo (obligatorio):`, ""));
       setMessage("Seleccione agricultor y al menos un lote con precio");
       return;
     }
+    const cosechaIncompleta = liqCosechadoras.find((r) => !r.automatica && (Number(r.qq) > 0) !== (Number(r.precio) > 0));
+    if (cosechaIncompleta) {
+      addToast(`A la cosechadora «${cosechaIncompleta.prestador || cosechaIncompleta.maquina}» le falta ${Number(cosechaIncompleta.qq) > 0 ? "el precio por QQ" : "los quintales"}.`, "error");
+      return;
+    }
     if (liqFomentoTotal > liqFomentoLifo.disponible + 0.005) {
       addToast(`La asignacion a fomentos (${money(liqFomentoTotal)}) supera el disponible de la liquidacion (${money(liqFomentoLifo.disponible)}).`, "error");
       return;
@@ -14729,6 +14753,9 @@ Motivo (obligatorio):`, ""));
         // QQ del lote (registro en el abono) y saldo en contra (nuevo fomento): 1ª línea.
         qq_liquidados: i === 0 ? Math.round(liqQqTotal * 100) / 100 : undefined,
         saldo_en_contra: i === 0 && saldoEnContra > 0 ? saldoEnContra : undefined,
+        nota_fomento: i === 0 && liqSinFomento && liqFomentoDeuda > 0.005
+          ? `Fomento sin descontar (debe ${money(liqFomentoDeuda)})${liqFomentoMotivo.trim() ? ` · Arroz de: ${liqFomentoMotivo.trim()}` : ""}`
+          : undefined,
         flete_detalle: lineFlete > 0
           ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null,
               prestador: line.flete_tipo === "tercero" ? (line.flete_prestador.trim() || undefined) : undefined }
@@ -14789,13 +14816,19 @@ Motivo (obligatorio):`, ""));
     setLiqLines([]);
     setLiqEntryMultiPick([]);
     setLiqDiscounts({ bascula: "", cosechadora: "" });
+    const porAsignar = liqCosechadoras.filter((r) => r.pendiente && Number(r.qq) > 0 && Number(r.precio) > 0).length;
+    const fomentoPendiente = liqSinFomento ? liqFomentoDeuda : 0;
     setLiqCosechadoras([]);
     setLiqFomentoDist({});
     setLiqFomentoMontos({});
+    setLiqSinFomento(false);
+    setLiqFomentoMotivo("");
     setDiscountsOpen(false);
     // Confirma que los servicios propios quedaron pendientes en CxC de Campo.
     let cruceMsg = "";
     if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: ${money(cargosCampoTotal)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
+    if (porAsignar) cruceMsg += ` · 🚜 ${porAsignar} cosecha(s) por completar en Transporte (máquina y operador)`;
+    if (fomentoPendiente > 0.005) cruceMsg += ` · 🌱 El fomento quedó pendiente: ${money(fomentoPendiente)}`;
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): ${money(fomentoCruceSocios)}`;
     if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por ${money(saldoContraMonto)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
     if (pagoHecho) cruceMsg += ` · 💵 Pagado ahora ${money(pagoHecho.pagado)}${pagoHecho.queda > 0.005 ? ` · queda ${money(pagoHecho.queda)} en Por Pagar` : " (pagado completo)"}`;
@@ -23187,7 +23220,7 @@ Motivo (obligatorio):`, ""));
                                 <input type="number" step="0.0001" min="0" placeholder="0.00" value={row.precio}
                                   onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, precio: e.target.value } : item))} />
                               </label>
-                              <label><span>Prestador</span>
+                              {!row.pendiente && <><label><span>Prestador</span>
                                 <select value={row.tipo} onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, tipo: e.target.value as "propia" | "tercero" } : item))}>
                                   <option value="propia">🏭 Flota / Matriz</option>
                                   <option value="tercero">👤 Tercero</option>
@@ -23196,14 +23229,23 @@ Motivo (obligatorio):`, ""));
                               <label><span>Nombre / máquina</span>
                                 <input type="text" placeholder="Prestador o máquina" value={row.prestador}
                                   onChange={(e) => setLiqCosechadoras((current) => current.map((item) => item.key === row.key ? { ...item, prestador: e.target.value } : item))} />
-                              </label>
+                              </label></>}
                             </div>
+                            {row.pendiente && (
+                              <small className="muted" style={{ display: "block" }}>
+                                Se descuenta ahora y queda por cobrar de Transporte. La máquina y el operador se ponen después en <strong>Transporte › Partes Diarios</strong>.
+                                Si la hicieron dos máquinas, agrega una fila por cada una.
+                              </small>
+                            )}
                             <div className="liqHarvesterSubtotal">
                               <span>Subtotal</span>
                               <strong>{money((Number(row.qq || 0) * Number(row.precio || 0)))}</strong>
                             </div>
                           </div>
                         ))}
+                        <button type="button" className="liqAddBtn" onClick={() => setLiqCosechadoras((current) => [...current, nuevaLiqCosechaPendiente()])}>
+                          + Cosechadora de Transporte (la parte aún no está ingresada)
+                        </button>
                         <button type="button" className="liqAddBtn" onClick={() => setLiqCosechadoras((current) => [...current, nuevaLiqCosechadora()])}>
                           + Agregar otra máquina / prestador externo
                         </button>
@@ -23213,7 +23255,27 @@ Motivo (obligatorio):`, ""));
                         </div>
                       </div>
                       {/* ─ Fomentos del agricultor ─ */}
-                      {liqFomentosList.length > 0 && !liqDistActiva && (
+                      {liqFomentosList.length > 0 && (
+                        <div className="liqFleteDesglose">
+                          <div className="liqFleteDesgloseHd">🌱 Debe de fomento {money(liqFomentoDeuda)} · ¿se le descuenta de este arroz?</div>
+                          <div className="segmented" role="radiogroup" aria-label="Descontar el fomento en esta liquidación" style={{ marginTop: 4 }}>
+                            <button type="button" role="radio" aria-checked={!liqSinFomento} className={!liqSinFomento ? "active" : ""} onClick={() => setLiqSinFomento(false)}>Sí, descontar</button>
+                            <button type="button" role="radio" aria-checked={liqSinFomento} className={liqSinFomento ? "active" : ""} onClick={() => setLiqSinFomento(true)}>No, dejarlo pendiente</button>
+                          </div>
+                          {liqSinFomento && (
+                            <>
+                              <label style={{ display: "block", marginTop: 6 }}>
+                                <span>¿De quién es el arroz? <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                                <input type="text" maxLength={120} placeholder="Ej: del hermano, Juan Pérez" value={liqFomentoMotivo} onChange={(e) => setLiqFomentoMotivo(e.target.value)} />
+                              </label>
+                              <small style={{ display: "block", marginTop: 4, color: "#b45309", fontWeight: 600 }}>
+                                El fomento no se toca: sigue debiendo {money(liqFomentoDeuda)}. Cuando pague, se registra directo en Fomentos › 💵 Registrar Pago.
+                              </small>
+                            </>
+                          )}
+                        </div>
+                      )}
+                      {liqFomentosList.length > 0 && !liqDistActiva && !liqSinFomento && (
                         <div className="liqFleteDesglose">
                           <div className="liqFleteDesgloseHd">🌱 Fomentos · amortización LIFO (más reciente primero)</div>
                           {liqFomentoLifo.items.map((f) => (
@@ -23283,7 +23345,7 @@ Motivo (obligatorio):`, ""));
                           )}
                         </div>
                       )}
-                      {liqFomentosList.length > 0 && liqSaldoLibreFomento > 0.005 && (
+                      {liqFomentosList.length > 0 && !liqSinFomento && liqSaldoLibreFomento > 0.005 && (
                         <div style={{ marginTop: 6, padding: "7px 10px", borderRadius: 7, background: "#f0fdf4", border: "1px solid #bbf7d0", color: "#166534", fontSize: 12 }}>
                           <strong>Saldo libre después de Fomentos: {money(liqSaldoLibreFomento)}</strong>
                           <span style={{ display: "block", marginTop: 2 }}>
@@ -23478,7 +23540,7 @@ Motivo (obligatorio):`, ""));
                       const lotsLabel = b.lots.map((l) => `${l.lot_code ?? "?"} (${l.rice_type ?? "—"})`).join(", ");
                       return (
                         <div key={b.key} className="liqHistRow">
-                          <span>{b.farmer_name}</span>
+                          <span>{b.farmer_name}{b.nota_fomento && <small style={{ display: "block", color: "#b45309", fontWeight: 600 }}>🌱 {b.nota_fomento}</small>}</span>
                           <span>{qqTotal.enReal()} QQ</span>
                           <span>{money(b.gross_total)}</span>
                           <span className="liqDiscount">-{money(b.advances_total)}</span>

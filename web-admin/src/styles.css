@@ -6887,6 +6887,9 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .cj-menu-label kbd { font-size: 10.5px; padding: 0 4px; border: 1px solid #cbd5e1; border-radius: 4px; background: #f8fafc; color: #475569; font-weight: 400; }
 .cjh-nueva input[type="date"] { padding: 5px 2px; font-size: 12px; }
 .cjh-nueva input.is-otra { border-color: #f59e0b; background: #fffbeb; font-weight: 700; }
+.partesPorAsignar { margin-top: 10px; padding: 10px 12px; border: 1px solid #fcd34d; border-radius: 10px; background: #fffbeb; color: #78350f; display: grid; gap: 8px; }
+.partesPorAsignar__fila { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; align-items: center; border-top: 1px dashed #fcd34d; padding-top: 8px; }
+.partesPorAsignar__fila .muted { color: #92400e; }
 .partesCobro { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin-top: 10px; padding: 10px 12px; border: 1px solid #bfdbfe; border-radius: 10px; background: #eff6ff; }
 .partesCobro label { margin: 0; font-size: 12px; }
 .partesCobro input { width: 96px; }

@@ -13,6 +13,7 @@ import { requireAdmin, requirePermiso, type AuthenticatedRequest } from "../../a
 import { registrarCargoCampoLiquidacion, type CargoCampoLiquidacion } from "../../services/campo-cxc-liquidacion.js";
 import { amortizarFomentosLIFO, generarFomentoSaldoEnContra, revertirPagosFomentoDeLiquidacion, type AmortizacionFomentoResultado } from "../../services/fomento-liquidacion.js";
 import { getMatrizId } from "../../services/matriz.js";
+import { borrarPartesSinAsignar, crearParteDeLiquidacion } from "../../services/cosecha-por-asignar.js";
 import { precioDeBascula } from "../../utils/precio-bascula.js";
 import { pagarCuentasEnGrupo } from "./cash.js";
 
@@ -186,6 +187,8 @@ const liquidationInput = z.object({
   // Saldo EN CONTRA del lote (Descuentos − Bruto, calculado en el front): si > 0,
   // genera un nuevo fomento por ese déficit a favor del socio que liquida.
   saldo_en_contra: z.number().nonnegative().optional(),
+  // 🌱 Por qué no se descontó el fomento (el arroz es de un pariente…): queda anotado en la liquidación.
+  nota_fomento: z.string().trim().max(300).optional(),
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -367,8 +370,8 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
   const liquidation = await client.query(
     `INSERT INTO liquidations
      (liquidation_number, farmer_id, weighing_ticket_id, lot_id, quintals, price_per_quintal, gross_amount,
-      advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id, nota_fomento)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
      RETURNING *`,
     [
       nextCode("LIQ"),
@@ -384,7 +387,8 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
       preview.net_amount,
       data.batch_id ?? null,
       data.created_by,
-      accionistaId
+      accionistaId,
+      data.nota_fomento || null
     ]
   );
   let liquidacionFinal = liquidation.rows[0];
@@ -559,13 +563,21 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
   // revierte si un Parte Diario ya fue tomado concurrentemente.
   for (const item of detallesCosechadora) {
     const monto = round2(item.qq * item.precio_por_qq);
+    // 🚜 Cosechadora de Transporte cuyo parte aún no está ingresado: nace el parte «por asignar» (máquina y operador después).
+    let parteId = item.campo_parte_id ?? null, activoId = item.activo_id ?? null;
+    if (item.tipo === "propia" && !parteId && !activoId) {
+      ({ parteId, activoId } = await crearParteDeLiquidacion(client, {
+        farmerId: data.farmer_id, farmerName, weighingTicketId: data.weighing_ticket_id,
+        liquidationNumber: liquidation.rows[0].liquidation_number, qq: item.qq, createdBy: data.created_by ?? null
+      }));
+    }
     const detail = await client.query(
       `INSERT INTO liquidation_harvest_details
          (liquidation_id, campo_parte_id, activo_id, provider_type, provider_name,
           quintals, price_per_quintal, amount)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [liquidation.rows[0].id, item.campo_parte_id ?? null, item.activo_id ?? null,
+      [liquidation.rows[0].id, parteId, activoId,
        item.tipo, item.prestador?.trim() || null, item.qq, item.precio_por_qq, monto]
     );
     if (item.tipo === "propia") {
@@ -577,7 +589,7 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
         monto,
         qq: item.qq,
         precioUnitario: item.precio_por_qq,
-        activoId: item.activo_id,
+        activoId,
         prestador: item.prestador,
         createdBy: data.created_by ?? null
       });
@@ -1119,6 +1131,9 @@ liquidationsRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(asyn
       [liqId]
     );
 
+    const partesDeLaLiq = (await client.query(
+      "SELECT campo_parte_id AS id FROM liquidation_harvest_details WHERE liquidation_id = $1 AND campo_parte_id IS NOT NULL", [liqId]
+    )).rows.map((r: { id: string }) => r.id);
     // Libera los Partes Diarios solo si no queda una CxP de cosechadora externa
     // ya pagada. Si hubo dinero real, se conserva el vinculo y la traza para
     // impedir que el mismo trabajo vuelva a descontarse en otra liquidacion.
@@ -1133,6 +1148,9 @@ liquidationsRouter.post("/:id/anular", requirePermiso("ANULAR"), asyncRoute(asyn
           )`,
       [liqId]
     );
+
+    // Los partes «por asignar» que nadie completó desaparecen con la liquidación; los completados quedan por cobrar.
+    await borrarPartesSinAsignar(client, partesDeLaLiq);
 
     // 5) Revertir el estado del lote si esta liquidación lo había marcado liquidado.
     if (liq.lot_id) {

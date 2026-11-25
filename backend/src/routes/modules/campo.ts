@@ -5,6 +5,7 @@ import { inTransaction } from "../../db/transaction.js";
 import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requireAdmin, type AuthenticatedRequest, requirePermiso } from "../../auth/require-auth.js";
+import { asignarCosecha, cosechasPorAsignar } from "../../services/cosecha-por-asignar.js";
 import { crearParteDesdeBascula } from "../../services/campo-flete-bascula.js";
 import { calcularNominaCampo, esSemanaLunesDomingo, tipoServicioPorActivo, totalFilaNomina, valeEsDeOperador, type CampoUnidadNomina } from "../../utils/campo.js";
 import { repartirCompensacion, saldoNeto } from "../../utils/campo-cuentas.js";
@@ -217,7 +218,7 @@ const TIPO_MAQUINARIA = ["cosechadora", "camion", "vehiculo", "transporte", "otr
 
 campoRouter.get("/activos", asyncRoute(async (req, res) => {
   const q = z.object({ solo_activos: z.enum(["1", "0"]).optional() }).parse(req.query);
-  const where = q.solo_activos === "1" ? "WHERE a.activo = true" : "";
+  const where = q.solo_activos === "1" ? "WHERE a.activo = true AND NOT a.por_asignar" : "WHERE NOT a.por_asignar";
   const result = await pool.query(
     // 👷 Último operador que la manejó (su último parte con operador): se sugiere al elegir la máquina en un parte.
     `SELECT a.id, a.nombre, a.tipo, a.placa_codigo, a.operador, a.activo, a.created_at,
@@ -1293,7 +1294,7 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
             CASE WHEN liq.id IS NOT NULL THEN 'cobrado' ELSE p.estado END AS estado,
             p.origen, p.created_at,
             COALESCE(c.tipo, CASE WHEN p.origen = 'bascula' THEN 'piladora' END) AS cliente_tipo,
-            a.nombre AS activo_nombre, a.tipo AS activo_tipo,
+            a.nombre AS activo_nombre, a.tipo AS activo_tipo, a.por_asignar,
             p.operador_pagado_at,
             p.servicio_id,
             sv.valor::float AS servicio_valor,
@@ -1339,6 +1340,31 @@ campoRouter.get("/partes", asyncRoute(async (req, res) => {
     params
   );
   res.json(result.rows);
+}));
+
+// 🚜 Cosechas descontadas en una liquidación sin parte ingresado: falta ponerles máquina y operador.
+campoRouter.get("/partes/por-asignar", asyncRoute(async (_req, res) => {
+  const [pendientes, libres] = await Promise.all([
+    cosechasPorAsignar(pool),
+    // Partes ya ingresados y sin cobrar que podrían ser esa misma cosecha (para enlazarlos y no cobrarla dos veces).
+    pool.query(
+      `SELECT p.id, p.fecha::text AS fecha, p.qq::float AS qq, p.operador, a.nombre AS maquina, COALESCE(f.full_name, p.cliente) AS agricultor, p.farmer_id
+         FROM campo_partes p JOIN campo_activos a ON a.id = p.activo_id LEFT JOIN farmers f ON f.id = p.farmer_id
+        WHERE a.tipo = 'cosechadora' AND NOT a.por_asignar AND p.estado = 'por_cobrar' AND p.servicio_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM liquidation_harvest_details d WHERE d.campo_parte_id = p.id)
+        ORDER BY p.fecha DESC LIMIT 200`
+    )
+  ]);
+  res.json({ pendientes, libres: pendientes.length ? libres.rows : [] });
+}));
+
+campoRouter.post("/partes/:id/asignar", asyncRoute(async (req, res) => {
+  const body = z.union([
+    z.object({ parte_existente_id: z.string().uuid() }),
+    z.object({ activo_id: z.string().uuid(), operador: z.string().max(140).nullable().optional(), fecha: fechaSchema.optional() })
+  ]).parse(req.body);
+  const id = z.string().uuid().parse(req.params.id);
+  res.json(await inTransaction((client) => asignarCosecha(client, id, body)));
 }));
 
 // Generar el COBRO de un parte: crea un campo_servicio de cosecha o flete segun

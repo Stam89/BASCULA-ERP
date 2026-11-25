@@ -1,6 +1,7 @@
 // Alertas de Transporte y Cosechadora: lo que hay que atender HOY dentro del módulo.
 //  · construirAlertas(): PURA (datos ya contados → alertas ordenadas). Con pruebas.
 //  · reunirAlertas(): solo SELECT; cada bloque falla por separado (un error no tumba el resto).
+import { cosechasPorAsignar } from "./cosecha-por-asignar.js";
 import type { PoolClient } from "pg";
 import { pool } from "../db/pool.js";
 
@@ -21,6 +22,8 @@ export type DatosAlertasCampo = {
   mantenimientos: { vencidos: Array<{ maquina: string; tipo: string; fecha: string }>; proximos: Array<{ maquina: string; tipo: string; fecha: string }> };
   partesPorCobrar: { n: number; qq: number; diasMasViejo: number };
   operadoresSinPagar: { operadores: number; partes: number; diasMasViejo: number };
+  /** Cosechas descontadas en liquidaciones a las que les falta máquina y operador (opcional). */
+  cosechasPorAsignar?: { n: number; qq: number };
   cartera: { monto: number; clientes: number; montoMas30: number };
   /** Documentos de la flota (matrícula, SOAT, revisión…): vencidos y los que vencen en 30 días (opcional). */
   documentos?: { vencidos: DocFlota[]; proximos: DocFlota[] };
@@ -99,6 +102,14 @@ export function construirAlertas(d: DatosAlertasCampo): AlertaCampo[] {
       titulo: `${plural(d.operadoresSinPagar.operadores, "operador", "operadores")} con ${plural(d.operadoresSinPagar.partes, "parte", "partes")} sin pagar`,
       detalle: largo ? `El más antiguo lleva ${d.operadoresSinPagar.diasMasViejo} días sin pagarse.` : "Se pagan desde Nómina Operadores.",
       seccion: "nomina"
+    });
+  }
+  if ((d.cosechasPorAsignar?.n ?? 0) > 0) {
+    a.push({
+      key: "cosechas-por-asignar", nivel: "atencion", icono: "🚜",
+      titulo: `${plural(d.cosechasPorAsignar!.n, "cosecha sin máquina ni operador", "cosechas sin máquina ni operador")} (${d.cosechasPorAsignar!.qq.toFixed(2)} QQ)`,
+      detalle: "Ya se descontaron en una liquidación: ponles la máquina y el operador en Partes Diarios.",
+      seccion: "partes"
     });
   }
   if (d.partesPorCobrar.n > 0) {
@@ -185,7 +196,11 @@ export async function reunirAlertas(db: Db = pool): Promise<DatosAlertasCampo> {
 
   const documentos = await seguro("documentos", { vencidos: [] as DocFlota[], proximos: [] as DocFlota[] }, () => documentosPorVencer(db));
 
-  return { vales, mantenimientos, partesPorCobrar, operadoresSinPagar, cartera, documentos };
+  const cosechasSinMaquina = await seguro("cosechas-por-asignar", { n: 0, qq: 0 }, async () => {
+    const r = await cosechasPorAsignar(db as Parameters<typeof cosechasPorAsignar>[0]);
+    return { n: r.length, qq: r.reduce((t, x) => t + Number(x.qq || 0), 0) };
+  });
+  return { vales, mantenimientos, partesPorCobrar, cosechasPorAsignar: cosechasSinMaquina, operadoresSinPagar, cartera, documentos };
 }
 
 /** Documentos de la flota activa vencidos o que vencen dentro de DIAS_AVISO_DOCUMENTO días. */

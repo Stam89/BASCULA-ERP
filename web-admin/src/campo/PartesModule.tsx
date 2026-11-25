@@ -39,6 +39,8 @@ type Parte = {
   id: string; fecha: string; activo_id: string; activo_nombre: string; activo_tipo?: string; operador: string | null;
   agricultor?: string | null;
   operador_pagado_at?: string | null;
+  /** Cosecha descontada en una liquidación sin máquina ni operador todavía. */
+  por_asignar?: boolean;
   cliente: string; cliente_id: string | null; cliente_tipo: "piladora" | "externo" | null;
   qq: number; observaciones: string | null; estado: "por_cobrar" | "cobrado"; origen: string;
   // Cobro generado (campo_servicio) enlazado, si estado='cobrado'.
@@ -48,6 +50,13 @@ type Parte = {
   liquidacion_id: string | null; liquidacion_numero: string | null;
   liquidacion_socio: string | null; liquidacion_tipo: "cosechadora" | "flete" | null;
 };
+
+type CosechaPendiente = { id: string; fecha: string; qq: number; agricultor: string; farmer_id: string | null; precio: number; monto: number; liquidation_number: string; liquidada: string; socio: string | null };
+type ParteLibre = { id: string; fecha: string; qq: number; operador: string | null; maquina: string; agricultor: string; farmer_id: string | null };
+type PorAsignar = { pendientes: CosechaPendiente[]; libres: ParteLibre[] };
+/** Lo que se completa: una cosecha de una liquidación (nueva) o un parte ya liquidado al que se le corrige máquina u operador. */
+type Completar = { id: string; fecha: string; qq: number; agricultor: string; farmer_id: string | null; detalle: string; activo_id: string; operador: string; nueva: boolean };
+const fechaCorta = (f: string) => String(f).slice(0, 10).split("-").reverse().join("/");
 
 export default function PartesModule() {
   const [activos, setActivos] = useState<Activo[]>([]);
@@ -65,6 +74,8 @@ export default function PartesModule() {
   const [cobrando, setCobrando] = useState<Parte | null>(null);
   const [editando, setEditando] = useState<Parte | null>(null);
   const [editandoTarifa, setEditandoTarifa] = useState<Parte | null>(null);
+  const [porAsignar, setPorAsignar] = useState<PorAsignar>({ pendientes: [], libres: [] });
+  const [completando, setCompletando] = useState<Completar | null>(null);
   const [filtro, setFiltro] = useState({ from: "", to: "", activo_id: "", estado: "" });
   // Pestañas del historial: separa por tipo de máquina (cosechadora vs flete).
   const [histTab, setHistTab] = useState<"cosechadoras" | "fletes" | "todos">("todos");
@@ -87,6 +98,7 @@ export default function PartesModule() {
     if (filtro.activo_id) qs.set("activo_id", filtro.activo_id);
     if (filtro.estado) qs.set("estado", filtro.estado);
     setPartes(await apiGet<Parte[]>(`/campo/partes?${qs.toString()}`));
+    setPorAsignar(await apiGet<PorAsignar>("/campo/partes/por-asignar"));
   }, [filtro]);
   const refrescar = useCallback(async () => {
     try {
@@ -184,6 +196,23 @@ export default function PartesModule() {
             📋 Historial{porCobrar > 0 ? ` · ${porCobrar} por cobrar` : ""}
           </button>
         </nav>
+        {porAsignar.pendientes.length > 0 && (
+          <div className="partesPorAsignar">
+            <strong>🚜 {porAsignar.pendientes.length === 1 ? "1 cosecha descontada en una liquidación: falta" : `${porAsignar.pendientes.length} cosechas descontadas en liquidaciones: falta`} la máquina y el operador</strong>
+            {porAsignar.pendientes.map((c) => (
+              <div key={c.id} className="partesPorAsignar__fila">
+                <span>
+                  <b>{c.agricultor}</b> · {qqFmt(c.qq)} QQ × {money(c.precio)} = {money(c.monto)}
+                  <small className="muted"> · {fechaCorta(c.fecha)}{c.socio ? ` · liquidó ${c.socio}` : ""}</small>
+                </span>
+                <button type="button" className="btnSecondary" onClick={() => setCompletando({
+                  id: c.id, fecha: c.fecha, qq: c.qq, agricultor: c.agricultor, farmer_id: c.farmer_id, activo_id: "", operador: "", nueva: true,
+                  detalle: `${c.liquidation_number}${c.socio ? ` · ${c.socio}` : ""} · ${money(c.monto)}`
+                })}>Poner máquina y operador</button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* A · Formulario de nuevo reporte */}
@@ -337,7 +366,7 @@ export default function PartesModule() {
                     {/* Sin chofer no es un error: el pago sale del informe que trae el chofer. */}
                     {p.operador ? p.operador : <span className="muted" title="Sin chofer anotado (se puede poner con Editar)">—</span>}
                   </td>
-                  <td>{p.activo_nombre}</td>
+                  <td>{p.por_asignar ? <span className="chip warn">Falta máquina</span> : p.activo_nombre}</td>
                   <td style={{ fontWeight: 600 }}>
                     {p.cliente}
                     {p.cliente_tipo === "externo" ? (
@@ -376,7 +405,14 @@ export default function PartesModule() {
                     ) : <span className="chip warn">Por cobrar</span>}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    {p.cobro_automatico ? (
+                    {p.cobro_automatico && p.liquidacion_tipo === "cosechadora" && !p.operador_pagado_at ? (
+                      <button type="button" className="btnSecondary" title="El cobro ya está en la liquidación; aquí solo se pone la máquina y el operador"
+                        onClick={() => setCompletando({ id: p.id, fecha: String(p.fecha).slice(0, 10), qq: p.qq, agricultor: p.agricultor ?? p.cliente, farmer_id: null,
+                          activo_id: p.por_asignar ? "" : p.activo_id, operador: p.operador ?? "", nueva: !!p.por_asignar,
+                          detalle: `${p.liquidacion_numero ?? "Liquidación"}${p.liquidacion_socio ? ` · ${p.liquidacion_socio}` : ""}` })}>
+                        🚜 Máquina / operador
+                      </button>
+                    ) : p.cobro_automatico ? (
                       <span className="chip" title="El cobro fue generado automáticamente desde la liquidación y no debe registrarse otra vez.">🔒 Automático</span>
                     ) : p.estado === "por_cobrar" ? (
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -416,6 +452,12 @@ export default function PartesModule() {
           onDone={async () => { setEditando(null); await refrescar(); notify("Parte actualizado"); }}
           onError={(m) => notify(m, "err")} />
       )}
+      {completando && (
+        <CompletarCosechaModal cosecha={completando} activos={activosActivos} operadores={operadores} libres={completando.nueva ? porAsignar.libres : []}
+          onClose={() => setCompletando(null)}
+          onDone={async (m) => { setCompletando(null); await refrescar(); notify(m); }}
+          onError={(m) => notify(m, "err")} />
+      )}
       {editandoTarifa && (
         <EditarTarifaModal parte={editandoTarifa}
           onClose={() => setEditandoTarifa(null)}
@@ -423,6 +465,82 @@ export default function PartesModule() {
           onError={(m) => notify(m, "err")} />
       )}
     </section>
+  );
+}
+
+// 🚜 Cosecha descontada en una liquidación: se le pone la máquina y el operador, o se enlaza con un parte ya ingresado
+// (para no tener la misma cosecha dos veces). El cobro no cambia: ya está en la liquidación.
+function CompletarCosechaModal({ cosecha, activos, operadores, libres, onClose, onDone, onError }: {
+  cosecha: Completar; activos: Activo[]; operadores: Operador[]; libres: ParteLibre[];
+  onClose: () => void; onDone: (mensaje: string) => void | Promise<void>; onError: (m: string) => void;
+}) {
+  const cosechadoras = activos.filter((a) => a.tipo.toLowerCase() === "cosechadora");
+  const [modo, setModo] = useState<"nueva" | "existente">("nueva");
+  const [f, setF] = useState({ activo_id: cosecha.activo_id, operador: cosecha.operador, fecha: cosecha.fecha });
+  const [parteId, setParteId] = useState("");
+  const [busy, setBusy] = useState(false);
+  // Primero los del mismo agricultor; los demás también, porque el parte pudo quedar con otro nombre.
+  const opciones = [...libres].sort((a, b) => Number(b.farmer_id === cosecha.farmer_id && !!cosecha.farmer_id) - Number(a.farmer_id === cosecha.farmer_id && !!cosecha.farmer_id));
+  async function submit() {
+    try {
+      setBusy(true);
+      if (modo === "nueva" && !f.activo_id) throw new Error("Elige la máquina que cosechó");
+      if (modo === "nueva" && !f.operador) throw new Error("Elige el operador");
+      if (modo === "existente" && !parteId) throw new Error("Elige el parte que ya estaba ingresado");
+      const r = await apiPost<{ maquina: string; operador: string | null }>(`/campo/partes/${cosecha.id}/asignar`,
+        modo === "nueva" ? { activo_id: f.activo_id, operador: f.operador, fecha: f.fecha || undefined } : { parte_existente_id: parteId });
+      await onDone(`Cosecha de ${cosecha.agricultor}: ${r.maquina}${r.operador ? ` · ${r.operador}` : ""}`);
+    } catch (e) { onError((e as Error).message); } finally { setBusy(false); }
+  }
+  return (
+    <div className="modalOverlay" role="dialog" aria-modal="true" onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 16 }}>
+      <form className="formPanel" onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submit(); }}
+        style={{ maxWidth: 480, width: "100%", margin: 0 }}>
+        <h2 style={{ marginTop: 0 }}>🚜 Máquina y operador</h2>
+        <p style={{ margin: "0 0 8px" }}><strong>{cosecha.agricultor}</strong> · {qqFmt(cosecha.qq)} QQ<small className="muted" style={{ display: "block" }}>{cosecha.detalle}</small></p>
+        {cosecha.nueva && opciones.length > 0 && (
+          <div className="segmented" style={{ marginBottom: 8 }}>
+            <button type="button" className={modo === "nueva" ? "active" : ""} onClick={() => setModo("nueva")}>Poner máquina</button>
+            <button type="button" className={modo === "existente" ? "active" : ""} onClick={() => setModo("existente")}>El parte ya estaba ingresado</button>
+          </div>
+        )}
+        {modo === "nueva" ? (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+              <label><span>Máquina</span>
+                <select value={f.activo_id} onChange={(e) => {
+                  const activo = cosechadoras.find((a) => a.id === e.target.value);
+                  setF({ ...f, activo_id: e.target.value, operador: f.operador || (operadorSugerido(activo, operadores) ?? "") });
+                }}>
+                  <option value="">Seleccione</option>
+                  {cosechadoras.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}
+                </select>
+              </label>
+              <label><span>Operador</span>
+                <select value={f.operador} onChange={(e) => setF({ ...f, operador: e.target.value })}>
+                  <option value="">Seleccione</option>
+                  {f.operador && !operadores.some((o) => o.nombre === f.operador) && <option value={f.operador}>{f.operador}</option>}
+                  {operadores.map((o) => <option key={o.id} value={o.nombre}>{o.nombre}</option>)}
+                </select>
+              </label>
+            </div>
+            <label><span>Día de la cosecha</span><input type="date" value={f.fecha} max={hoy()} onChange={(e) => setF({ ...f, fecha: e.target.value })} /></label>
+          </>
+        ) : (
+          <label><span>Parte que ya estaba ingresado</span>
+            <select value={parteId} onChange={(e) => setParteId(e.target.value)}>
+              <option value="">Seleccione</option>
+              {opciones.map((p) => <option key={p.id} value={p.id}>{p.agricultor} · {qqFmt(p.qq)} QQ · {fechaCorta(p.fecha)} · {p.maquina}{p.operador ? ` · ${p.operador}` : ""}</option>)}
+            </select>
+            <small className="muted" style={{ display: "block", marginTop: 4 }}>Se usa ese parte (con su máquina, operador y QQ para el pago del operador) y queda cobrado en esta liquidación, así no se cobra dos veces.</small>
+          </label>
+        )}
+        <div className="buttonRow">
+          <button type="submit" className="primary" disabled={busy}>{busy ? "Guardando…" : "Guardar"}</button>
+          <button type="button" onClick={onClose} disabled={busy}>Cancelar</button>
+        </div>
+      </form>
+    </div>
   );
 }
 

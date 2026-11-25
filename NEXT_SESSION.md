@@ -9,6 +9,11 @@ Actualizado: 2026-11-24
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-25 · Liquidación: fomento pendiente y cosechadora sin parte
+- «¿Se le descuenta de este arroz?» Sí / No: con «No» el fomento no se toca (se cobra después en Fomentos › Registrar Pago) y queda `liquidations.nota_fomento`.
+- Cosechadora de Transporte sin parte: `services/cosecha-por-asignar.ts` crea el parte con la máquina «POR ASIGNAR» (`campo_activos.por_asignar`, inactiva y oculta en las listas). En Transporte › Partes Diarios se le pone máquina y operador, o se enlaza con un parte ya ingresado (`POST /campo/partes/:id/asignar`, `GET /campo/partes/por-asignar`); se puede corregir hasta que se le pague al operador. La cuenta por cobrar pasa a la máquina real. Anular la liquidación borra los no completados. Migración 20261149. Simulacro `liquidacion_fomento_cosecha`.
+- `liquidaciones` K2/K3 y `modulos` D8 fallan por datos reales o de antes (no por esto).
+
 ## 2026-11-24 · Gana: precio de la cáscara a mano
 - Partida sin liquidar: precio de compra escrito en el Gana (`processing_batch_drying_lots.precio_cascara_manual`; pilada sin partidas: `production_yields.precio_cascara_manual`; migración 20261148). Con la liquidación hecha vale la liquidada. Solo alimenta el cuadro (y el Resultado mensual, que usa `ganaCalc`). `PATCH /processing-batches/:id/precio-cascara` (EDITAR_PRECIOS). Simulacro `gana_precio_cascara`.
 
