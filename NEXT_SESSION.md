@@ -12,6 +12,7 @@ Actualizado: 2026-11-24
 ## 2026-11-25 · Liquidación: fomento pendiente y cosechadora sin parte
 - «¿Se le descuenta de este arroz?» Sí / No: con «No» el fomento no se toca (se cobra después en Fomentos › Registrar Pago) y queda `liquidations.nota_fomento`.
 - Cosechadora de Transporte sin parte: `services/cosecha-por-asignar.ts` crea el parte con la máquina «POR ASIGNAR» (`campo_activos.por_asignar`, inactiva y oculta en las listas). En Transporte › Partes Diarios se le pone máquina y operador, o se enlaza con un parte ya ingresado (`POST /campo/partes/:id/asignar`, `GET /campo/partes/por-asignar`); se puede corregir hasta que se le pague al operador. La cuenta por cobrar pasa a la máquina real. Anular la liquidación borra los no completados. Migración 20261149. Simulacro `liquidacion_fomento_cosecha`.
+- Anticipos: misma pregunta (`sin_anticipos` por línea, `nota_anticipo`, `GET /liquidations/anticipos-agricultor`, migración 20261150); «Desc. anticipo» pide confirmación si se eligió no descontar. El «Estimado a pagar» ya resta los anticipos.
 - `liquidaciones` K2/K3 y `modulos` D8 fallan por datos reales o de antes (no por esto).
 
 ## 2026-11-24 · Gana: precio de la cáscara a mano

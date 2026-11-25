@@ -89,6 +89,18 @@ try {
   const pa = (await q("SELECT estado, operador FROM campo_partes WHERE id = $1", [P.id]))[0];
   check(pa?.estado === "por_cobrar" && pa.operador === "LEONEL" && !(await q("SELECT 1 FROM campo_servicios WHERE origen_id = $1", [det.id])).length, "D5. el trabajo queda como parte por cobrar y se quita la cuenta", pa);
 
+  // ── F. Anticipos: no descontarlos y, en otra, sí ──
+  const E5 = ing.find((x) => ![E.farmer_id, E2.farmer_id].includes(x.farmer_id) && x.id !== E3.id);
+  exigir(await api("POST", "/advances", { farmer_id: E5.farmer_id, amount: 100, concept: "Anticipo simulacro" }, socio), "F1. anticipo de $100");
+  const debe0 = await anticipos(E5.farmer_id);
+  check(exigir(await api("GET", `/liquidations/anticipos-agricultor?farmer_id=${E5.farmer_id}`, undefined, socio), "anticipos").total === debe0, "F2. la pantalla ve lo que debe", debe0);
+  const L5 = exigir(await liquidar(E5, { sin_anticipos: true, nota_anticipo: "Anticipo sin descontar" }), "F3. liquidar sin descontar el anticipo")[0];
+  check(r2(L5.advances_discount) === 0 && r2(L5.net_amount) === r2(E5.qq * 32) && (await anticipos(E5.farmer_id)) === debe0, "F4. se paga completo y el anticipo sigue debiéndose", { neto: L5.net_amount, debe: await anticipos(E5.farmer_id) });
+  const L6 = exigir(await liquidar(E3, {}), "F5. otra liquidación normal")[0];
+  check(r2(L6.net_amount) <= r2(E3.qq * 32), "F6. la normal funciona como siempre");
+  exigir(await api("POST", `/liquidations/${L5.id}/apply-advances`, {}, socio), "F7. descontarlo después a propósito");
+  check((await anticipos(E5.farmer_id)) < debe0, "F8. ahora sí baja", await anticipos(E5.farmer_id));
+
   // ── E. Con el fomento, como siempre ──
   const E4 = ing.find((x) => x.farmer_id === E.farmer_id && x.id !== E.id && ![E2.id, E3.id].includes(x.id)) ?? E;
   exigir(await liquidar(E4, { other_discounts: 200, discount_breakdown: { fomento: 200, bascula: 0, flete: 0, cosechadora: 0 } }), "E1. liquidar descontando el fomento");

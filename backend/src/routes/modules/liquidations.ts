@@ -189,6 +189,9 @@ const liquidationInput = z.object({
   saldo_en_contra: z.number().nonnegative().optional(),
   // 🌱 Por qué no se descontó el fomento (el arroz es de un pariente…): queda anotado en la liquidación.
   nota_fomento: z.string().trim().max(300).optional(),
+  // 💸 No descontar los anticipos del agricultor en esta liquidación (quedan debiéndose).
+  sin_anticipos: z.boolean().optional(),
+  nota_anticipo: z.string().trim().max(300).optional(),
   batch_id: z.string().uuid().optional(),
   created_by: z.string().uuid().optional()
 });
@@ -203,7 +206,7 @@ async function previewLiquidation(data: z.infer<typeof liquidationInput>, accion
      WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL')`,
     [data.farmer_id, accionistaId]
   );
-  const pendingAdvances = Number(advances.rows[0].pending);
+  const pendingAdvances = data.sin_anticipos ? 0 : Number(advances.rows[0].pending);
   const calculo = calcularNetoLiquidacion(gross, data.other_discounts, pendingAdvances);
 
   return {
@@ -370,8 +373,8 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
   const liquidation = await client.query(
     `INSERT INTO liquidations
      (liquidation_number, farmer_id, weighing_ticket_id, lot_id, quintals, price_per_quintal, gross_amount,
-      advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id, nota_fomento)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      advances_discount, other_discounts, discount_breakdown, net_amount, batch_id, created_by, accionista_id, nota_fomento, nota_anticipo)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
      RETURNING *`,
     [
       nextCode("LIQ"),
@@ -388,7 +391,8 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
       data.batch_id ?? null,
       data.created_by,
       accionistaId,
-      data.nota_fomento || null
+      data.nota_fomento || null,
+      data.nota_anticipo || null
     ]
   );
   let liquidacionFinal = liquidation.rows[0];
@@ -480,7 +484,7 @@ async function registrarLiquidacion(client: PoolClient, data: LiquidationInput, 
      FOR UPDATE`,
     [data.farmer_id, accionistaId]
   );
-  const anticiposPendientes = round2(advances.rows.reduce((sum, advance) => sum + Number(advance.balance || 0), 0));
+  const anticiposPendientes = data.sin_anticipos ? 0 : round2(advances.rows.reduce((sum, advance) => sum + Number(advance.balance || 0), 0));
   const calculoFinal = calcularNetoLiquidacion(preview.gross_amount, otrosDescuentosFinales, anticiposPendientes);
   const desgloseFinal = data.discount_breakdown
     ? { ...data.discount_breakdown, fomento: conciliacionFomento.aplicado }
@@ -991,6 +995,17 @@ liquidationsRouter.get("/fomentos-agricultor", asyncRoute(async (req, res) => {
     [q.farmer_id ?? null, q.farmer_name ?? null, activo]
   )).rows.filter((r) => Number(r.saldo) > 0.005);
   res.json(rows);
+}));
+
+// Anticipos que debe el agricultor al socio que liquida (los que se descontarían en la liquidación).
+liquidationsRouter.get("/anticipos-agricultor", asyncRoute(async (req, res) => {
+  const { farmer_id } = z.object({ farmer_id: z.string().uuid() }).parse(req.query);
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(balance), 0)::float AS total, COUNT(*)::int AS n FROM farmer_advances
+      WHERE farmer_id = $1 AND accionista_id = $2 AND status IN ('CONFIRMED', 'PARTIAL') AND balance > 0`,
+    [farmer_id, (req as AuthenticatedRequest).accionistaId]
+  );
+  res.json({ total: round2(r.rows[0].total), n: r.rows[0].n });
 }));
 
 // Desglose de amortización de fomentos de una liquidación (batch) para el

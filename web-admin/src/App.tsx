@@ -981,8 +981,9 @@ type LiqRecord = {
   /** true = un administrador la desbloqueó y se puede editar precio/descuentos. */
   edit_unlocked?: boolean;
   status?: string;
-  /** Por qué no se descontó el fomento. */
+  /** Por qué no se descontó el fomento / los anticipos. */
   nota_fomento?: string | null;
+  nota_anticipo?: string | null;
 };
 
 type Insumo = {
@@ -2894,6 +2895,9 @@ export function App() {
   // dueño 2026-11-25): el fomento queda como está y se cobra después desde Fomentos.
   const [liqSinFomento, setLiqSinFomento] = useState(false);
   const [liqFomentoMotivo, setLiqFomentoMotivo] = useState("");
+  // 💸 Lo mismo con los anticipos: lo que debe y si se le descuenta de este arroz.
+  const [liqAnticipos, setLiqAnticipos] = useState(0);
+  const [liqSinAnticipos, setLiqSinAnticipos] = useState(false);
   // Flota Propia (campo_activos) para el selector de vehículo del cruce de flete.
   const [fletaActivos, setFletaActivos] = useState<Array<{ id: string; nombre: string; tipo?: string }>>([]);
   // Carga tolerante a fallos: si el módulo Campo no responde, el cruce de flete
@@ -2906,12 +2910,21 @@ export function App() {
       .then((rows) => setFletaActivos(rows.map((r) => ({ id: r.id, nombre: r.nombre, tipo: r.tipo }))))
       .catch(() => { /* Campo opcional: se ignora */ });
   }, [authUser?.id]);
-  // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
-  // prellena el monto a descontar con el saldo de cada uno.
+  // Lo elegido (descontar o no, reparto) se reinicia SOLO al cambiar de agricultor: una recarga de la lista no lo toca.
   useEffect(() => {
     setLiqFomentoDist({});
     setLiqSinFomento(false);
     setLiqFomentoMotivo("");
+    setLiqSinAnticipos(false);
+    setLiqAnticipos(0);
+  }, [liqFarmerId]);
+  // Carga los fomentos ACTIVOS del agricultor (de todos los socios) al elegirlo, y
+  // prellena el monto a descontar con el saldo de cada uno.
+  useEffect(() => {
+    if (!liqFarmerId) setLiqAnticipos(0);
+    else apiGet<{ total: number }>(`/liquidations/anticipos-agricultor?farmer_id=${liqFarmerId}`)
+      .then((r) => { setLiqAnticipos(r.total); if (r.total > 0.005) setDiscountsOpen(true); })
+      .catch(() => undefined);
     if (!liqFarmerId) { setLiqFomentosList([]); setLiqFomentoMontos({}); return; }
     // Se manda también el nombre: los fomentos antiguos no traen farmer_id.
     const nombre = farmers.find((f) => f.id === liqFarmerId)?.full_name ?? "";
@@ -5006,6 +5019,7 @@ export function App() {
     advances_total: number;
     other_disc_total: number;
     nota_fomento?: string | null;
+    nota_anticipo?: string | null;
     discount_breakdown: DiscountBreakdown;
     net_total: number;
     pending_total: number;
@@ -5036,6 +5050,7 @@ export function App() {
           existing.advances_total += Number(r.advances_discount);
           existing.other_disc_total += Number(r.other_discounts);
           existing.nota_fomento = existing.nota_fomento ?? r.nota_fomento ?? null;
+          existing.nota_anticipo = existing.nota_anticipo ?? r.nota_anticipo ?? null;
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.discount_breakdown.fomento += Number(bd.fomento);
@@ -5062,6 +5077,7 @@ export function App() {
           existing.advances_total += Number(r.advances_discount);
           existing.other_disc_total += Number(r.other_discounts);
           existing.nota_fomento = existing.nota_fomento ?? r.nota_fomento ?? null;
+          existing.nota_anticipo = existing.nota_anticipo ?? r.nota_anticipo ?? null;
           existing.net_total      += Number(r.net_amount);
           existing.pending_total  += Number(r.pending_balance);
           existing.discount_breakdown.fomento += Number(bd.fomento);
@@ -5088,6 +5104,7 @@ export function App() {
         advances_total:     Number(r.advances_discount),
         other_disc_total:   Number(r.other_discounts),
         nota_fomento:       r.nota_fomento ?? null,
+        nota_anticipo:      r.nota_anticipo ?? null,
         discount_breakdown: { fomento: Number(bd.fomento), bascula: Number(bd.bascula), flete: Number(bd.flete), cosechadora: Number(bd.cosechadora) },
         net_total:          Number(r.net_amount),
         pending_total:      Number(r.pending_balance),
@@ -5152,6 +5169,8 @@ export function App() {
     Object.values(liqDiscounts).reduce((sum, v) => sum + Number(v || 0), 0) + liqFleteTotal + liqFomentoTotal,
     [liqDiscounts, liqFleteTotal, liqFomentoTotal]
   );
+  // Lo que se le descuenta de anticipos: hasta donde alcance después de los demás descuentos (igual que el servidor).
+  const liqAnticipoDesc = liqSinAnticipos ? 0 : round2(Math.min(liqAnticipos, Math.max(0, liqGrossTotal - liqDiscountsTotal)));
   // Saldo EN CONTRA: cuando los descuentos superan el bruto (el agricultor queda debiendo).
   const liqSaldoEnContra = Math.max(0, Math.round((liqDiscountsTotal - liqGrossTotal) * 100) / 100);
 
@@ -14756,6 +14775,10 @@ Motivo (obligatorio):`, ""));
         nota_fomento: i === 0 && liqSinFomento && liqFomentoDeuda > 0.005
           ? `Fomento sin descontar (debe ${money(liqFomentoDeuda)})${liqFomentoMotivo.trim() ? ` · Arroz de: ${liqFomentoMotivo.trim()}` : ""}`
           : undefined,
+        sin_anticipos: liqSinAnticipos && liqAnticipos > 0.005 ? true : undefined,
+        nota_anticipo: i === 0 && liqSinAnticipos && liqAnticipos > 0.005
+          ? `Anticipo sin descontar (debe ${money(liqAnticipos)})${liqFomentoMotivo.trim() ? ` · Arroz de: ${liqFomentoMotivo.trim()}` : ""}`
+          : undefined,
         flete_detalle: lineFlete > 0
           ? { monto: lineFlete, tipo: line.flete_tipo, activo_id: line.flete_activo_id || null,
               prestador: line.flete_tipo === "tercero" ? (line.flete_prestador.trim() || undefined) : undefined }
@@ -14818,16 +14841,19 @@ Motivo (obligatorio):`, ""));
     setLiqDiscounts({ bascula: "", cosechadora: "" });
     const porAsignar = liqCosechadoras.filter((r) => r.pendiente && Number(r.qq) > 0 && Number(r.precio) > 0).length;
     const fomentoPendiente = liqSinFomento ? liqFomentoDeuda : 0;
+    const anticipoPendiente = liqSinAnticipos ? liqAnticipos : 0;
     setLiqCosechadoras([]);
     setLiqFomentoDist({});
     setLiqFomentoMontos({});
     setLiqSinFomento(false);
     setLiqFomentoMotivo("");
+    setLiqSinAnticipos(false);
     setDiscountsOpen(false);
     // Confirma que los servicios propios quedaron pendientes en CxC de Campo.
     let cruceMsg = "";
     if (cargosCampoTotal > 0.005) cruceMsg = ` · CxC Transporte: ${money(cargosCampoTotal)} (${cargosCampoCantidad} cargo${cargosCampoCantidad === 1 ? "" : "s"})`;
     if (porAsignar) cruceMsg += ` · 🚜 ${porAsignar} cosecha(s) por completar en Transporte (máquina y operador)`;
+    if (anticipoPendiente > 0.005) cruceMsg += ` · 💸 El anticipo quedó pendiente: ${money(anticipoPendiente)}`;
     if (fomentoPendiente > 0.005) cruceMsg += ` · 🌱 El fomento quedó pendiente: ${money(fomentoPendiente)}`;
     if (fomentoCruceSocios > 0.005) cruceMsg += ` · Cruce inter-socios (fomento): ${money(fomentoCruceSocios)}`;
     if (saldoContraMonto > 0.005) cruceMsg += ` · ⚠️ Saldo en contra: nuevo fomento por ${money(saldoContraMonto)}${saldoContraAcreedor ? ` (a favor de ${saldoContraAcreedor})` : ""}`;
@@ -23264,16 +23290,33 @@ Motivo (obligatorio):`, ""));
                           </div>
                           {liqSinFomento && (
                             <>
-                              <label style={{ display: "block", marginTop: 6 }}>
-                                <span>¿De quién es el arroz? <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
-                                <input type="text" maxLength={120} placeholder="Ej: del hermano, Juan Pérez" value={liqFomentoMotivo} onChange={(e) => setLiqFomentoMotivo(e.target.value)} />
-                              </label>
                               <small style={{ display: "block", marginTop: 4, color: "#b45309", fontWeight: 600 }}>
                                 El fomento no se toca: sigue debiendo {money(liqFomentoDeuda)}. Cuando pague, se registra directo en Fomentos › 💵 Registrar Pago.
                               </small>
                             </>
                           )}
                         </div>
+                      )}
+                      {/* ─ Anticipos del agricultor ─ */}
+                      {liqAnticipos > 0.005 && (
+                        <div className="liqFleteDesglose">
+                          <div className="liqFleteDesgloseHd">💸 Debe de anticipos {money(liqAnticipos)} · ¿se le descuenta de este arroz?</div>
+                          <div className="segmented" role="radiogroup" aria-label="Descontar los anticipos en esta liquidación" style={{ marginTop: 4 }}>
+                            <button type="button" role="radio" aria-checked={!liqSinAnticipos} className={!liqSinAnticipos ? "active" : ""} onClick={() => setLiqSinAnticipos(false)}>Sí, descontar</button>
+                            <button type="button" role="radio" aria-checked={liqSinAnticipos} className={liqSinAnticipos ? "active" : ""} onClick={() => setLiqSinAnticipos(true)}>No, dejarlo pendiente</button>
+                          </div>
+                          {liqSinAnticipos && (
+                            <small style={{ display: "block", marginTop: 4, color: "#b45309", fontWeight: 600 }}>
+                              El anticipo no se toca: sigue debiendo {money(liqAnticipos)} y se le descuenta en otra liquidación.
+                            </small>
+                          )}
+                        </div>
+                      )}
+                      {((liqSinFomento && liqFomentosList.length > 0) || (liqSinAnticipos && liqAnticipos > 0.005)) && (
+                        <label style={{ display: "block", margin: "6px 0" }}>
+                          <span>¿De quién es el arroz? <span className="muted" style={{ fontWeight: 400 }}>(opcional)</span></span>
+                          <input type="text" maxLength={120} placeholder="Ej: del hermano, Juan Pérez" value={liqFomentoMotivo} onChange={(e) => setLiqFomentoMotivo(e.target.value)} />
+                        </label>
                       )}
                       {liqFomentosList.length > 0 && !liqDistActiva && !liqSinFomento && (
                         <div className="liqFleteDesglose">
@@ -23389,9 +23432,15 @@ Motivo (obligatorio):`, ""));
                         <strong>-{money(liqDiscountsTotal)}</strong>
                       </div>
                     )}
+                    {liqAnticipoDesc > 0.005 && (
+                      <div className="liqSummaryRow disc">
+                        <span>Anticipos</span>
+                        <strong>-{money(liqAnticipoDesc)}</strong>
+                      </div>
+                    )}
                     <div className="liqSummaryRow total">
                       <span>Estimado a pagar</span>
-                      <strong>{money(Math.max(0, liqGrossTotal - liqDiscountsTotal))}</strong>
+                      <strong>{money(round2(Math.max(0, liqGrossTotal - liqDiscountsTotal - liqAnticipoDesc)))}</strong>
                     </div>
                     {liqSaldoEnContra > 0 && (
                       <div className="liqSummaryRow" style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 6, padding: "6px 8px", marginTop: 4 }}>
@@ -23399,7 +23448,6 @@ Motivo (obligatorio):`, ""));
                         <small style={{ color: "#b91c1c" }}>Se generará nuevo fomento</small>
                       </div>
                     )}
-                    <small>* Anticipos pendientes se descuentan automáticamente</small>
                   </div>
 
                   {/* 💵 ¿Se le paga ahora? Sale de la caja abierta y baja lo que se le debe (lo que quede, a Por Pagar). */}
@@ -23540,7 +23588,7 @@ Motivo (obligatorio):`, ""));
                       const lotsLabel = b.lots.map((l) => `${l.lot_code ?? "?"} (${l.rice_type ?? "—"})`).join(", ");
                       return (
                         <div key={b.key} className="liqHistRow">
-                          <span>{b.farmer_name}{b.nota_fomento && <small style={{ display: "block", color: "#b45309", fontWeight: 600 }}>🌱 {b.nota_fomento}</small>}</span>
+                          <span>{b.farmer_name}{b.nota_fomento && <small style={{ display: "block", color: "#b45309", fontWeight: 600 }}>🌱 {b.nota_fomento}</small>}{b.nota_anticipo && <small style={{ display: "block", color: "#b45309", fontWeight: 600 }}>💸 {b.nota_anticipo}</small>}</span>
                           <span>{qqTotal.enReal()} QQ</span>
                           <span>{money(b.gross_total)}</span>
                           <span className="liqDiscount">-{money(b.advances_total)}</span>
@@ -23570,7 +23618,10 @@ Motivo (obligatorio):`, ""));
                                   type="button"
                                   className="liqApplyBtn"
                                   title="Descontar anticipos pendientes"
-                                  onClick={() => aplicarAnticiposLiquidacion(b.liquidation_ids).catch((e) => addToast(e.message, "error"))}
+                                  onClick={async () => {
+                                    if (b.nota_anticipo && !(await confirmar(`En esta liquidación se eligió NO descontar el anticipo:\n\n${b.nota_anticipo}\n\n¿Descontarlo de todos modos?`))) return;
+                                    aplicarAnticiposLiquidacion(b.liquidation_ids).catch((e) => addToast(e.message, "error"));
+                                  }}
                                 >
                                   Desc. anticipo
                                 </button>
