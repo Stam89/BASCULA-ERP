@@ -65,6 +65,8 @@ import { ConfirmarFinalizacion } from "./secadoras/ConfirmarFinalizacion";
 import { importarConRecarga } from "./recargaVersion";
 import type { ReadOnlyReport } from "./reports/ReportReadOnlyViews";
 import { confirmar, pedirTexto } from "./components/Dialogo";
+import { PanelIntegral, type PanelData } from "./components/PanelIntegral";
+import { EstadoSistema } from "./components/EstadoSistema";
 import { FotosTicket } from "./components/FotosTicket";
 import { CajaDia } from "./components/CajaDia";
 import { CajaHoja, claveMaq, type HojaCredito, type HojaDestino, type HojaNueva } from "./components/CajaHoja";
@@ -807,35 +809,6 @@ type PiladoServiceDetail = PiladoService & {
   yield?: PiladoYield | null;
 };
 type PiladoBalance = { id: string; name: string; saldo: number };
-
-type PanelAccionista = {
-  id: string; name: string;
-  compras_total: number; compras_qq: number; compras_cnt: number;
-  ventas_total: number; ventas_qq: number; ventas_cnt: number;
-  inventario_qq: number; inventario_valor: number;
-  cascara_011: number; cascara_corriente: number;
-  seco_011: number; seco_corriente: number;
-  producto_011: number; producto_corriente: number;
-  arrocillo_34: number; arrocillo_fino: number;
-  polvillo: number;
-  banco_balance: number;
-};
-type PanelData = {
-  month: string;
-  kpis: { compras: number; ventas: number; utilidad: number; margen: number; bancos: number; saldo_general: number };
-  per_accionista: PanelAccionista[];
-  totales: { compras_qq: number; ventas_qq: number; inventario_qq: number; inventario_valor: number; compras_cnt: number; ventas_cnt: number; cascara_011: number; cascara_corriente: number; seco_011: number; seco_corriente: number; producto_011: number; producto_corriente: number; arrocillo_34: number; arrocillo_fino: number; polvillo: number; };
-  serie: Array<{ month: string; compras: number; ventas: number }>;
-  por_cobrar: { total: number; cnt: number };
-  por_pagar: { total: number; cnt: number };
-  prestamos: { total: number; cnt: number };
-  por_cobrar_por_acc?: Record<string, { total: number; cnt: number }>;
-  por_pagar_por_acc?: Record<string, { total: number; cnt: number }>;
-  prestamos_por_acc?: Record<string, { total: number; cnt: number }>;
-  servicios_pilado?: { facturado: number; pendiente: number; cobrado: number; cnt: number };
-  costo_operativo?: { total: number; qq: number; por_qq: number };
-  alertas: string[];
-};
 
 type CompanyReadiness = {
   ok: boolean;
@@ -15483,9 +15456,9 @@ Motivo (obligatorio):`, ""));
           </div>
           <span className={apiOnline && !conexionServidor.sinConexion ? "apiState on" : "apiState"}>
             <i />
-            API {apiOnline && !conexionServidor.sinConexion ? "conectada" : "sin conexión"}
+            {apiOnline && !conexionServidor.sinConexion ? "En línea" : "Sin conexión"}
           </span>
-          <small>Bascula ERP · Web Admin</small>
+          <small>BÁSCULA ERP</small>
         </div>
       </aside>
 
@@ -15592,9 +15565,7 @@ Motivo (obligatorio):`, ""));
               onClick={() => { confirmar("¿Cerrar sesión en este equipo?").then((ok) => { if (ok) logout(); }).catch(() => undefined); }}>
               ⏻ <span className="topbarBtnTxt">Salir</span>
             </button>
-            <span className={apiOnline && !conexionServidor.sinConexion ? "pill online" : "pill offline"}>
-              API {apiOnline && !conexionServidor.sinConexion ? "conectada" : "sin conexión"}
-            </span>
+            {!(apiOnline && !conexionServidor.sinConexion) && <span className="pill offline">Sin conexión</span>}
           </div>
         </header>
         <div className="content">
@@ -15751,10 +15722,6 @@ Motivo (obligatorio):`, ""));
         })()}
         {activeTab === "Dashboard" && !inicioSimple && (
           <>
-            {/* 🏠 Para volver al inicio simple (el administrador lo ve como vista previa). */}
-            <div style={{ display: "flex", justifyContent: "flex-end", margin: "0 0 8px" }}>
-              <button type="button" className="btnGhost" onClick={() => cambiarInicio(true)} title="Pantalla de inicio con botones grandes para lo de todos los días">🏠 {isAdmin ? "Ver inicio simple (vista previa)" : "Volver al inicio simple"}</button>
-            </div>
             {/* 📌 Hoy: lo que hay que hacer ahora (solo lo de pestañas a las que tiene acceso). */}
             <HoyPanel
               tareas={hoyTareas ? hoyTareas.filter((t) => visibleTabs.includes(t.tab)) : null}
@@ -15770,15 +15737,19 @@ Motivo (obligatorio):`, ""));
             {esMatrizActiva && <RepuestosAlertaDashboard repuestos={repuestosAlerta} onIr={visibleTabs.includes("Inventario") ? irARepuestos : undefined} />}
             {manejaSacosPropios && <SacosAlertaDashboard sacos={esMatrizActiva ? sacosDelActivo.filter((s) => !sacosPorComprar.some((p) => p.id === s.id)) : sacosDelActivo} onIr={visibleTabs.includes("Inventario") ? irASacos : undefined} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
             {manejaSacosPropios && <SacosSinMinimosAviso sacos={sacosDelActivo} onConfig={puedeIrAConfig("📦 Catálogo de sacos") ? () => irAConfig("📦 Catálogo de sacos") : undefined} />}
-            {canSeePanel && (
-              <nav className="cajaSubNav">
-                <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Panel integral</button>
+            {canSeePanel ? (
+              <nav className="cajaSubNav inicioSubNav">
+                <button type="button" className={dashView === "panel" ? "active" : ""} onClick={() => { setDashView("panel"); if (!panelData) refreshPanel().catch(() => undefined); }}>📊 Resumen del mes</button>
                 <button type="button" className={dashView === "resumen" ? "active" : ""} onClick={() => setDashView("resumen")}>⚡ Resumen rápido</button>
+                <button type="button" className="inicioSubNav__simple" onClick={() => cambiarInicio(true)} title="Pantalla de inicio con botones grandes para lo de todos los días">🏠 Inicio simple</button>
               </nav>
+            ) : (
+              <div style={{ textAlign: "right" }}><button type="button" className="btnGhost" onClick={() => cambiarInicio(true)}>🏠 Volver al inicio simple</button></div>
             )}
             {canSeePanel && dashView === "panel" ? (
               panelData ? (
-                <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} activeAccionistaId={activeAccionistaId} accionistas={accionistas} />
+                <PanelIntegral data={panelData} month={panelMonth} onMonth={(m) => { setPanelMonth(m); refreshPanel(m).catch(() => undefined); }} activeAccionistaId={activeAccionistaId} accionistas={accionistas}
+                  ir={(tab) => (visibleTabs.includes(tab) ? () => { irATab(tab); } : undefined)} />
               ) : (
                 <section className="emptyState"><div className="emptyIcon">📊</div><p>Cargando panel…</p></section>
               )
@@ -15791,8 +15762,8 @@ Motivo (obligatorio):`, ""));
               <Metric title="Anticipos" value={money(dashboard.pending_advances)} icon="💸" accent="accAmber" />
               <Metric title="Por pagar" value={money(dashboard.pending_payables)} icon="📑" accent="accRed" />
               <Metric title="Ventas hoy" value={money(dashboard.sales_today)} icon="🛒" accent="accGreen" />
-              <Metric title="Insumos criticos" value={criticalSupplies.length} icon="⚠️" accent={criticalSupplies.length > 0 ? "accRed" : undefined} />
-              <Metric title="Preparacion" value={`${setupScore}/5`} icon="✅" accent="accBlue" />
+              <Metric title="Insumos críticos" value={criticalSupplies.length} icon="⚠️" accent={criticalSupplies.length > 0 ? "accRed" : undefined} />
+              <Metric title="Preparación" value={`${setupScore}/5`} icon="✅" accent="accBlue" />
             </section>
             <section className="setupPanel">
               <div>
@@ -26225,7 +26196,7 @@ Motivo (obligatorio):`, ""));
                                   <input type="number" step="any" min="0" max={f.qq} value={bajadaParte.qq} placeholder="QQ" style={{ width: 70 }}
                                     onChange={(e) => setBajadaParte({ ...bajadaParte, qq: e.target.value })} />
                                   <span className="muted">de {Number(f.qq).enReal()}</span>
-                                  <button type="submit" className="btnPrimary">Guardar</button>
+                                  <button type="submit" className="primary">Guardar</button>
                                   <button type="button" className="btnGhost" onClick={() => setBajadaParte(null)}>✕</button>
                                 </form>
                               ) : noSePaga ? (
@@ -27333,26 +27304,11 @@ Motivo (obligatorio):`, ""));
               const usuariosActivos = adminUsers.filter((u) => u.is_active).length;
               const accionistasActivos = adminAccionistas.filter((a) => a.is_active).length;
               const alertas: string[] = [];
-              if (!apiOnline) alertas.push("El backend no respondió al chequeo de salud.");
-              if (!syncOk) alertas.push("No se pudo leer el estado de sincronización de báscula.");
+              if (!apiOnline) alertas.push("El servidor no respondió.");
+              if (!syncOk) alertas.push("No se pudo leer el estado de la báscula.");
               if (!backupOk) alertas.push(ultimoBackup ? "El último respaldo tiene más de 3 días." : "No hay respaldos registrados.");
               if (usuariosActivos === 0) alertas.push("No hay usuarios activos cargados en esta vista.");
               if (accionistasActivos === 0) alertas.push("No hay accionistas activos configurados.");
-              if (companyReadiness && !companyReadiness.ok) {
-                alertas.push(`Instalación incompleta: ${companyReadiness.missing.join(", ")}.`);
-              }
-              const readinessDone = companyReadiness?.checks.filter((check) => check.ok).length ?? 0;
-              const readinessTotal = companyReadiness?.checks.length ?? 0;
-              const readinessPct = readinessTotal > 0 ? Math.round((readinessDone / readinessTotal) * 100) : 0;
-              const readinessAreaLabel = (key: string) => {
-                if (["business_name", "matriz"].includes(key)) return "Empresa";
-                if (["admin", "users", "correo_recuperacion"].includes(key)) return "Usuarios";
-                if (["firebase", "device_key"].includes(key)) return "Bascula movil";
-                if (key.startsWith("campo_")) return "Transporte y cosechadora";
-                if (key === "contabilidad") return "Contabilidad";
-                if (key === "app_mode" || key === "respaldo_reciente") return "Seguridad";
-                return "General";
-              };
               const readinessAction = (key: string): { label: string; run: () => void } | null => {
                 if (key === "business_name") return { label: "Abrir datos", run: () => irATarjeta("🏢 Datos del negocio") };
                 if (key === "matriz") return { label: "Abrir socios", run: () => setConfigSubTab("socios") };
@@ -27364,202 +27320,28 @@ Motivo (obligatorio):`, ""));
                 if (key.startsWith("campo_")) return { label: "Abrir configuración de Campo", run: () => abrirCampo("config") };
                 return null;
               };
-              const readinessGroups = companyReadiness
-                ? ["Empresa", "Usuarios", "Bascula movil", "Transporte y cosechadora", "Contabilidad", "Seguridad", "General"]
-                    .map((area) => ({
-                      area,
-                      checks: companyReadiness.checks.filter((check) => readinessAreaLabel(check.key) === area)
-                    }))
-                    .filter((group) => group.checks.length > 0)
-                : [];
+              const fecha = (v: string) => new Date(v).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" });
+              const disco = companyReadiness?.checks.find((c) => c.key === "disco");
               return (
-                <section className="systemStatusPanel" style={{ order: 1 }}>
-                  <div className="systemStatusHeader">
-                    <p className="muted" style={{ margin: 0 }}>Resumen rápido para confirmar que el ERP está listo para operar.</p>
-                    <button type="button" className="primary" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
-                      {systemStatusBusy ? "Actualizando..." : "Actualizar estado"}
-                    </button>
-                  </div>
-
-                  <div className="systemStatusGrid">
-                    <div className={`systemStatusCard ${apiOnline ? "ok" : "bad"}`}>
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Servidor ERP</strong>
-                        <span>{apiOnline ? "En línea" : "Sin respuesta"}</span>
-                      </div>
-                    </div>
-                    <div className={`systemStatusCard ${syncOk ? "ok" : "warn"}`}>
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Sync báscula</strong>
-                        <span>
-                          {syncOk
-                            ? `${basculaSync.pendientes} pendiente(s) · ${basculaSync.ultimoEnvio ? new Date(basculaSync.ultimoEnvio).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" }) : "sin envíos"}`
-                            : "No disponible"}
-                        </span>
-                      </div>
-                    </div>
-                    <div className={`systemStatusCard ${backupOk ? "ok" : "warn"}`}>
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Respaldos</strong>
-                        <span>
-                          {ultimoBackup
-                            ? `${new Date(ultimoBackup.created_at).toLocaleString("es-EC", { dateStyle: "short", timeStyle: "short" })} · ${ultimoBackup.size_kb} KB`
-                            : "Sin respaldo registrado"}
-                        </span>
-                      </div>
-                    </div>
-                    <div className="systemStatusCard ok">
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Usuarios</strong>
-                        <span>{usuariosActivos} activo(s) · {adminUsers.length} registrado(s)</span>
-                      </div>
-                    </div>
-                    <div className="systemStatusCard ok">
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Accionistas</strong>
-                        <span>{accionistasActivos} activo(s) · {adminAccionistas.length} registrado(s)</span>
-                      </div>
-                    </div>
-                    <div className={`systemStatusCard ${basculaSync?.deviceKeyRequerida ? "ok" : "warn"}`}>
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Clave de dispositivo</strong>
-                        <span>{basculaSync?.deviceKeyRequerida ? "Activada" : "No configurada"}</span>
-                      </div>
-                    </div>
-                    <div className={`systemStatusCard ${companyReadiness?.app_mode === "test" ? "warn" : "ok"}`}>
-                      <span className="statusDot" />
-                      <div>
-                        <strong>Modo del sistema</strong>
-                        <span>{companyReadiness?.app_mode === "test" ? "Prueba: borrado solo con llave maestra" : "Producción: datos protegidos"}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {isAdmin && <BasculaDevicesPanel avisar={addToast} />}
-
+                <EstadoSistema
+                  avisos={alertas}
+                  revisiones={companyReadiness?.checks ?? null}
+                  accion={readinessAction}
+                  ocupado={systemStatusBusy} onActualizar={() => refreshSystemStatus()}
+                  onRespaldar={() => runBackupNow()} respaldando={backupBusy} puedeRespaldar={isAdmin}
+                  carpetaRespaldos={backupInfo?.directory}
+                  tarjetas={[
+                    { titulo: "Servidor", detalle: apiOnline ? "En línea" : "Sin respuesta", estado: apiOnline ? "ok" : "bad" },
+                    { titulo: "Báscula", estado: syncOk ? "ok" : "warn",
+                      detalle: syncOk ? `${basculaSync.pendientes} por ingresar · último ticket ${basculaSync.ultimoEnvio ? fecha(basculaSync.ultimoEnvio) : "sin envíos"}` : "No disponible" },
+                    { titulo: "Último respaldo", estado: backupOk ? "ok" : "warn", detalle: ultimoBackup ? fecha(ultimoBackup.created_at) : "Sin respaldo registrado" },
+                    { titulo: "Espacio en el disco", estado: !disco || disco.ok ? "ok" : "warn", detalle: disco?.detail.split(":")[0] ?? "Revisando…" },
+                    { titulo: "Usuarios", estado: "ok", detalle: `${usuariosActivos} activos de ${adminUsers.length}` },
+                    { titulo: "Socios", estado: "ok", detalle: `${accionistasActivos} activos de ${adminAccionistas.length}` }
+                  ]}>
                   {isAdmin && <ControlIntegridad avisar={addToast} />}
-
-                  {companyReadiness && (
-                    <div className="companyReadinessPanel">
-                      <div className="readinessHero">
-                        <div>
-                          <span className="readinessEyebrow">Checklist de entrega</span>
-                          <h3>Empresa lista para operar</h3>
-                          <p>
-                            Revisa lo minimo para entregar una empresa nueva: negocio, matriz,
-                            usuarios, bascula movil, transporte/cosechadora y seguridad.
-                          </p>
-                        </div>
-                        <div className="readinessScore">
-                          <strong>{readinessPct}%</strong>
-                          <span>{readinessDone}/{readinessTotal} listo(s)</span>
-                          <em className={companyReadiness.ok ? "ok" : "warn"}>
-                            {companyReadiness.ok ? "Lista" : `${companyReadiness.missing.length} pendiente(s)`}
-                          </em>
-                        </div>
-                      </div>
-
-                      <div className="readinessProgress" aria-label={`Empresa lista ${readinessPct}%`}>
-                        <span style={{ width: `${readinessPct}%` }} />
-                      </div>
-
-                      <div className="readinessGroups">
-                        {readinessGroups.map((group) => {
-                          const groupDone = group.checks.filter((check) => check.ok).length;
-                          return (
-                            <section key={group.area} className="readinessGroup">
-                              <header>
-                                <strong>{group.area}</strong>
-                                <span>{groupDone}/{group.checks.length}</span>
-                              </header>
-                              <div className="readinessChecklist">
-                                {group.checks.map((check) => {
-                                  const action = readinessAction(check.key);
-                                  return (
-                                    <div key={check.key} className={`readinessItem ${check.ok ? "ok" : "warn"}`}>
-                                      <span className="statusDot" />
-                                      <div>
-                                        <strong>{check.label}</strong>
-                                        <span>{check.detail}</span>
-                                      </div>
-                                      {!check.ok && action && (
-                                        <button type="button" className="btnGhost" onClick={action.run}>
-                                          {action.label}
-                                        </button>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </section>
-                          );
-                        })}
-                      </div>
-
-                      {!companyReadiness.ok && (
-                        <div className="readinessNextSteps">
-                          <strong>Orden recomendado</strong>
-                          <div>
-                            <span>1. Datos del negocio y matriz</span>
-                            <span>2. Usuarios y permisos</span>
-                            <span>3. Bascula movil/Firebase</span>
-                            <span>4. Transporte y cosechadora</span>
-                            <span>5. Saldos iniciales y parametros contables</span>
-                            <span>6. Cambiar a produccion antes de datos reales</span>
-                          </div>
-                        </div>
-                      )}
-
-                      {companyReadiness.ok && (
-                        <div className="successBox">
-                          <strong>La empresa esta lista para operar.</strong> Ya puede trabajar con datos reales, crear respaldos y entregar usuarios.
-                        </div>
-                      )}
-
-                      <div className="readinessActions">
-                        <button type="button" onClick={() => setConfigSubTab("planta")}>Planta y productos</button>
-                        <button type="button" onClick={() => setConfigSubTab("socios")}>Socios y matriz</button>
-                        <button type="button" onClick={() => setConfigSubTab("usuarios")}>Usuarios</button>
-                        <button type="button" onClick={async () => (await irATab("Caja de Campo"))}>Campo</button>
-                        <button type="button" onClick={() => refreshSystemStatus()} disabled={systemStatusBusy}>
-                          {systemStatusBusy ? "Actualizando..." : "Revisar de nuevo"}
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="systemStatusActions">
-                    <button type="button" onClick={runBackupNow} disabled={!isAdmin || backupBusy}>
-                      {backupBusy ? "Respaldando..." : "Crear respaldo ahora"}
-                    </button>
-                    <button type="button" onClick={() => setConfigSubTab("planta")}>Revisar planta</button>
-                    <button type="button" onClick={async () => (await irATab("Caja de Campo"))}>Revisar Campo</button>
-                    <button type="button" onClick={() => setConfigSubTab("usuarios")}>Revisar usuarios</button>
-                  </div>
-
-                  <div className={alertas.length > 0 ? "alertBox" : "successBox"}>
-                    {alertas.length > 0 ? (
-                      <>
-                        <strong>Revisar:</strong>
-                        <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
-                          {alertas.map((a) => <li key={a}>{a}</li>)}
-                        </ul>
-                      </>
-                    ) : (
-                      <strong>Todo lo principal se ve correcto para operar.</strong>
-                    )}
-                  </div>
-
-                  {backupInfo?.directory && (
-                    <p className="muted" style={{ margin: 0 }}>Carpeta de respaldos: <code>{backupInfo.directory}</code></p>
-                  )}
-                </section>
+                  {isAdmin && <BasculaDevicesPanel avisar={addToast} />}
+                </EstadoSistema>
               );
             })()}
 
@@ -30525,239 +30307,6 @@ function ProductionQqFields({
   );
 }
 
-// Panel de Control Integral: vista consolidada de los 3 accionistas.
-function PanelIntegral({ data, month, onMonth, activeAccionistaId, accionistas }: { data: PanelData; month: string; onMonth: (m: string) => void; activeAccionistaId: string | null; accionistas: Accionista[] }) {
-  const k = data.kpis;
-  const acc = data.per_accionista;
-  // ── Filtro por ACCIONISTA ACTIVO (selector superior) ──
-  // Los datos ya vienen por accionista en el payload; aquí solo se elige la
-  // porción del activo, SIN cambiar las fórmulas base. Si no hay accionista
-  // (o "Todos"), se muestra el consolidado como antes.
-  const accSel = accionistas.find((a) => a.id === activeAccionistaId) ?? null;
-  const accRow = activeAccionistaId ? acc.find((a) => a.id === activeAccionistaId) ?? null : null;
-  const filtrar = !!(activeAccionistaId && accRow);
-  const isMatriz = accSel?.tipo === "MATRIZ";
-  const r2 = (n: number) => Math.round(n * 100) / 100;
-  const kView = filtrar
-    ? {
-        compras: accRow!.compras_total,
-        ventas: accRow!.ventas_total,
-        utilidad: r2(accRow!.ventas_total - accRow!.compras_total),
-        margen: accRow!.ventas_total > 0 ? r2(((accRow!.ventas_total - accRow!.compras_total) / accRow!.ventas_total) * 100) : 0,
-        bancos: accRow!.banco_balance,
-        saldo_general: r2(accRow!.banco_balance
-          + (data.por_cobrar_por_acc?.[activeAccionistaId!]?.total ?? 0)
-          - (data.por_pagar_por_acc?.[activeAccionistaId!]?.total ?? 0))
-      }
-    : k;
-  const comprasQqView = filtrar ? accRow!.compras_qq : data.totales.compras_qq;
-  const ventasQqView = filtrar ? accRow!.ventas_qq : data.totales.ventas_qq;
-  // Servicio de pilado y costo operativo son propios de la MATRIZ: el
-  // socio los ve en $0 (paga el servicio, no lo cobra; y no opera la planta).
-  const serviciosView = (!filtrar || isMatriz) ? data.servicios_pilado : { facturado: 0, pendiente: 0, cobrado: 0, cnt: 0 };
-  const costoView = (!filtrar || isMatriz) ? data.costo_operativo : { total: 0, qq: 0, por_qq: 0 };
-  const subtitulo = filtrar ? `Mostrando datos de: ${accRow!.name}` : "Consolidado de todos los accionistas";
-  const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-  const [yy, mm] = month.split("-").map(Number);
-  const today = new Date().toLocaleDateString("es-EC");
-  const card = (title: string, value: string, sub: string, color: string) => (
-    <div style={{ flex: "1 1 180px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: "14px 16px", borderTop: `4px solid ${color}` }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.4 }}>{title}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, margin: "6px 0 2px" }}>{value}</div>
-      <div className="muted" style={{ fontSize: 11 }}>{sub}</div>
-    </div>
-  );
-  // Chip secundario (métrica de apoyo) dentro de una tarjeta KPI destacada.
-  const chip = (label: string, value: string, color: string) => (
-    <span style={{ display: "inline-flex", gap: 5, alignItems: "baseline", background: `${color}14`, color, border: `1px solid ${color}33`, borderRadius: 999, padding: "3px 10px", fontSize: 11, fontWeight: 600 }}>
-      <span style={{ opacity: 0.85 }}>{label}</span><strong>{value}</strong>
-    </span>
-  );
-  // Tarjeta KPI destacada con valor grande + chips secundarios.
-  const bigCard = (title: string, value: string, sub: string, color: string, chips: React.ReactNode) => (
-    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: "16px 18px", borderTop: `4px solid ${color}`, display: "flex", flexDirection: "column", gap: 7, minWidth: 0 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.4 }}>{title}</div>
-      <div style={{ fontSize: 26, fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
-      <div className="muted" style={{ fontSize: 11 }}>{sub}</div>
-      {chips ? <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2 }}>{chips}</div> : null}
-    </div>
-  );
-  const tbl = (title: string, color: string, headers: string[], rows: Array<Array<string | number>>, totals: Array<string | number>) => (
-    <div style={{ flex: "1 1 300px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-      <div style={{ background: color, color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>{title}</div>
-      <table className="cajaTable" style={{ margin: 0 }}>
-        <thead><tr>{headers.map((h, i) => <th key={i} style={{ textAlign: i === 0 ? "left" : "right" }}>{h}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((r, i) => <tr key={i}>{r.map((c, j) => <td key={j} style={{ textAlign: j === 0 ? "left" : "right" }}>{c}</td>)}</tr>)}
-          <tr style={{ fontWeight: 700, background: "#f8fafc" }}>{totals.map((c, j) => <td key={j} style={{ textAlign: j === 0 ? "left" : "right" }}>{c}</td>)}</tr>
-        </tbody>
-      </table>
-    </div>
-  );
-  return (
-    <section style={{ display: "grid", gap: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 22, color: "#1e3a8a" }}>Panel de Control Integral</h1>
-          <p className="muted" style={{ margin: 0 }}>{subtitulo}</p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-          <label style={{ fontSize: 12 }}>Mes
-            <input type="month" value={month} onChange={(e) => onMonth(e.target.value)} style={{ display: "block", padding: "5px 8px", borderRadius: 6, border: "1px solid #d1d5db" }} />
-          </label>
-          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "6px 12px", textAlign: "center" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: "#64748b" }}>FECHA ACTUAL</div>
-            <div style={{ fontWeight: 800, color: "#dc2626" }}>{today}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* 4 tarjetas destacadas. Las métricas de apoyo (Utilidad, Ingresos por
-          Servicio, Costo Operativo) van como chips dentro de la tarjeta afín. */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 12 }}>
-        {bigCard("COMPRAS DEL MES", money(kView.compras), `${comprasQqView.enReal()} quintales`, "#16a34a",
-          costoView ? chip("Costo op.", costoView.qq > 0 ? `${money(costoView.total)} · ${money(costoView.por_qq)}/QQ` : money(costoView.total), "#b91c1c") : null)}
-        {bigCard("VENTAS DEL MES", money(kView.ventas), `${ventasQqView.enReal()} quintales`, "#2563eb",
-          <>
-            {chip("Utilidad", `${money(kView.utilidad)} · ${kView.margen}%`, "#f59e0b")}
-            {serviciosView ? chip("Ing. servicio", money(serviciosView.facturado), "#0891b2") : null}
-          </>)}
-        {bigCard("TOTAL EN BANCOS/CAJA", money(kView.bancos), "disponible", "#0d9488", null)}
-        {bigCard("SALDO GENERAL", money(kView.saldo_general), "bancos + por cobrar − por pagar", "#7c3aed", null)}
-      </div>
-
-      {/* Inventario por accionista: fila propia a todo el ancho (muchas columnas). */}
-      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, overflow: "hidden" }}>
-          <div style={{ background: "#16a34a", color: "#fff", fontWeight: 700, padding: "8px 14px", fontSize: 13 }}>INVENTARIO POR ACCIONISTA</div>
-          <div style={{ overflowX: "auto" }}>
-            <table className="cajaTable" style={{ margin: 0, fontSize: 11, whiteSpace: "nowrap" }}>
-              <thead>
-                <tr>
-                  {["Accionista", "CASC", "SECO", "CASC", "SECO", "PROD", "PROD", "3/4", "FINO", "POLV"].map((h, i) => (
-                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "6px 8px 0", borderBottom: "none" }}>{h}</th>
-                  ))}
-                </tr>
-                <tr>
-                  {["", "0.11", "0.11", "CORR", "CORR", "0.11", "CORR", "", "", ""].map((h, i) => (
-                    <th key={i} style={{ textAlign: i === 0 ? "left" : "right", padding: "0 8px 6px", fontSize: 10, color: "#64748b" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {acc.map((a, i) => (
-                  <tr key={i}>
-                    <td style={{ textAlign: "left", padding: "6px 8px" }}>{a.name}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_011.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_011.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.cascara_corriente.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.seco_corriente.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_011.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.producto_corriente.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_34.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.arrocillo_fino.enReal()}</td>
-                    <td style={{ textAlign: "right", padding: "6px 8px" }}>{a.polvillo.enReal()}</td>
-                  </tr>
-                ))}
-                <tr style={{ fontWeight: 700, background: "#f8fafc" }}>
-                  <td style={{ textAlign: "left", padding: "6px 8px" }}>TOTAL</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_011.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_011.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.cascara_corriente.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.seco_corriente.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_011.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.producto_corriente.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_34.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.arrocillo_fino.enReal()}</td>
-                  <td style={{ textAlign: "right", padding: "6px 8px" }}>{data.totales.polvillo.enReal()}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-      </div>
-
-      {/* Ventas y Compras por accionista, lado a lado (2 columnas en desktop). */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 12 }}>
-        {tbl("VENTAS POR ACCIONISTA", "#2563eb", ["Accionista", "Total ventas", "QQ", "Facturas"],
-          acc.map((a) => [a.name, money(a.ventas_total), a.ventas_qq.enReal(), a.ventas_cnt]),
-          ["TOTAL", money(k.ventas), data.totales.ventas_qq.enReal(), data.totales.ventas_cnt])}
-        {tbl("COMPRAS POR ACCIONISTA", "#0d9488", ["Accionista", "Total compras", "QQ", "Liquid."],
-          acc.map((a) => [a.name, money(a.compras_total), a.compras_qq.enReal(), a.compras_cnt]),
-          ["TOTAL", money(k.compras), data.totales.compras_qq.enReal(), data.totales.compras_cnt])}
-      </div>
-
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-        <div style={{ flex: "2 1 380px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <h3 style={{ marginTop: 0, textAlign: "center", color: "#1e3a8a" }}>Compras vs Ventas (últimos 6 meses)</h3>
-          <div style={{ display: "flex", justifyContent: "center", gap: 20, fontSize: 12, marginBottom: 4 }}>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#16a34a", borderRadius: 2 }} /> Compras</span>
-            <span><span style={{ display: "inline-block", width: 10, height: 10, background: "#2563eb", borderRadius: 2 }} /> Ventas</span>
-          </div>
-          <ComprasVentasChart serie={data.serie} />
-        </div>
-        <div style={{ flex: "1 1 260px", background: "#fff", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <h3 style={{ marginTop: 0, textAlign: "center", color: "#1e3a8a" }}>Distribución de inventario</h3>
-          <InventarioDonut data={acc.map((a) => ({ name: a.name, value: a.inventario_qq }))} />
-        </div>
-      </div>
-
-      {/* ── Resumen ejecutivo: bancos por socio + cuentas por cobrar/pagar +
-             alertas, en un panel limpio y bien delimitado. ── */}
-      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: 14, padding: 16, display: "grid", gap: 12 }}>
-        <h3 style={{ margin: 0, color: "#1e3a8a" }}>📋 Resumen ejecutivo</h3>
-        <div style={{ background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 12, padding: 14 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: "#0d9488", marginBottom: 8, letterSpacing: 0.3 }}>🏦 BANCOS / CAJA POR SOCIO</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 8 }}>
-            {acc.map((a) => (
-              <div key={a.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "7px 11px", background: "#fff", border: "1px solid #eef2f7", borderRadius: 8 }}>
-                <span>{a.name}</span><strong>{money(a.banco_balance)}</strong>
-              </div>
-            ))}
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "7px 11px", fontWeight: 800, color: "#0d9488", background: "#ecfdf5", border: "1px solid #d1fae5", borderRadius: 8 }}>
-              <span>TOTAL</span><span>{money(k.bancos)}</span>
-            </div>
-          </div>
-        </div>
-      {(() => {
-        // Bloque inferior filtrado por el accionista activo (reactivo al dropdown).
-        const acc = accionistas.find((a) => a.id === activeAccionistaId);
-        const cobrar = (data.por_cobrar_por_acc && activeAccionistaId) ? (data.por_cobrar_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.por_cobrar;
-        const pagar = (data.por_pagar_por_acc && activeAccionistaId) ? (data.por_pagar_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.por_pagar;
-        const prest = (data.prestamos_por_acc && activeAccionistaId) ? (data.prestamos_por_acc[activeAccionistaId] ?? { total: 0, cnt: 0 }) : data.prestamos;
-        // Alertas del accionista activo (si hay uno seleccionado).
-        const alertas: string[] = [];
-        if (acc) {
-          const pa = data.per_accionista.find((x) => x.id === acc.id);
-          if (pa && pa.ventas_total > pa.compras_total && pa.compras_total > 0) alertas.push(`${acc.name}: ventas superiores a compras (revisar)`);
-          if (cobrar.total > 0) alertas.push(`${cobrar.cnt} cuenta(s) por cobrar pendientes`);
-          if (pagar.total > 0) alertas.push(`${pagar.cnt} cuenta(s) por pagar pendientes`);
-        }
-        const lista = acc ? alertas : data.alertas;
-        return (
-        <>
-        {acc && <p className="muted" style={{ fontSize: 12, margin: "2px 0 6px" }}>Bloque inferior filtrado por: <strong>{acc.name}{acc.tipo === "MATRIZ" ? " · Planta / Matriz" : " · Socio"}</strong></p>}
-        <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-          {card("CUENTAS POR COBRAR", money(cobrar.total), `${cobrar.cnt} cuenta(s)`, "#2563eb")}
-          {card("CUENTAS POR PAGAR", money(pagar.total), `${pagar.cnt} cuenta(s)`, "#dc2626")}
-          {card("PRÉSTAMOS A AGRICULTORES", money(prest.total), `${prest.cnt} agricultor(es)`, "#16a34a")}
-          <div style={{ flex: "1 1 240px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 12, padding: 14 }}>
-            <div style={{ fontWeight: 700, color: "#dc2626", marginBottom: 6 }}>⚠️ Alertas importantes</div>
-            {lista.length === 0 ? <p className="muted" style={{ margin: 0 }}>Sin alertas.</p> : (
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12.5 }}>
-                {lista.map((a, i) => <li key={i} style={{ marginBottom: 3 }}>{a}</li>)}
-              </ul>
-            )}
-          </div>
-        </div>
-        </>
-        );
-      })()}
-      </div>
-      <p className="muted" style={{ fontSize: 11, textAlign: "center" }}>Mes: {monthNames[mm - 1]} {yy} · Los valores se actualizan según los registros de cada módulo.</p>
-    </section>
-  );
-}
-
-// Gráfico de barras Compras vs Ventas (SVG puro, sin librerías).
 /**
  * Barras horizontales comparativas. Sirve para leer de un vistazo la
  * estructura del balance y del resultado, sin depender de librerías.
@@ -30788,70 +30337,6 @@ function BarrasFinancieras({ datos, formato }: {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-function ComprasVentasChart({ serie }: { serie: Array<{ month: string; compras: number; ventas: number }> }) {
-  const W = 520, H = 240, pad = 34, top = 20;
-  const max = Math.max(1, ...serie.flatMap((s) => [s.compras, s.ventas]));
-  const groupW = (W - pad * 2) / serie.length;
-  const barW = groupW * 0.32;
-  const yFor = (v: number) => top + (H - top - pad) * (1 - v / max);
-  const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: 560 }}>
-      {[0, 0.25, 0.5, 0.75, 1].map((t) => (
-        <line key={t} x1={pad} x2={W - pad} y1={yFor(max * t)} y2={yFor(max * t)} stroke="#eef2f7" />
-      ))}
-      {serie.map((s, i) => {
-        const gx = pad + groupW * i + groupW / 2;
-        const mLabel = meses[Number(s.month.split("-")[1]) - 1] ?? s.month.slice(5);
-        return (
-          <g key={s.month}>
-            <rect x={gx - barW - 2} y={yFor(s.compras)} width={barW} height={Math.max(0, H - pad - yFor(s.compras))} fill="#16a34a" rx={2} />
-            <rect x={gx + 2} y={yFor(s.ventas)} width={barW} height={Math.max(0, H - pad - yFor(s.ventas))} fill="#2563eb" rx={2} />
-            <text x={gx} y={H - pad + 14} textAnchor="middle" fontSize="10" fill="#64748b">{mLabel}</text>
-          </g>
-        );
-      })}
-    </svg>
-  );
-}
-
-// Dona de distribución de inventario por accionista.
-function InventarioDonut({ data }: { data: Array<{ name: string; value: number }> }) {
-  const total = data.reduce((s, d) => s + d.value, 0);
-  const colors = ["#2563eb", "#16a34a", "#f59e0b", "#8b5cf6", "#ef4444"];
-  const R = 70, r = 42, C = 90;
-  let acc = 0;
-  const arcs = data.map((d, i) => {
-    const frac = total > 0 ? d.value / total : 0;
-    const a0 = acc * 2 * Math.PI - Math.PI / 2;
-    acc += frac;
-    const a1 = acc * 2 * Math.PI - Math.PI / 2;
-    const large = frac > 0.5 ? 1 : 0;
-    const x0 = C + R * Math.cos(a0), y0 = C + R * Math.sin(a0);
-    const x1 = C + R * Math.cos(a1), y1 = C + R * Math.sin(a1);
-    const xi1 = C + r * Math.cos(a1), yi1 = C + r * Math.sin(a1);
-    const xi0 = C + r * Math.cos(a0), yi0 = C + r * Math.sin(a0);
-    return { d: `M${x0} ${y0} A${R} ${R} 0 ${large} 1 ${x1} ${y1} L${xi1} ${yi1} A${r} ${r} 0 ${large} 0 ${xi0} ${yi0} Z`, color: colors[i % colors.length], pct: Math.round(frac * 100) };
-  });
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-      <svg viewBox="0 0 180 180" width="150" height="150">
-        {total === 0 ? <circle cx={C} cy={C} r={(R + r) / 2} fill="none" stroke="#e5e7eb" strokeWidth={R - r} /> :
-          arcs.map((a, i) => <path key={i} d={a.d} fill={a.color} />)}
-      </svg>
-      <div style={{ display: "grid", gap: 6 }}>
-        {data.map((d, i) => (
-          <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
-            <span style={{ width: 12, height: 12, borderRadius: 3, background: colors[i % colors.length], display: "inline-block" }} />
-            <span style={{ fontWeight: 600 }}>{d.name}</span>
-            <span className="muted">{Number(d.value).enReal(1, 3)} QQ ({total > 0 ? Math.round((d.value / total) * 100) : 0}%)</span>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

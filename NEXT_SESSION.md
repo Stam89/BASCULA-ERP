@@ -9,6 +9,10 @@ Actualizado: 2026-11-24
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-25 · Inicio y Configuración › Estado
+- `/dashboard/panel`: las ventas se multiplicaban por los productos de cada venta (JOIN con sale_items) y lo «seco» se sumaba encima de la cáscara; el arroz de clientes de pilada salía como inventario de CEYRO. Corregido; ya no hay «utilidad» ni «alertas» (restaba solo lo liquidado). Simulacro `panel_inicio`.
+- `PanelIntegral.tsx` + `panelIntegral.css` (antes dentro de App.tsx), `EstadoSistema.tsx` (pendientes primero, lista completa plegada). `btnPrimary` no existía: se usa `primary`.
+
 ## 2026-11-25 · Fotos del camión (tablet → ERP)
 - `services/ticket-fotos.ts`, tabla `ticket_fotos` (migración 20261151), `POST /api/bascula/fotos` (JPG crudo, credencial de la tablet; 404 = el ticket aún no llega, la tablet reintenta). Archivos en `C:\BASCULA-Fotos` (env `FOTOS_BASCULA_DIR`; fuera de OneDrive y de los respaldos de la base), 6 meses, tope 4 por ticket. Báscula muestra 📷 (`FotosTicket.tsx`, `GET /tickets/:id/fotos`, `/tickets/fotos/:id`). Simulacro `ticket_fotos`.
 - App 11.63 (254): `FotosTicket.java` (archivos, sin tocar Room), botón opcional en el pesaje, máximo 2, sello al enviar, Menú › Fotos del camión para apagarlo.

@@ -242,7 +242,7 @@ export async function calcularPuestaEnMarcha() {
       key: "app_mode",
       label: "Modo del sistema",
       ok: env.appMode === "production",
-      detail: env.appMode === "production" ? "Produccion: datos reales protegidos" : (env.llaveMaestra ? "Prueba: borrar datos exige la llave maestra" : "Prueba: borrado bloqueado (falta LLAVE_MAESTRA)")
+      detail: env.appMode === "production" ? "Producción: datos reales protegidos" : (env.llaveMaestra ? "Modo prueba: para borrar datos se exige la llave maestra" : "Modo prueba: el borrado de datos está bloqueado")
     },
     {
       key: "correo_recuperacion",
@@ -250,7 +250,7 @@ export async function calcularPuestaEnMarcha() {
       ok: correoConfigurado(),
       detail: correoConfigurado()
         ? `Correo configurado · ${conCorreo.con_correo} de ${conCorreo.total} usuario(s) con correo de recuperación`
-        : "Falta SMTP_USER y SMTP_PASS en backend/.env (sin eso, «¿Olvidaste tu clave?» no puede enviar el código)"
+        : "Falta conectar un correo en la PC del ERP: sin eso, «¿Olvidaste tu clave?» no puede enviar el código"
     },
     {
       key: "respaldo_reciente",
@@ -296,45 +296,45 @@ export async function calcularPuestaEnMarcha() {
     },
     {
       key: "firebase",
-      label: "Firebase / negocio móvil",
+      label: "Copia en la nube de la báscula (Firebase)",
       ok: Boolean(process.env.NEGOCIO_ID) && firebaseKeyExists,
       detail: process.env.NEGOCIO_ID
-        ? (firebaseKeyExists ? `NEGOCIO_ID: ${process.env.NEGOCIO_ID}` : "Falta archivo FIREBASE_KEY")
-        : "Falta NEGOCIO_ID"
+        ? (firebaseKeyExists ? `Conectada: ${process.env.NEGOCIO_ID}` : "Falta el archivo de acceso en la PC del ERP")
+        : "Falta indicar el negocio en la PC del ERP. La tablet envía igual por WiFi"
     },
     {
       key: "device_key",
-      label: "Clave de dispositivo",
+      label: "Clave para registrar tablets",
       ok: Boolean(process.env.DEVICE_SYNC_KEY),
       detail: process.env.DEVICE_SYNC_KEY ? "Configurada" : "No configurada"
     },
     {
       key: "campo_config",
-      label: "Campo / Transporte",
+      label: "Nombre de la operación",
       ok: Boolean(campoNombre && campoNombre !== "Campo"),
       detail: campoNombre ? `Operación: ${campoNombre}` : "No configurado"
     },
     {
       key: "campo_cuentas",
-      label: "Campo: cuentas base",
+      label: "Cuentas de dinero",
       ok: Number(campoCuentasBase) >= 4,
       detail: `${campoCuentasBase}/4 cuenta(s) base`
     },
     {
       key: "campo_categorias",
-      label: "Campo: categorías",
+      label: "Categorías de gasto",
       ok: Number(campoCategorias) >= 4,
       detail: `${campoCategorias} categoría(s) de gasto`
     },
     {
       key: "campo_flota",
-      label: "Campo: flota",
+      label: "Máquinas y carros",
       ok: Number(campoActivos) > 0,
       detail: `${campoActivos} máquina(s)/vehículo(s) activo(s)`
     },
     {
       key: "campo_operadores",
-      label: "Campo: operadores",
+      label: "Operadores",
       ok: Number(campoOperadores) > 0,
       detail: `${campoOperadores} operador(es) activo(s)`
     },

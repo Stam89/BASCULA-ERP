@@ -359,7 +359,7 @@ export function ResultadoMensual({ puedeEditar, avisar, calcularGana, onCategori
           <input type="number" min="0" step="0.01" value={qqManual} onChange={(e) => setQqManual(e.target.value)} placeholder={rep ? String(rep.cascara.total_auto) : "auto"} style={{ width: 130 }} />
         </label>
         <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={cargando}>{cargando ? "⟳ Calculando…" : "↻ Actualizar"}</button>
-        <button type="button" className="btnPrimary" onClick={imprimir} disabled={!rep || cargando}>🖨️ Imprimir</button>
+        <button type="button" className="primary" onClick={imprimir} disabled={!rep || cargando}>🖨️ Imprimir</button>
       </div>
 
       {/* ════════════════════ PESTAÑA: REPORTE ════════════════════ */}

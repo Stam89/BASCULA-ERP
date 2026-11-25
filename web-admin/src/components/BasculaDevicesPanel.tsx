@@ -59,7 +59,7 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
         <div className="basculaDevicesIntro">
           <div>
             <strong>Conexión directa protegida</strong>
-            <p>Cada instalación de Báscula v11.44 o posterior aparece aquí después de sincronizar por primera vez.</p>
+            <p>Cada tablet aparece aquí después de conectarse por primera vez.</p>
           </div>
           <button type="button" className="btnSecondary" onClick={() => cargar()} disabled={loading} title="Actualizar lista">
             ↻ Actualizar
@@ -67,8 +67,8 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
         </div>
         {!loading && devices.length === 0 ? (
           <div className="basculaDevicesEmpty">
-            <strong>Todavia no hay tablets registradas</strong>
-            <span>Instala v11.44 en la tablet y toca sincronizar. La version anterior continua funcionando durante la transicion.</span>
+            <strong>Todavía no hay tablets registradas</strong>
+            <span>Instala la app en la tablet y ábrela en el WiFi del local.</span>
           </div>
         ) : (
           <div className="basculaDevicesList">
@@ -76,10 +76,10 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
               <div className={`basculaDeviceRow ${device.activo ? "is-active" : "is-blocked"}`} key={device.device_id}>
                 <span className="basculaDeviceIcon" aria-hidden="true">{device.activo ? "📱" : "⛔"}</span>
                 <div className="basculaDeviceInfo">
-                  <strong>{device.modelo || "Tablet Bascula"}</strong>
+                  <strong>{device.modelo || "Tablet de báscula"}</strong>
                   <span title={device.device_id}>ID: {idCorto(device.device_id)}</span>
                   <small>
-                    Ultimo contacto: {fecha(device.last_seen_at)}
+                    Último contacto: {fecha(device.last_seen_at)}
                     {device.app_version ? ` · app v${device.app_version}` : ""}
                     {device.pendientes != null ? ` · ${device.pendientes === 0 ? "nada por enviar" : `${device.pendientes} por enviar`}` : ""}
                   </small>
@@ -93,7 +93,7 @@ export default function BasculaDevicesPanel({ avisar }: Props) {
             ))}
           </div>
         )}
-        <p className="basculaDevicesNote">Bloquear una tablet no elimina tickets ni cambia la numeracion. Durante la transicion, la clave antigua seguira activa hasta comprobar v11.44 en la tablet real.</p>
+        <p className="basculaDevicesNote">Bloquear una tablet no borra tickets ni cambia la numeración: solo deja de enviar hasta que la autorices otra vez.</p>
       </div>
     </details>
   );

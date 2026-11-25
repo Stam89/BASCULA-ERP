@@ -40,7 +40,22 @@ const RESOURCE_LABELS: Record<string, string> = {
   campo: "Transporte y Cosechadora",
   prestamos: "Préstamo",
   repuestos: "Repuesto",
-  tickets: "Ticket de báscula"
+  tickets: "Ticket de báscula",
+  "saldos-iniciales": "Saldo inicial",
+  notificaciones: "Aviso",
+  "caja-dia": "Caja del día",
+  "entre-socios": "Cuenta entre socios",
+  lots: "Lote",
+  pilado: "Servicio de pilada",
+  cobros: "Cobro de servicio",
+  costos: "Costo operativo",
+  finance: "Contabilidad",
+  reports: "Reporte",
+  catalogs: "Catálogo",
+  documents: "Documento",
+  impresion: "Impresión",
+  "resultado-mensual": "Resultado mensual",
+  "resumen-diario": "Resumen diario"
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

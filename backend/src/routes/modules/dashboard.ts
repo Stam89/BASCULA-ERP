@@ -61,16 +61,17 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
   const from = `${monthStr}-01`;
   const to = new Date(yy, mm, 0).toISOString().slice(0, 10); // último día del mes
 
-  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco, servicios, costoOp, arAcc, apAcc, prestAcc] = await Promise.all([
+  const [accionistas, compras, ventas, inventario, bancos, ar, ap, prestamos, comprasSerie, ventasSerie, seco, servicios, costoOp, arAcc, apAcc, prestAcc, afuera] = await Promise.all([
     pool.query("SELECT id, name FROM accionistas WHERE is_active = true ORDER BY name"),
     pool.query(
       `SELECT accionista_id, COALESCE(SUM(gross_amount),0)::float total, COALESCE(SUM(quintals),0)::float qq, COUNT(*)::int cnt
        FROM liquidations WHERE status <> 'CANCELLED' AND created_at::date BETWEEN $1 AND $2
        GROUP BY accionista_id`, [from, to]),
     pool.query(
-      `SELECT s.accionista_id, COALESCE(SUM(s.total_amount),0)::float total, COUNT(DISTINCT s.id)::int cnt,
-              COALESCE(SUM(si.quantity),0)::float qq
-       FROM sales s LEFT JOIN sale_items si ON si.sale_id = s.id
+      // Los QQ se suman aparte: unir las ventas con sus productos multiplicaba el total por cada producto (2026-11-25).
+      `SELECT s.accionista_id, COALESCE(SUM(s.total_amount),0)::float total, COUNT(*)::int cnt,
+              COALESCE(SUM((SELECT SUM(si.quantity) FROM sale_items si WHERE si.sale_id = s.id)),0)::float qq
+       FROM sales s
        WHERE s.sale_status <> 'CANCELLED' AND s.created_at::date BETWEEN $1 AND $2
        GROUP BY s.accionista_id`, [from, to]),
     pool.query(
@@ -81,7 +82,12 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
               COALESCE(SUM(CASE WHEN p.code = 'ARROZ-PILADO-CORRIENTE' THEN m.quantity ELSE 0 END),0)::float producto_corriente,
               COALESCE(SUM(CASE WHEN p.code = 'ARROCILLO-34' THEN m.quantity ELSE 0 END),0)::float arrocillo_34,
               COALESCE(SUM(CASE WHEN p.code = 'ARROCILLO-FINO' THEN m.quantity ELSE 0 END),0)::float arrocillo_fino,
-              COALESCE(SUM(CASE WHEN p.code = 'POLVILLO' THEN m.quantity ELSE 0 END),0)::float polvillo
+              COALESCE(SUM(CASE WHEN p.code = 'POLVILLO' THEN m.quantity ELSE 0 END),0)::float polvillo,
+              COALESCE(SUM(CASE WHEN p.code = 'ARROZ-ENVEJECIDO' THEN m.quantity ELSE 0 END),0)::float envejecido,
+              COALESCE(SUM(CASE WHEN p.code = 'RECHAZO' THEN m.quantity ELSE 0 END),0)::float rechazo,
+              -- Lo demás que se vende por QQ (marcas y empaques van aparte).
+              COALESCE(SUM(CASE WHEN p.product_type IN ('FINISHED_GOOD', 'BYPRODUCT') AND p.code NOT IN ('ARROZ-PILADO-011',
+                'ARROZ-PILADO-CORRIENTE', 'ARROCILLO-34', 'ARROCILLO-FINO', 'POLVILLO', 'ARROZ-ENVEJECIDO', 'RECHAZO') THEN m.quantity ELSE 0 END),0)::float otros
        FROM inventory_movements m
        JOIN products p ON p.id = m.product_id
        JOIN warehouses w ON w.id = m.warehouse_id
@@ -96,7 +102,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
          FROM cash_movements GROUP BY cash_register_id
        ) mov ON mov.cash_register_id = cr.id
        GROUP BY cr.accionista_id`),
-    pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT customer_id)::int cnt FROM accounts_receivable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
+    pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt FROM accounts_receivable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
     pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt FROM accounts_payable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
     pool.query(`SELECT COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT farmer_id)::int cnt FROM farmer_advances WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0`),
     pool.query(
@@ -111,10 +117,13 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     // producción). Es lo mismo que aparece en el selector de Producción.
     pool.query(
       `SELECT l.accionista_id,
-              COALESCE(SUM(CASE WHEN d.rice_type = '0.11' THEN d.total_quintals ELSE 0 END),0)::float seco_011,
-              COALESCE(SUM(CASE WHEN d.rice_type = 'CORRIENTE' THEN d.total_quintals ELSE 0 END),0)::float seco_corriente
+              COALESCE(SUM(CASE WHEN d.rice_type = '0.11' AND NOT x.cliente THEN d.total_quintals ELSE 0 END),0)::float seco_011,
+              COALESCE(SUM(CASE WHEN d.rice_type = 'CORRIENTE' AND NOT x.cliente THEN d.total_quintals ELSE 0 END),0)::float seco_corriente,
+              COALESCE(SUM(CASE WHEN x.cliente THEN d.total_quintals ELSE 0 END),0)::float seco_clientes
        FROM drying_tunnel_reports d
        JOIN lots l ON l.id = d.lot_id
+       -- El arroz de un servicio (secado / pilada) es del cliente: no es inventario del socio.
+       CROSS JOIN LATERAL (SELECT (COALESCE(l.operation_type, CASE WHEN l.is_maquila THEN 'SECADO_PILADO' ELSE 'COMPRA' END) <> 'COMPRA') AS cliente) x
        WHERE d.status = 'COMPLETED'
          AND COALESCE(d.apartado_arianos, false) = false
          AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE (b.drying_report_id = d.id OR b.id IN (SELECT jl.processing_batch_id FROM processing_batch_drying_lots jl WHERE jl.drying_report_id = d.id)) AND b.status <> 'CANCELLED')
@@ -142,7 +151,10 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     pool.query(`SELECT accionista_id, COALESCE(SUM(balance),0)::float total, COUNT(*)::int cnt
                 FROM accounts_payable WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`),
     pool.query(`SELECT accionista_id, COALESCE(SUM(balance),0)::float total, COUNT(DISTINCT farmer_id)::int cnt
-                FROM farmer_advances WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`)
+                FROM farmer_advances WHERE status IN ('CONFIRMED','PARTIAL') AND balance > 0 GROUP BY accionista_id`),
+    // Lo que está afuera (selección / envejecimiento): sigue siendo del socio, pero no está en la piladora.
+    pool.query(`SELECT m.accionista_id, COALESCE(SUM(m.quantity),0)::float qq FROM inventory_movements m JOIN warehouses w ON w.id = m.warehouse_id
+                WHERE m.ownership = 'OWNED' AND w.type = 'EXTERNO' GROUP BY m.accionista_id`)
   ]);
 
   const byAcc = (rows: Array<Record<string, unknown>>) => {
@@ -150,7 +162,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     for (const r of rows) map.set(String(r.accionista_id), r);
     return map;
   };
-  const comprasMap = byAcc(compras.rows), ventasMap = byAcc(ventas.rows), invMap = byAcc(inventario.rows), bancosMap = byAcc(bancos.rows), secoMap = byAcc(seco.rows);
+  const comprasMap = byAcc(compras.rows), ventasMap = byAcc(ventas.rows), invMap = byAcc(inventario.rows), bancosMap = byAcc(bancos.rows), secoMap = byAcc(seco.rows), afueraMap = byAcc(afuera.rows);
 
   const perAccionista = accionistas.rows.map((a) => {
     const c = comprasMap.get(a.id), v = ventasMap.get(a.id), i = invMap.get(a.id), b = bancosMap.get(a.id), s = secoMap.get(a.id);
@@ -169,13 +181,18 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
       arrocillo_34: Number(i?.arrocillo_34 ?? 0),
       arrocillo_fino: Number(i?.arrocillo_fino ?? 0),
       polvillo: Number(i?.polvillo ?? 0),
+      envejecido: Number(i?.envejecido ?? 0),
+      rechazo: Number(i?.rechazo ?? 0),
+      otros: Number(i?.otros ?? 0),
+      seco_clientes: Number(s?.seco_clientes ?? 0),
+      alla: Number(afueraMap.get(a.id)?.qq ?? 0),
       banco_balance: Number(b?.balance ?? 0)
     };
   }).map((x) => {
-    // Total de QQ en bodega del socio (cáscara + seco + producto + subproductos). Antes quedaba fijo en 0 y el
-    // gráfico «Distribución de inventario» del inicio salía vacío. Los saldos negativos declarados no restan.
-    const qq = [x.cascara_011, x.seco_011, x.cascara_corriente, x.seco_corriente, x.producto_011, x.producto_corriente,
-      x.arrocillo_34, x.arrocillo_fino, x.polvillo].reduce((s, n) => s + Math.max(0, n), 0);
+    // Total de QQ en la piladora (cáscara + producto + subproductos). Lo «seco» NO se suma: ya está dentro de la cáscara
+    // hasta que se pila (antes se contaba dos veces). Los saldos negativos declarados no restan.
+    const qq = [x.cascara_011, x.cascara_corriente, x.producto_011, x.producto_corriente, x.envejecido,
+      x.arrocillo_34, x.arrocillo_fino, x.polvillo, x.rechazo, x.otros].reduce((s, n) => s + Math.max(0, n), 0);
     return { ...x, inventario_qq: Math.round(qq * 100) / 100 };
   });
 
@@ -183,7 +200,6 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
   const totalCompras = sum((x) => x.compras_total);
   const totalVentas = sum((x) => x.ventas_total);
   const totalBancos = sum((x) => x.banco_balance);
-  const utilidad = Math.round((totalVentas - totalCompras) * 100) / 100;
   const porCobrar = Number(ar.rows[0].total), porPagar = Number(ap.rows[0].total), totalPrestamos = Number(prestamos.rows[0].total);
   const saldoGeneral = Math.round((totalBancos + porCobrar - porPagar) * 100) / 100;
 
@@ -197,18 +213,10 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
     serie.push({ month: key, compras: cSerie.get(key) ?? 0, ventas: vSerie.get(key) ?? 0 });
   }
 
-  // Alertas automáticas
-  const alertas: string[] = [];
-  for (const x of perAccionista) {
-    if (x.ventas_total > x.compras_total && x.compras_total > 0) alertas.push(`${x.name}: ventas superiores a compras (revisar)`);
-  }
-  if (porCobrar > 0) alertas.push(`${ar.rows[0].cnt} cuenta(s) por cobrar pendientes`);
-  if (porPagar > 0) alertas.push(`${ap.rows[0].cnt} cuenta(s) por pagar pendientes`);
-
   res.json({
     month: monthStr,
     range: { from, to },
-    kpis: { compras: totalCompras, ventas: totalVentas, utilidad, margen: totalVentas > 0 ? Math.round((utilidad / totalVentas) * 10000) / 100 : 0, bancos: totalBancos, saldo_general: saldoGeneral },
+    kpis: { compras: totalCompras, ventas: totalVentas, bancos: totalBancos, saldo_general: saldoGeneral },
     per_accionista: perAccionista,
     totales: {
       compras_qq: sum((x) => x.compras_qq), ventas_qq: sum((x) => x.ventas_qq),
@@ -239,8 +247,7 @@ dashboardRouter.get("/panel", requireAuth, requirePanelAccess, asyncRoute(async 
       total: Number(costoOp.rows[0].total),
       qq: Number(costoOp.rows[0].qq),
       por_qq: Number(costoOp.rows[0].qq) > 0 ? Math.round((Number(costoOp.rows[0].total) / Number(costoOp.rows[0].qq)) * 100) / 100 : 0
-    },
-    alertas
+    }
   });
 }));
 

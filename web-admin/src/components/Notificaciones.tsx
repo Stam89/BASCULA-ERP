@@ -143,7 +143,7 @@ export function CampanitaNotificaciones({ accionistaKey, onAbrir, onMarca }: {
     <div ref={caja} style={{ position: "relative" }}>
       <button type="button" className="btnSecondary" aria-label={`Notificaciones${noLeidas ? `: ${noLeidas} sin leer` : ""}`}
         title="Avisos de cobros y pagos" onClick={() => { setAbierta((v) => !v); if (!abierta) cargar(); }}
-        style={{ position: "relative", padding: "6px 10px", fontSize: 16, lineHeight: 1 }}>
+        style={{ position: "relative", padding: "6px 14px", minWidth: 0, fontSize: 16, lineHeight: 1 }}>
         🔔
         {noLeidas > 0 && (
           <span style={{ position: "absolute", top: -6, right: -6, minWidth: 18, height: 18, padding: "0 5px", borderRadius: 999, background: "#dc2626", color: "#fff", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" }}>

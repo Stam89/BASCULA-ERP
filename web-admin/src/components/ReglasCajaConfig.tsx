@@ -82,7 +82,7 @@ export function ReglasCajaConfig({ esAdmin, avisar }: {
               <option value="">Elige…</option>
               {categorias.map((c) => <option key={c.codigo} value={c.codigo}>{c.nombre}</option>)}
             </select></label>
-          <button type="button" className="btnPrimary" disabled={ocupado} onClick={() => void agregar()}>Agregar regla</button>
+          <button type="button" className="primary" disabled={ocupado} onClick={() => void agregar()}>Agregar regla</button>
         </div>
       )}
       {esAdmin && faltan.length > 0 && (

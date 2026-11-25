@@ -197,7 +197,7 @@ export function construirTareas(d: DatosHoy): TareaHoy[] {
     const v = d.documentosFlota.vencidos;
     t.push({
       key: "documento-flota-vencido", nivel: "urgente", icono: "📄",
-      titulo: v.length === 1 ? `${v[0].documento} de ${v[0].maquina} está vencido` : `${v.length} documentos de vehículos vencidos`,
+      titulo: v.length === 1 ? `${v[0].documento} de ${v[0].maquina}: ya venció` : `${v.length} documentos de vehículos vencidos`,
       detalle: `${v.slice(0, 3).map((x) => `${x.maquina}: ${x.documento} venció el ${fechaCorta(x.fecha)}`).join(" · ")}${v.length > 3 ? ` · y ${v.length - 3} más` : ""}. Renuévalo y actualiza la fecha.`,
       tab: "Caja de Campo", sub: "config", accion: "Ver documentos"
     });

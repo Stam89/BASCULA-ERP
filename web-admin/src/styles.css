@@ -7217,3 +7217,55 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .fotosTicket__lista img { width: 100%; border-radius: 10px; display: block; }
 .fotosTicket__lista figcaption { margin-top: 4px; font-size: 12.5px; color: var(--c-muted); }
 .fotosTicket__espera { display: grid; place-items: center; min-height: 160px; border: 1px dashed var(--c-border); border-radius: 10px; color: var(--c-muted); padding: 12px; text-align: center; }
+
+/* ── Inicio y Estado del sistema (2026-11-25) ── */
+.inicioSubNav { display: flex; flex-wrap: wrap; align-items: center; }
+.inicioSubNav__simple { margin-left: auto !important; opacity: .8; }
+/* El menú lateral no corta los nombres ni los botones del usuario. */
+.accionistaSwitcher, .opSwitch { min-width: 0; grid-template-columns: minmax(0, 1fr); }
+.sidebarFooter .userBox { flex-wrap: wrap; row-gap: 6px; }
+.sidebarFooter .userBox > div { flex: 1 1 calc(100% - 52px); min-width: 0; }
+/* Barra superior: título a la izquierda, acciones a la derecha. */
+@media (min-width: 861px) {
+  .topbar { flex-direction: row; align-items: center; justify-content: space-between; }
+  .topbarRight { justify-content: flex-end; margin-left: auto; }
+}
+.statusDot.ok, .statusDot.warn, .statusDot.bad { box-shadow: none; }
+.estSis { display: grid; gap: 14px; min-width: 0; }
+.estSis__banda { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--c-border); background: var(--c-surface); border-left: 5px solid #16a34a; }
+.estSis__banda.is-warn { border-left-color: #d97706; }
+.estSis__ico { font-size: 24px; line-height: 1; }
+.estSis__txt { flex: 1 1 220px; min-width: 0; }
+.estSis__txt strong { display: block; font-size: 17px; color: var(--c-text); }
+.estSis__txt span { color: var(--c-text-muted); font-size: 13px; }
+.estSis__acc { display: flex; gap: 8px; flex-wrap: wrap; }
+.estSis__pend, .estSis__cols ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.estSis__pend li { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 11px 14px; border: 1px solid color-mix(in srgb, #d97706 35%, transparent); border-radius: 10px; background: color-mix(in srgb, #f59e0b 8%, var(--c-surface)); }
+.estSis li > i, .estSis__card > i { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; background: #16a34a; }
+.estSis__pend li > i, .estSis li.is-warn > i, .estSis__card.is-warn > i { background: #d97706; }
+.estSis li.is-info > i { background: #64748b; }
+.estSis__card.is-bad > i { background: #dc2626; }
+.estSis li > div, .estSis__card > div { flex: 1 1 200px; min-width: 0; }
+.estSis li strong, .estSis__card strong { display: block; font-size: 13.5px; color: var(--c-text); }
+.estSis li span, .estSis__card span { display: block; font-size: 12.5px; color: var(--c-text-muted); line-height: 1.4; }
+.estSis__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr)); gap: 10px; }
+.estSis__card { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--c-border); border-radius: 10px; background: var(--c-surface); }
+.estSis__card > i { margin-top: 4px; }
+.estSis__todo { border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-surface); }
+.estSis__todo > summary { padding: 13px 16px; cursor: pointer; font-weight: 700; color: var(--c-text); }
+.estSis__cols { columns: 2 300px; column-gap: 24px; padding: 4px 16px 14px; }
+.estSis__cols section { break-inside: avoid; padding-bottom: 14px; }
+.estSis__cols header { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--c-border); margin-bottom: 8px; }
+.estSis__cols header small { color: var(--c-text-muted); font-weight: 700; }
+.estSis__cols li { display: flex; align-items: flex-start; gap: 10px; }
+.estSis__cols li > i { margin-top: 4px; }
+.estSis__pie { margin: 0; font-size: 12.5px; color: var(--c-text-muted); overflow-wrap: anywhere; }
+.estSis .controlIntegridad { margin: 0 !important; }
+@media (max-width: 620px) { .estSis__acc { width: 100%; } .estSis__acc button { flex: 1 1 0; } .estSis__pend li .btnSecondary { width: 100%; } }
+/* Configuración: campos con aire, puntos redondos y barras centradas. */
+.systemStatusCard .statusDot, .readinessItem .statusDot { display: block; padding: 0; border: 0; box-shadow: none; }
+.configVContent details.cfgCard form > label, .configVContent details.cfgCard .configCardBody > label { display: block; margin-top: 12px; }
+.configVContent details.cfgCard form > div + div, .configVContent details.cfgCard form > label + div { margin-top: 12px; }
+.configVContent details.cfgCard form > p.muted { margin: 8px 0; }
+.configVContent details.cfgCard form > button.primary, .configVContent details.cfgCard form > .buttonRow { margin-top: 16px; }
+.pnl-barras { justify-content: center; }

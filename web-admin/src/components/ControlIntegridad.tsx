@@ -26,7 +26,7 @@ export function ControlIntegridad({ avisar }: { avisar: (msg: string, tipo?: "su
     <div className="controlIntegridad" style={{ margin: "14px 0", padding: 14, borderRadius: 12, border: "1px solid var(--c-border, #e2e8f0)", background: "var(--c-surface, #fff)" }}>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
         <h3 style={{ margin: 0 }}>🩺 Control de integridad</h3>
-        <button type="button" style={{ marginLeft: "auto" }} onClick={() => revisar(true)} disabled={cargando}>
+        <button type="button" className="btnSecondary" style={{ marginLeft: "auto" }} onClick={() => revisar(true)} disabled={cargando}>
           {cargando ? "Revisando…" : "↻ Revisar ahora"}
         </button>
       </div>
@@ -37,7 +37,7 @@ export function ControlIntegridad({ avisar }: { avisar: (msg: string, tipo?: "su
       {r && fallas.length === 0 && (
         <p style={{ margin: 0, padding: "8px 12px", borderRadius: 8, background: "#dcfce7", color: "#15803d", fontWeight: 600 }}>
           ✅ Todo conectado: {r.reglas} controles sin problemas
-          <span style={{ fontWeight: 400 }}> · revisado {new Date(r.revisado_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })} ({r.ms} ms)</span>
+          <span style={{ fontWeight: 400 }}> · revisado {new Date(r.revisado_at).toLocaleTimeString("es-EC", { hour: "2-digit", minute: "2-digit" })}</span>
         </p>
       )}
       {fallas.length > 0 && (
