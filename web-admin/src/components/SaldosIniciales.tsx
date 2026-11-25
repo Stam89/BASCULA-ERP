@@ -274,7 +274,7 @@ function InventarioForm({ corte, cp, avisar, onGuardado }: { corte: string; cp: 
       {esCascara && (
         <p className="si-aviso si-aviso--cascara">
           🌾 La cáscara entra <strong>seca</strong> a la bodega de materia prima como un <strong>lote propio</strong> (SI-…) y queda lista
-          en Producción → «Lote de arroz seco (bodega)». Si todavía está <strong>húmeda</strong> o aún <strong>no se la liquidas</strong> al
+          en Producción → «Desde Stock». Si todavía está <strong>húmeda</strong> o aún <strong>no se la liquidas</strong> al
           agricultor, regístrala en Báscula con un ticket manual (pasa por secado y liquidación como siempre).
         </p>
       )}

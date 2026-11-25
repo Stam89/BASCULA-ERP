@@ -11,6 +11,7 @@ Actualizado: 2026-11-24
 
 ## 2026-11-24 · Las pantallas se ponen al día solas
 - Lo que guarda otro equipo se ve en ~20 s: `services/cambios.ts` (marca en memoria, sube en `auditMiddleware`; `X-Equipo` evita contar lo propio) viaja en `GET /notificaciones`. En `App.tsx`, `revisarCambios` espera si se escribe o hay ventana abierta y solo corre en las pestañas de su lista (no nómina, liquidaciones ni ajustes).
+- Saldos iniciales › cáscara: el lote SI-… nace «guardado» (`apartado_arianos`) y sale directo en Producción › Desde Stock; antes había que pasar por Reportes › Lotes guardados.
 - «↻ Actualizar» también recarga lo propio de la pestaña (`recargarPestana`): antes en Producción no traía el historial ni los procesos guardados.
 
 ## 2026-11-24 · App de la báscula v11.58 (código 249) y su parte en el ERP

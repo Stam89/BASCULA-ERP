@@ -295,7 +295,8 @@ saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
     const siId: string = reg.rows[0].id;
     const notas = descripcion(body.corte, body.detalle);
 
-    // Cáscara seca → un LOTE propio (compra, ya pesado) para pilarlo en Producción.
+    // Cáscara seca → un LOTE propio (compra, ya pesado) para pilarlo en Producción. Nace «guardado»: sin eso no salía en
+    // Producción › Desde Stock hasta pasar por Reportes › Lotes guardados (reportado por el dueño 2026-11-24).
     let loteId: string | null = null;
     let loteCodigo: string | null = null;
     if (esCascara) {
@@ -303,8 +304,8 @@ saldosInicialesRouter.post("/inventario", asyncRoute(async (req, res) => {
       const n = Number((await client.query("SELECT count(*)::int AS n FROM lots WHERE saldo_inicial")).rows[0].n) + 1;
       loteCodigo = `SI-${d}${m}${y.slice(-2)}-${String(n).padStart(3, "0")}`;
       const lote = await client.query(
-        `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id, created_at, saldo_inicial)
-         VALUES ($1, $2, NULL, $3, 'OWNED', false, 'COMPRA', 'WEIGHED', $4, $5, ${SELLO("$6")}, true)
+        `INSERT INTO lots (lot_code, print_batch_code, farmer_id, rice_type, ownership, is_maquila, operation_type, status, notes, accionista_id, created_at, saldo_inicial, apartado_arianos, apartado_at)
+         VALUES ($1, $2, NULL, $3, 'OWNED', false, 'COMPRA', 'WEIGHED', $4, $5, ${SELLO("$6")}, true, true, now())
          RETURNING id`,
         [loteCodigo, nextCode("IMP"), p.code === "CASCARA-CORRIENTE" ? "CORRIENTE" : "0.11", notas, accionistaId, body.corte]
       );

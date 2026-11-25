@@ -13,6 +13,11 @@ try {
   const acc = lote.accionista_id;
   const ver = async () => exigir(await api("GET", "/reports/arianos", undefined, acc), "lista");
   const stock = async () => exigir(await api("GET", "/lots/dry-in-storage", undefined, acc), "stock").some((l) => l.id === lote.id);
+  // La cáscara recién cargada en Saldos iniciales sale directo en Producción › Desde Stock (2026-11-24).
+  const cascara = (await q("SELECT id FROM products WHERE code = 'CASCARA-011'"))[0];
+  const nuevo = exigir(await api("POST", "/saldos-iniciales/inventario", { corte: "2026-11-03", product_id: cascara.id, cantidad: 45, detalle: "simulacro" }, acc), "0a. cargar cáscara");
+  const enStock = exigir(await api("GET", "/lots/dry-in-storage", undefined, acc), "0b. stock").find((l) => l.lot_code === nuevo.lote);
+  check(Number(enStock?.quintals) === 45, "0c. sale en Desde Stock con sus 45 QQ", enStock);
   // Se parte con el lote sin guardar (en la copia puede venir ya guardado).
   exigir(await api("POST", "/reports/arianos/apartar", { ids: [lote.id], apartar: false }, acc), "0. dejarlo sin guardar");
   const a0 = await ver();

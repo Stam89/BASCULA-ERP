@@ -7636,6 +7636,7 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     await loadReport("arianos");
     const dr = await apiGet<DryingTunnelReport[]>("/process-flow/drying/reports").catch(() => null);
     if (dr) setDryingReports(dr);
+    apiGet<Lot[]>("/lots/dry-in-storage").then(setDryStorageLots).catch(() => undefined);
   }
 
   // Actualizar solo la ubicacion de un lote ya guardado (si lo movieron).
