@@ -42,7 +42,7 @@ Actualizado: 2026-11-24
 - `utils/red-local.ts`: la clave de instalación (va dentro del APK, y el APK está en una página pública) solo sirve desde la red del local; por internet, solo la credencial propia de la tablet.
 - **Versiones nuevas desde el ERP** (para 11.58 en adelante): poner en `backend/app-tablet/` (no se versiona) el APK y `bascula-update.json` `{versionCode, versionName, archivo, sha256, notes}`; la tablet lo
   ofrece sola (revisa cada 12 h o en Menú › Actualizaciones). Compilar SIN `-PDEVICE_SYNC_KEY` y firmar con la misma firma de siempre (`~/.android/debug.keystore`).
-- v11.62 (253): ticket como imagen (`TicketImagen.java`, si falla comparte texto) y botón «Enviar por WhatsApp» en el ticket. Con pruebas unitarias; sin probar en la tablet real ni en emulador.
+- v11.62 (253): ticket como imagen (`TicketImagen.java`, si falla comparte texto) y botón «Enviar por WhatsApp» en el ticket. Probado en emulador.
 - v11.61 (252): pestañas PESAJE|HISTORIAL y aviso de versión nueva (revisa al abrir y cada hora). Sin letra ancha (la Epson la ignora).
 - 2026-11-24: 11.58 instalada en la tablet real (557 tickets OK). v11.59 (250) publicada en backend/app-tablet: Epson directa sin conexion de prueba previa, copias en un envio, ticket sin renglones vacios y total en letra ancha (EpsonDirectPrinter + test). Falta ver el papel real.
 - El emulador de pruebas usa clave inventada, DNS cortado y la base `bascula_erp_ensayo`: nunca la clave real ni el ERP real.
