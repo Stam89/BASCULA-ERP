@@ -9,6 +9,9 @@ Actualizado: 2026-11-24
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-24 · Gana: precio de la cáscara a mano
+- Partida sin liquidar: precio de compra escrito en el Gana (`processing_batch_drying_lots.precio_cascara_manual`; pilada sin partidas: `production_yields.precio_cascara_manual`; migración 20261148). Con la liquidación hecha vale la liquidada. Solo alimenta el cuadro (y el Resultado mensual, que usa `ganaCalc`). `PATCH /processing-batches/:id/precio-cascara` (EDITAR_PRECIOS). Simulacro `gana_precio_cascara`.
+
 ## 2026-11-24 · Producción: Secadoras y Stock en la misma pilada
 - Las dos listas conviven («Entra a esta pilada» muestra todo). Principal = la secadora elegida; si no hay, el primer lote de Stock. Mismo socio, tipo de arroz y clase (propio/servicio).
 - Proceso guardado: `report.juntos` (secados) y `report.juntos_lotes` (lotes sin secado); su cáscara también sale de bodega. Se guarda siempre con la clave con que se retomó (`borradorCargado`). Al cerrar, el servidor borra los borradores de todo lo que entró.

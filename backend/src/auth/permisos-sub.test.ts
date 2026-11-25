@@ -68,6 +68,7 @@ describe("moduloPermiteEscritura (Ver / Editar por sub-pestaña)", () => {
 
     const gana = ["Gana", "EDIT:Gana"];
     expect(moduloPermiteEscritura(gana, "Gana", "processing-batches", "PATCH", "/abc/precio-venta")).toBe(true);
+    expect(moduloPermiteEscritura(gana, "Gana", "processing-batches", "PATCH", "/abc/precio-cascara")).toBe(true);
     expect(moduloPermiteEscritura(gana, "Gana", "processing-batches", "POST", "/abc/finish")).toBe(false);
 
     const secador = ["Secadoras", "EDIT:Secadoras"];

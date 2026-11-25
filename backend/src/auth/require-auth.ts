@@ -126,7 +126,7 @@ const LIMITE_DE_MODULO: Array<{ module: AppModule; prefix: string; mensaje?: str
   // Por Pagar paga cuentas; antes abría TODA la caja (abrir, cerrar, egresos, traspasos).
   { module: "Por Pagar", prefix: "cash", test: (_m, r) => /^\/payables(\/|$)/.test(r) },
   { module: "Secadoras", prefix: "labor", test: (_m, r) => /^\/secador-guardia\/?$/.test(r) },
-  { module: "Gana", prefix: "processing-batches", test: (_m, r) => /^\/[^/]+\/(gana-whatsapp|precio-venta)\/?$/.test(r) },
+  { module: "Gana", prefix: "processing-batches", test: (_m, r) => /^\/[^/]+\/(gana-whatsapp|precio-venta|precio-cascara)\/?$/.test(r) },
   // Caja compra sacos y repuestos; el ajuste de stock es de Inventario.
   { module: "Caja", prefix: "sacks", test: (_m, r) => /^\/purchases\/?$/.test(r) },
   { module: "Caja", prefix: "repuestos", test: (_m, r) => /^\/compra\/?$/.test(r) }

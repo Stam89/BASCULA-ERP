@@ -155,6 +155,7 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               y.precio_venta_broken,
               y.precio_venta_fine,
               y.precio_venta_bran,
+              y.precio_cascara_manual,
               COALESCE(y.compartido_whatsapp, false) AS compartido_whatsapp,
               COALESCE((
                 SELECT json_agg(json_build_object(
@@ -173,13 +174,15 @@ processingRouter.get("/history", asyncRoute(async (req, res) => {
               -- cáscara (suma de partidas, no un peso arrastrado).
               COALESCE((
                 SELECT json_agg(json_build_object(
+                         'id', dl.id,
                          'weighing_ticket_id', dl.weighing_ticket_id,
                          'farmer_name', dl.farmer_name,
                          'lot_code', dl.lot_code,
                          'quintals', dl.quintals,
                          'numero_bascula', m.raw_payload->>'numeroTicket',
                          'ticket_number', w.ticket_number,
-                         'price_per_quintal', liq.price_per_quintal
+                         'price_per_quintal', liq.price_per_quintal,
+                         'precio_manual', dl.precio_cascara_manual
                        ) ORDER BY dl.created_at ASC)
                 FROM processing_batch_drying_lots dl
                 LEFT JOIN weighing_tickets w ON w.id = dl.weighing_ticket_id
@@ -1802,4 +1805,42 @@ processingRouter.patch("/:id/precio-venta", requirePermiso("EDITAR_PRECIOS"), as
   );
   if (!result.rowCount) throw new ApiError(404, "Rendimiento del lote no encontrado");
   res.json({ producto: body.producto, precio: result.rows[0].precio });
+}));
+
+// 🏆 Precio de COMPRA de la cáscara escrito a mano en el Gana, para una partida que todavía no está liquidada (pedido del
+// dueño 2026-11-24). Solo alimenta el cuadro; con la liquidación hecha manda el precio liquidado. Sin `partida_id` = las
+// partidas que aún no tienen precio (o el lote entero si la pilada no tiene partidas); no pisa lo ya escrito.
+processingRouter.patch("/:id/precio-cascara", requirePermiso("EDITAR_PRECIOS"), asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId ?? null;
+  const body = z.object({
+    partida_id: z.string().uuid().optional(),
+    precio: z.number().nonnegative().max(10_000).nullable()
+  }).parse(req.body);
+  const batchId = z.string().uuid().parse(req.params.id);
+  const guardadas = await inTransaction(async (client) => {
+    const owner = await client.query(
+      "SELECT l.accionista_id FROM processing_batches b JOIN lots l ON l.id = b.lot_id WHERE b.id = $1 AND b.status <> 'CANCELLED' FOR UPDATE OF b",
+      [batchId]
+    );
+    if (!owner.rowCount) throw new ApiError(404, "Lote de producción no encontrado");
+    if (owner.rows[0].accionista_id !== accionistaId) throw new ApiError(403, "Este lote pertenece a otro accionista.");
+    const partidas = await client.query(
+      `SELECT dl.id, dl.precio_cascara_manual IS NOT NULL AS con_precio,
+              EXISTS (SELECT 1 FROM liquidations lq WHERE lq.weighing_ticket_id = dl.weighing_ticket_id AND lq.status <> 'CANCELLED') AS liquidada
+         FROM processing_batch_drying_lots dl WHERE dl.processing_batch_id = $1`,
+      [batchId]
+    );
+    if (!partidas.rowCount) {
+      const r = await client.query("UPDATE production_yields SET precio_cascara_manual = $2 WHERE processing_batch_id = $1", [batchId, body.precio]);
+      if (!r.rowCount) throw new ApiError(404, "Rendimiento del lote no encontrado");
+      return [] as string[];
+    }
+    const elegidas = partidas.rows.filter((p) => !body.partida_id || p.id === body.partida_id);
+    if (!elegidas.length) throw new ApiError(404, "Esa partida no es de este lote.");
+    const libres = elegidas.filter((p) => !p.liquidada && (body.partida_id || !p.con_precio)).map((p) => String(p.id));
+    if (!libres.length) throw new ApiError(409, body.partida_id ? "Ya está liquidada: vale el precio de la liquidación." : "No falta el precio de ninguna partida.");
+    await client.query("UPDATE processing_batch_drying_lots SET precio_cascara_manual = $2 WHERE id = ANY($1::uuid[])", [libres, body.precio]);
+    return libres;
+  });
+  res.json({ partidas: guardadas, precio: body.precio });
 }));

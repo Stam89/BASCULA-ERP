@@ -1538,7 +1538,12 @@ type ProductionHistoryItem = {
     numero_bascula: string | null;
     ticket_number: string | null;
     price_per_quintal: string | number | null;
+    id?: string;
+    /** Precio de compra escrito a mano mientras no está liquidada. */
+    precio_manual?: string | number | null;
   }>;
+  /** Pilada sin partidas enlazadas: precio a mano de toda su cáscara. */
+  precio_cascara_manual?: string | number | null;
 };
 
 type RendimientoSnapshot = {
@@ -3400,7 +3405,20 @@ export function App() {
       ? entradas.reduce((s, p) => s + Number(p.quintals || 0), 0)
       : (snap ? Number(snap.entrada_cascara_qq ?? 0) : Number(item.input_paddy_kg ?? 0) / KG_QQ);
     const entrada = Number.isFinite(entradaRaw) ? entradaRaw : 0;
-    const costoCascara = entradas.reduce((s, p) => s + (p.price_per_quintal != null ? Number(p.quintals || 0) * Number(p.price_per_quintal) : 0), 0);
+    // Precio de compra de cada partida: el de su liquidación; si aún no está liquidada, el escrito a mano en el Gana.
+    const precioCascara = (clave: string, liquidado: string | number | null | undefined, manual: string | number | null | undefined) => {
+      const borrador = ganaPrecioVenta[`${item.id}:cascara:${clave}`];
+      const str = borrador ?? (manual != null ? String(Number(manual)) : "");
+      const aMano = str.trim() !== "" && Number.isFinite(Number(str)) && Number(str) >= 0 ? Number(str) : null;
+      return { str, precio: liquidado != null ? Number(liquidado) : aMano, liquidado: liquidado != null };
+    };
+    const preciosCascara = entradas.map((p, i) => precioCascara(p.id ?? String(i), p.price_per_quintal, p.precio_manual));
+    const precioUnico = precioCascara("todo", null, item.precio_cascara_manual);
+    const costoCascara = round2(entradas.length
+      ? entradas.reduce((s, p, i) => s + Number(p.quintals || 0) * (preciosCascara[i].precio ?? 0), 0)
+      : entrada * (precioUnico.precio ?? 0));
+    const sinPrecio = entradas.length ? preciosCascara.filter((x) => x.precio == null).length : (precioUnico.precio == null ? 1 : 0);
+    const aMano = entradas.length ? preciosCascara.filter((x) => !x.liquidado && x.precio != null).length : (precioUnico.precio != null ? 1 : 0);
     const broken = Number(item.broken_rice_qty ?? 0);
     const fino = Number(item.fine_broken_rice_qty ?? 0);
     const arrocillos = broken + fino;
@@ -3441,9 +3459,9 @@ export function App() {
     const pBlanco = Number(pBlancoStr) || 0, pBroken = Number(pBrokenStr) || 0, pFine = Number(pFineStr) || 0, pBran = Number(pBranStr) || 0;
     const ingBlanco = blanco * pBlanco, ingBroken = broken * pBroken, ingFine = fino * pFine, ingBran = polvillo * pBran;
     const ingresoTotal = ingBlanco + ingBroken + ingFine + ingBran;
-    const utilidad = ingresoTotal - costoCascara;
-    const totalCascaraSeccion = costoCascara + costoProdTotal;
-    return { entradas, entrada, costoCascara, blanco, broken, fino, arrocillos, polvillo, tula, saco,
+    const utilidad = round2(ingresoTotal - costoCascara);
+    const totalCascaraSeccion = round2(costoCascara + costoProdTotal);
+    return { entradas, entrada, costoCascara, preciosCascara, precioUnico, sinPrecio, aMano, blanco, broken, fino, arrocillos, polvillo, tula, saco,
       blancoRendPct, blancoRendStr, subPct, precioPilada, costoProdUnit, costoProdTotal,
       pBlancoStr, pBrokenStr, pFineStr, pBranStr, pBlanco, pBroken, pFine, pBran,
       ingresoTotal, utilidad, totalCascaraSeccion };
@@ -13258,6 +13276,30 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     }
   }
 
+  // 🏆 Precio de COMPRA de la cáscara a mano (partida sin liquidar). Sin `partida` = todas las que aún no tienen precio.
+  async function saveGanaPrecioCascara(batchId: string, partida: string | null, raw: string) {
+    const num = raw.trim() === "" ? null : Number(raw);
+    if (num != null && (!Number.isFinite(num) || num < 0)) { addToast("Precio de la cáscara inválido", "error"); return; }
+    try {
+      const r = await apiFetch(`/processing-batches/${batchId}/precio-cascara`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partida_id: partida ?? undefined, precio: num })
+      });
+      const data = await r.json().catch(() => null) as { partidas?: string[]; error?: string } | null;
+      if (!r.ok) throw new Error(data?.error ?? "No se pudo guardar el precio de la cáscara");
+      const ids = data?.partidas ?? [];
+      setProductionHistory((cur) => cur.map((it) => it.id !== batchId ? it : ids.length
+        ? { ...it, entradas: (it.entradas ?? []).map((p) => p.id && ids.includes(p.id) ? { ...p, precio_manual: num } : p) }
+        : { ...it, precio_cascara_manual: num }));
+      setGanaPrecioVenta((cur) => Object.fromEntries(Object.entries(cur).filter(([k]) => !k.startsWith(`${batchId}:cascara:`)
+        || (ids.length > 0 && !ids.includes(k.split(":")[2]) && k.split(":")[2] !== "todo"))));
+      addToast(num != null ? `Precio de la cáscara: ${money(num)}/QQ${ids.length > 1 ? ` en ${ids.length} partidas` : ""}` : "Precio borrado", "success");
+    } catch (err) {
+      addToast(err instanceof Error ? err.message : "Error al guardar el precio", "error");
+    }
+  }
+
   // ↩ Anula una producción YA CERRADA (solo administrador): devuelve el arroz y la cáscara, anula las cuentas del servicio y los
   // pagos pendientes del proceso, y deja el lote listo para volver a pilarse. El servidor rechaza si ya se usó el arroz o hay abonos.
   async function anularProduccion(batchId: string, etiqueta: string) {
@@ -18987,6 +19029,16 @@ Motivo (obligatorio):`, ""));
                     <td style={{ ...dcell, fontWeight: 700, color: "#15803d" }}>{pnum > 0 ? money(qq * pnum) : "—"}</td>
                   </>
                 );
+                // Precio de COMPRA de la cáscara a mano (solo lo que no está liquidado). partida null = todas las pendientes.
+                const inputCascara = (partida: string | null, clave: string, str: string, placeholder: string) => (
+                  <input type="number" min="0" step="0.01" inputMode="decimal" placeholder={placeholder} value={str} disabled={!canEditarPrecios}
+                    aria-label={partida ? "Precio de compra de la cáscara" : "Precio de compra para las partidas que aún no tienen precio"}
+                    onChange={(e) => setGanaPrecioVenta((cur) => ({ ...cur, [`${item.id}:cascara:${clave}`]: e.target.value }))}
+                    onBlur={(e) => { if (ganaPrecioVenta[`${item.id}:cascara:${clave}`] !== undefined) saveGanaPrecioCascara(item.id, partida, e.target.value).catch(() => undefined); }}
+                    onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+                    title={canEditarPrecios ? "Precio de compra por QQ, a mano: vale mientras no esté liquidada" : "No tienes permiso para editar precios y tarifas"}
+                    style={{ width: 90, padding: "4px 6px", borderRadius: 6, border: "1px solid #fcd34d", textAlign: "right", fontSize: 12, opacity: canEditarPrecios ? 1 : 0.5 }} />
+                );
                 return (
                   <div className="modalOverlay" onClick={() => setGanaModalId(null)}>
                     <div className="modalCard formPanel" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "min(1200px, 95vw)", width: "95vw", maxHeight: "92vh", padding: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -19032,21 +19084,27 @@ Motivo (obligatorio):`, ""));
                               </tr>
                               {c.entradas.length === 0 && (
                                 <tr style={{ borderBottom: "1px solid var(--c-border)" }}>
-                                  <td colSpan={5} style={{ padding: "6px 10px", color: "var(--c-muted)", fontStyle: "italic" }}>Sin partidas registradas (lote previo a esta versión); total tomado del rendimiento.</td>
+                                  <td style={{ padding: "6px 10px", color: "var(--c-muted)", fontStyle: "italic" }}>Un solo lote, sin partidas; total tomado del rendimiento.</td>
+                                  <td style={dcell}>{n2(c.entrada)}</td>
+                                  <td style={dcell}>{inputCascara(null, "todo", c.precioUnico.str, "Precio")}{c.precioUnico.precio != null && <small className="muted" style={{ display: "block", fontSize: 10 }}>a mano</small>}</td>
+                                  <td style={dcell}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : "—"}</td>
+                                  <td style={dcell}>{c.precioUnico.precio != null ? money(round2((c.precioUnico.precio + c.costoProdUnit) * c.entrada)) : "—"}</td>
                                 </tr>
                               )}
                               {c.entradas.map((p, idx) => {
                                 const qq = Number(p.quintals || 0);
-                                const precio = p.price_per_quintal != null ? Number(p.price_per_quintal) : null;
+                                const { precio, liquidado, str } = c.preciosCascara[idx];
                                 const etq = p.numero_bascula ? `Ticket #${p.numero_bascula}` : (p.ticket_number ?? p.lot_code ?? "Partida");
                                 // Total ($) = (Precio Unitario de Compra + Costo Prod.) × QQ de la fila.
-                                const totalFila = ((precio ?? 0) + c.costoProdUnit) * qq;
+                                const totalFila = round2(((precio ?? 0) + c.costoProdUnit) * qq);
                                 const tieneValor = precio != null || c.costoProdUnit > 0;
                                 return (
-                                  <tr key={p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
+                                  <tr key={p.id ?? p.weighing_ticket_id ?? idx} style={{ borderBottom: "1px solid var(--c-border)" }}>
                                     <td style={{ padding: "6px 10px 6px 22px" }}>· {p.farmer_name ?? "Sin agricultor"} <span className="muted">· {etq}</span></td>
                                     <td style={dcell}>{n2(qq)}</td>
-                                    <td style={dcell}>{precio != null ? `${money(precio)}` : <span className="muted" title="Aún no liquidado">— pend.</span>}</td>
+                                    <td style={dcell}>{liquidado || !p.id
+                                      ? (precio != null ? money(precio) : <span className="muted" title="Aún no liquidado">— pend.</span>)
+                                      : <>{inputCascara(p.id, p.id, str, "Precio")}<small className="muted" style={{ display: "block", fontSize: 10 }}>{precio != null ? "a mano · sin liquidar" : "sin liquidar"}</small></>}</td>
                                     <td style={dcell}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : <span className="muted" title="Define la Tarifa de Pilado del socio en Configuración → Tarifas">—</span>}</td>
                                     <td style={dcell}>{tieneValor ? money(totalFila) : "—"}</td>
                                   </tr>
@@ -19055,7 +19113,7 @@ Motivo (obligatorio):`, ""));
                               <tr style={{ borderBottom: "2px solid var(--c-border)" }}>
                                 <td style={{ padding: "6px 10px", fontWeight: 700 }}>Cáscara de Entrada (total)</td>
                                 <td style={{ ...dcell, fontWeight: 700 }}>{n2(c.entrada)}</td>
-                                <td style={dcell}></td>
+                                <td style={dcell}>{c.sinPrecio > 1 && !ganaCompartiendo && canEditarPrecios && inputCascara(null, "todo", ganaPrecioVenta[`${item.id}:cascara:todo`] ?? "", "Las demás")}</td>
                                 <td style={{ ...dcell, fontWeight: 700 }}>{c.costoProdUnit > 0 ? `$${c.costoProdUnit.toFixed(4)}` : "—"}</td>
                                 <td style={{ ...dcell, fontWeight: 700, color: "#b45309" }}>{(c.costoCascara > 0 || c.costoProdUnit > 0) ? money(c.totalCascaraSeccion) : "—"}</td>
                               </tr>
@@ -19112,6 +19170,12 @@ Motivo (obligatorio):`, ""));
                             <div style={{ fontSize: 16, fontWeight: 800, color: c.utilidad >= 0 ? "#1d4ed8" : "#b91c1c" }}>{c.ingresoTotal > 0 ? money(c.utilidad) : "—"}</div>
                           </div>
                         </div>
+                        {(c.sinPrecio > 0 || c.aMano > 0) && (
+                          <p style={{ margin: "8px 0 0", fontSize: 12, color: "#b45309", fontWeight: 600 }}>
+                            {c.sinPrecio > 0 && `⚠️ Falta el precio de la cáscara en ${c.sinPrecio} partida(s): la utilidad sale más alta de lo real. `}
+                            {c.aMano > 0 && `✍️ ${c.aMano} partida(s) con precio a mano: al liquidarlas se toma el precio de la liquidación.`}
+                          </p>
+                        )}
                         {(item.pilador_name || item.estibador_name) && (
                           <p className="muted" style={{ margin: "8px 0 0", fontSize: 12 }}>
                             Pilador: {item.pilador_name ?? "—"} · Estibador: {item.estibador_name ?? "—"}
