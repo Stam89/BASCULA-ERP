@@ -9,6 +9,11 @@ Actualizado: 2026-11-24
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-24 · Producción: Secadoras y Stock en la misma pilada
+- Las dos listas conviven («Entra a esta pilada» muestra todo). Principal = la secadora elegida; si no hay, el primer lote de Stock. Mismo socio, tipo de arroz y clase (propio/servicio).
+- Proceso guardado: `report.juntos` (secados) y `report.juntos_lotes` (lotes sin secado); su cáscara también sale de bodega. Se guarda siempre con la clave con que se retomó (`borradorCargado`). Al cerrar, el servidor borra los borradores de todo lo que entró.
+- `/lots/dry-in-storage`: `has_draft` también para secados guardados y lotes juntados; un lote con cierre a medias (IN_PROCESS) sigue recuperable. Simulacro `produccion_mixta`.
+
 ## 2026-11-24 · Las pantallas se ponen al día solas
 - Lo que guarda otro equipo se ve en ~20 s: `services/cambios.ts` (marca en memoria, sube en `auditMiddleware`; `X-Equipo` evita contar lo propio) viaja en `GET /notificaciones`. En `App.tsx`, `revisarCambios` espera si se escribe o hay ventana abierta y solo corre en las pestañas de su lista (no nómina, liquidaciones ni ajustes).
 - Saldos iniciales › cáscara: el lote SI-… nace «guardado» (`apartado_arianos`) y sale directo en Producción › Desde Stock; antes había que pasar por Reportes › Lotes guardados.

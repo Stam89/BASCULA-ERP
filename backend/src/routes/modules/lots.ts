@@ -212,14 +212,19 @@ lotsRouter.get("/dry-in-storage", asyncRoute(async (req, res) => {
               l.ubicacion_arianos, NULL::int,
               CASE WHEN l.saldo_inicial THEN l.notes ELSE (SELECT string_agg(DISTINCT f2.full_name, ', ') FROM weighing_tickets t JOIN farmers f2 ON f2.id = t.farmer_id WHERE t.lot_id = l.id) END
          FROM lots l
-        WHERE l.accionista_id = $1 AND l.status = 'WEIGHED'
+        -- IN_PROCESS sin cerrar: un cierre que quedó a medias (se puede retomar; sale marcado con has_draft).
+        WHERE l.accionista_id = $1 AND l.status IN ('WEIGHED', 'IN_PROCESS')
           AND ((l.saldo_inicial AND l.apartado_arianos) OR l.operation_type = 'PILADO')
           AND NOT EXISTS (SELECT 1 FROM drying_tunnel_reports d WHERE d.lot_id = l.id)
           AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.status <> 'CANCELLED' AND b.finished_at IS NOT NULL
                             AND (b.lot_id = l.id OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.lot_id = l.id)))
      )
      SELECT base.*, COALESCE(f.full_name, CASE WHEN base.saldo_inicial THEN 'Saldo inicial' END) AS farmer_name,
-            EXISTS (SELECT 1 FROM milling_drafts md WHERE md.lot_id = base.id) AS has_draft
+            ((base.stock_kind = 'lote' AND base.status = 'IN_PROCESS')
+             OR EXISTS (SELECT 1 FROM milling_drafts md
+                         WHERE md.lot_id = base.id OR md.drying_report_id = base.drying_report_id
+                            OR (jsonb_typeof(md.report->'juntos') = 'array' AND md.report->'juntos' ? base.drying_report_id::text)
+                            OR (jsonb_typeof(md.report->'juntos_lotes') = 'array' AND md.report->'juntos_lotes' ? base.id::text))) AS has_draft
        FROM base LEFT JOIN farmers f ON f.id = base.farmer_id
       WHERE base.quintals > 0
       ORDER BY base.created_at DESC

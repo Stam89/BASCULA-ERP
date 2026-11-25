@@ -54,6 +54,14 @@ async function retirarInventarioDeBorradores(client: PoolClient, processingBatch
   // Un lote sin secado guarda su proceso con el id del lote.
   const lote = await client.query("SELECT lot_id FROM processing_batches WHERE id = $1", [processingBatchId]);
   if (lote.rows[0]?.lot_id) ids.add(String(lote.rows[0].lot_id));
+  // 📦 Y los lotes guardados que se pilaron junto con él (también pueden tener su cáscara apartada o ser la clave del borrador).
+  const extra = await client.query(
+    "SELECT DISTINCT lot_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NULL AND lot_id IS NOT NULL",
+    [processingBatchId]
+  );
+  for (const x of extra.rows) ids.add(String(x.lot_id));
+  // El borrador de cualquiera de ellos queda cerrado con esta pilada.
+  await client.query("DELETE FROM milling_drafts WHERE drying_report_id = ANY($1::uuid[]) OR lot_id = ANY($1::uuid[])", [[...ids]]);
   for (const id of ids) {
     await sincronizarInventarioBorrador(client, id, null, createdBy);
     await sincronizarCascaraBorrador(client, id, createdBy);
@@ -72,9 +80,10 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
             t.tunnel_number, COALESCE(t.rice_type::text, l.rice_type::text) AS rice_type,
             -- 🔗 Pilar juntos: el borrador guarda en report.juntos las otras secadoras; se suman sus QQ y túneles.
             (COALESCE(t.total_quintals, (SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.lot_id = d.lot_id AND m.reference_type = 'saldo_inicial'),
-                      (SELECT SUM(wt.quintals) FROM weighing_tickets wt WHERE wt.lot_id = d.lot_id), 0) + COALESCE(j.qq, 0)) AS total_quintals,
+                      (SELECT SUM(wt.quintals) FROM weighing_tickets wt WHERE wt.lot_id = d.lot_id), 0) + COALESCE(j.qq, 0) + COALESCE(jl.qq, 0)) AS total_quintals,
             COALESCE(j.tuneles, ARRAY[]::int[]) AS tuneles_juntos,
-            COALESCE(j.lotes, ARRAY[]::text[]) AS lotes_juntos,
+            COALESCE(j.lotes, ARRAY[]::text[]) || COALESCE(jl.lotes, ARRAY[]::text[]) AS lotes_juntos,
+            COALESCE(jl.n, 0)::int AS lotes_stock_juntos,
             l.lot_code,
             EXISTS (
               SELECT 1 FROM processing_batches b
@@ -85,12 +94,23 @@ processingRouter.get("/drafts", asyncRoute(async (req, res) => {
      JOIN lots l ON l.id = COALESCE(t.lot_id, d.lot_id)
      LEFT JOIN LATERAL (
        SELECT SUM(x.total_quintals) AS qq, array_agg(x.tunnel_number ORDER BY x.tunnel_number) AS tuneles,
-              array_agg(xl.lot_code ORDER BY x.tunnel_number) AS lotes
+              array_agg(xl.lot_code::text ORDER BY x.tunnel_number) AS lotes
          FROM drying_tunnel_reports x JOIN lots xl ON xl.id = x.lot_id
         WHERE jsonb_typeof(d.report->'juntos') = 'array'
           AND x.id::text IN (SELECT jsonb_array_elements_text(d.report->'juntos'))
-          AND x.id <> d.drying_report_id
+          AND x.id IS DISTINCT FROM d.drying_report_id
      ) j ON true
+     -- 📦 Lotes guardados sin secado (report.juntos_lotes): saldo inicial o «Solo pilada».
+     LEFT JOIN LATERAL (
+       SELECT count(*) AS n, array_agg(y.lot_code::text ORDER BY y.lot_code) AS lotes,
+              SUM(CASE WHEN y.saldo_inicial
+                   THEN (SELECT SUM(m.quantity) FROM inventory_movements m WHERE m.lot_id = y.id AND m.reference_type = 'saldo_inicial')
+                   ELSE (SELECT SUM(wt.quintals) FROM weighing_tickets wt WHERE wt.lot_id = y.id) END) AS qq
+         FROM lots y
+        WHERE jsonb_typeof(d.report->'juntos_lotes') = 'array'
+          AND y.id::text IN (SELECT jsonb_array_elements_text(d.report->'juntos_lotes'))
+          AND y.id IS DISTINCT FROM d.lot_id
+     ) jl ON true
      WHERE l.accionista_id = $1
        AND NOT EXISTS (
          SELECT 1 FROM processing_batches b
@@ -287,8 +307,31 @@ processingRouter.put("/drafts/:dryingId", asyncRoute(async (req, res) => {
   );
   if (cerrado.rowCount) throw new ApiError(409, "Este túnel ya se piló y se cerró: no se puede guardar otra vez su proceso.");
 
+  // 🔗 Lo que se pila junto (otras secadoras y lotes guardados de Stock): del mismo socio y que no esté en otro proceso guardado.
+  const lista = (v: unknown) => (Array.isArray(v) ? [...new Set(v.map(String))].filter((x) => x !== dryingId && /^[0-9a-f-]{36}$/i.test(x)) : []);
+  const juntos = lista(body.report.juntos), juntosLotes = lista(body.report.juntos_lotes);
+
   await ensureLaborTables();
   const result = await inTransaction(async (client) => {
+    if (juntosLotes.length) {
+      const libres = await client.query(
+        "SELECT id FROM lots WHERE id = ANY($1::uuid[]) AND accionista_id = $2 AND status IN ('WEIGHED', 'IN_PROCESS') AND (saldo_inicial OR operation_type = 'PILADO')",
+        [juntosLotes, accionistaId]
+      );
+      if (libres.rowCount !== juntosLotes.length) throw new ApiError(409, "Uno de los lotes de Stock ya no está disponible para pilar. Actualiza y vuelve a elegirlo.");
+    }
+    if (juntos.length || juntosLotes.length) {
+      const otro = await client.query(
+        `SELECT 1 FROM milling_drafts md
+          WHERE COALESCE(md.drying_report_id, md.lot_id) <> $1
+            AND (md.drying_report_id = ANY($2::uuid[]) OR md.lot_id = ANY($3::uuid[])
+              OR (jsonb_typeof(md.report->'juntos') = 'array' AND md.report->'juntos' ?| $4::text[])
+              OR (jsonb_typeof(md.report->'juntos_lotes') = 'array' AND md.report->'juntos_lotes' ?| $5::text[]))
+          LIMIT 1`,
+        [dryingId, juntos, juntosLotes, juntos, juntosLotes]
+      );
+      if (otro.rowCount) throw new ApiError(409, "Una de las secadoras o lotes elegidos ya está en otro proceso guardado.");
+    }
     const antes = await tunelesDelBorrador(client, dryingId);
     const r = await client.query(
       `INSERT INTO milling_drafts (${esLote ? "lot_id" : "drying_report_id"}, accionista_id, report, pilado_entries, saved_by)
@@ -1554,9 +1597,9 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
         const st = (await client.query(
           `SELECT m.product_id, m.warehouse_id, m.ownership, m.accionista_id, SUM(m.quantity)::float AS qq
              FROM inventory_movements m JOIN products p ON p.id = m.product_id
-            WHERE m.lot_id = $1 AND p.product_type = 'RAW_MATERIAL'
+            WHERE m.lot_id = $1 AND p.product_type = 'RAW_MATERIAL' AND m.reference_type IS DISTINCT FROM $2
             GROUP BY m.product_id, m.warehouse_id, m.ownership, m.accionista_id HAVING SUM(m.quantity) > 0.0005`,
-          [id]
+          [id, REF_BORRADOR_CASCARA]
         )).rows as Array<{ product_id: string; warehouse_id: string; ownership: string; accionista_id: string | null; qq: number }>;
         return st;
       };
@@ -1617,8 +1660,8 @@ processingRouter.post("/", asyncRoute(async (req, res) => {
     }
 
     // 🌾 La cáscara que el «Proceso guardado» había apartado ya la consumió el proceso: lo apartado vuelve a 0.
-    if (body.drying_report_id) {
-      for (const id of new Set([body.drying_report_id, ...body.drying_report_ids_extra])) await sincronizarCascaraBorrador(client, id, body.created_by);
+    for (const id of new Set([body.drying_report_id ?? lotId, ...(body.drying_report_id ? body.drying_report_ids_extra : []), ...body.lot_ids_extra])) {
+      await sincronizarCascaraBorrador(client, id, body.created_by);
     }
 
     return batch.rows[0];

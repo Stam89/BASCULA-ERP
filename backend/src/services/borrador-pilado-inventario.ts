@@ -116,8 +116,11 @@ export async function sincronizarCascaraBorrador(client: PoolClient, dryingRepor
        FROM drying_tunnel_reports t JOIN lots l ON l.id = t.lot_id WHERE t.id = $1
        UNION ALL
        SELECT l.id, l.operation_type,
-              EXISTS (SELECT 1 FROM milling_drafts md WHERE md.lot_id = l.id)
-              AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.lot_id = l.id AND b.finished_at IS NOT NULL AND b.status <> 'CANCELLED')
+              EXISTS (SELECT 1 FROM milling_drafts md
+                       WHERE md.lot_id = l.id
+                          OR (jsonb_typeof(md.report->'juntos_lotes') = 'array' AND md.report->'juntos_lotes' ? l.id::text))
+              AND NOT EXISTS (SELECT 1 FROM processing_batches b WHERE b.finished_at IS NOT NULL AND b.status <> 'CANCELLED'
+                                AND (b.lot_id = l.id OR b.id IN (SELECT x.processing_batch_id FROM processing_batch_drying_lots x WHERE x.lot_id = l.id)))
          FROM lots l WHERE l.id = $1`,
     [dryingReportId]
   )).rows[0];
@@ -160,9 +163,9 @@ export async function sincronizarCascaraBorrador(client: PoolClient, dryingRepor
   }
 }
 
-/** Túneles de un borrador: el principal y los juntados (report.juntos). */
+/** Lo que entra en un borrador: el principal, las secadoras juntadas (report.juntos) y los lotes de Stock (report.juntos_lotes). */
 export async function tunelesDelBorrador(client: PoolClient, dryingReportId: string): Promise<string[]> {
-  const r = (await client.query("SELECT report->'juntos' AS juntos FROM milling_drafts WHERE drying_report_id = $1 OR lot_id = $1", [dryingReportId])).rows[0];
-  const juntos = Array.isArray(r?.juntos) ? (r.juntos as unknown[]).map(String) : [];
+  const r = (await client.query("SELECT report->'juntos' AS juntos, report->'juntos_lotes' AS lotes FROM milling_drafts WHERE drying_report_id = $1 OR lot_id = $1", [dryingReportId])).rows[0];
+  const juntos = [r?.juntos, r?.lotes].flatMap((v) => (Array.isArray(v) ? (v as unknown[]).map(String) : []));
   return [...new Set([dryingReportId, ...juntos])];
 }

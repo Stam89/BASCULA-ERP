@@ -470,7 +470,8 @@ export async function createProductionWorkerPayments(
     const tuneles = (await client.query(
       `SELECT drying_report_id AS id FROM processing_batches WHERE id = $1 AND drying_report_id IS NOT NULL
        UNION SELECT drying_report_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NOT NULL
-       UNION SELECT lot_id FROM processing_batches WHERE id = $1 AND lot_id IS NOT NULL`,
+       UNION SELECT lot_id FROM processing_batches WHERE id = $1 AND lot_id IS NOT NULL
+       UNION SELECT lot_id FROM processing_batch_drying_lots WHERE processing_batch_id = $1 AND drying_report_id IS NULL AND lot_id IS NOT NULL`,
       [opts.batchId]
     )).rows.map((x) => String(x.id));
     const delBorrador = (await client.query(
