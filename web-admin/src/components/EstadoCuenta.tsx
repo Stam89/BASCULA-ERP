@@ -368,17 +368,23 @@ export function CuentasSaldadas(p: Omit<EstadoCuentaProps, "nombre" | "onAbonar"
           </table>
         </div>
       ))}
-      {ver && (
-        <div className="modalOverlay" onClick={() => setVer(null)}>
-          <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1040, width: "100%" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
-              <div><h3 style={{ margin: 0, fontSize: 20 }}>{ver}</h3><p className="muted" style={{ margin: "2px 0 0" }}>📒 Estado de cuenta · {p.cuentaActiva}</p></div>
-              <button type="button" onClick={() => setVer(null)} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
-            </div>
-            <EstadoCuenta {...p} nombre={ver} onCambio={async () => { await p.onCambio(); cargar(); }} />
-          </div>
+      {ver && <EstadoCuentaModal {...p} nombre={ver} onClose={() => setVer(null)} onCambio={async () => { await p.onCambio(); cargar(); }} />}
+    </div>
+  );
+}
+
+/** El estado de cuenta solo, en una ventana (cuentas sin saldo: historial y cargos nuevos). */
+export function EstadoCuentaModal(p: Omit<EstadoCuentaProps, "onAbonar"> & { onClose: () => void }) {
+  const { onClose, ...resto } = p;
+  return (
+    <div className="modalOverlay" onClick={onClose}>
+      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 1040, width: "100%" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start" }}>
+          <div><h3 style={{ margin: 0, fontSize: 20 }}>{p.nombre}</h3><p className="muted" style={{ margin: "2px 0 0" }}>📒 Estado de cuenta · {p.cuentaActiva}</p></div>
+          <button type="button" onClick={onClose} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
         </div>
-      )}
+        <EstadoCuenta {...resto} />
+      </div>
     </div>
   );
 }

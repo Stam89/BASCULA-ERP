@@ -7394,3 +7394,13 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
   .ec__chk { margin-left: 0; }
   .ec__scroll { max-height: none; }
 }
+
+/* Por Pagar: lo de agricultores va al «mes a mes» (con su botón Ver detalle y pagar) */
+.apAgricultoresBox { min-width: 170px; margin: 0; background: #ecfdf5; border: 1px solid #86efac; cursor: pointer; text-align: left; font: inherit; color: inherit; }
+.apAgricultoresBox strong { color: #166534; }
+.apAgricultoresBox:hover { box-shadow: 0 0 0 2px #86efac; }
+.apAgricultoresNota { margin: 10px 0 2px; padding: 8px 12px; border-radius: 10px; border: 1px dashed #86efac; background: #f0fdf4; color: #14532d; font-size: 13px; line-height: 1.5; }
+.apAgricultoresNota .vdTarifaLink { margin: 0 4px; font-weight: 700; }
+.mz__tabla .mz__acc { text-align: right; border-left: 2px solid var(--c-border); }
+.mz__tabla td.mz__acc button { padding: 5px 10px; font-size: 12.5px; white-space: nowrap; }
+.mz__pagarAgr { align-self: flex-end; }

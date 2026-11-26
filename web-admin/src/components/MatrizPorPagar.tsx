@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { apiGet } from "../api";
 import { hoyLocal, money } from "../format";
 
@@ -55,11 +55,15 @@ function rubroBascula(f: Fila, esMatriz: boolean): Rubro {
   return { monto: f.bascula, destino: esMatriz ? "Queda en la Matriz" : "", falta: 0, conCuenta: false };
 }
 
-export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
+export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetalle, recarga }: {
   activoId: string | null;
   /** La cuenta activa es la Matriz: la báscula se queda en casa (no hay a quién pagarla). */
   esMatriz?: boolean;
   avisar: (msg: string, tipo?: "success" | "error" | "warn") => void;
+  /** 📄 «Ver detalle y pagar» del agricultor (estado de cuenta, pagos y hoja de liquidación). */
+  onVerDetalle?: (agricultor: string) => void;
+  /** Cambia cuando cambian las cuentas por pagar (p. ej. tras un pago): se recarga sin perder filtros. */
+  recarga?: string | number;
 }) {
   const actual = hoyLocal().slice(0, 7);
   const [meses, setMeses] = useState<Mes[]>([]);
@@ -80,6 +84,13 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
   }, [mes, avisar]);
   useEffect(() => { void cargarMeses(); }, [cargarMeses, activoId]);
   useEffect(() => { void cargar(); }, [cargar, activoId]);
+  // Tras un pago o abono: se actualiza sin «Cargando…» ni perder mes, filtros ni la fila abierta.
+  const primeraRecarga = useRef(true);
+  useEffect(() => {
+    if (primeraRecarga.current) { primeraRecarga.current = false; return; }
+    void cargarMeses();
+    apiGet<Fila[]>(`/cash/payables/matriz-mensual?mes=${mes}`).then(setFilas).catch(() => undefined);
+  }, [recarga]); // eslint-disable-line react-hooks/exhaustive-deps
   // Los filtros se quedan al cambiar de mes (como en el Excel); al cambiar de cuenta, empiezan de cero.
   useEffect(() => { setAgricultor(""); setTipo(""); setEstado(""); setAbierta(null); }, [activoId]);
 
@@ -151,7 +162,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
     return <td className={`num mz__rubro ${clase}`} title={ayuda}>{neg(r.monto)}<small>{linea}</small></td>;
   };
 
-  const columnas = 14 + ABONOS + 2;
+  const columnas = 14 + ABONOS + 2 + (onVerDetalle ? 1 : 0);
   return (
     <div className="tablePanel mz" style={{ gridColumn: "1 / -1" }}>
       <div className="mz__cab">
@@ -182,6 +193,9 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
             {agricultores.map((a) => <option key={a.id} value={a.id}>{a.nombre}{a.n > 1 ? ` (${a.n})` : ""}{a.saldo > 0.005 ? ` · debe ${money(a.saldo)}` : " · ✓"}</option>)}
           </select>
         </label>
+        {onVerDetalle && nombreAgr && (
+          <button type="button" className="primary mz__pagarAgr" onClick={() => onVerDetalle(nombreAgr)}>📄 Ver detalle y pagar a {nombreAgr}</button>
+        )}
         <div className="mz__seg" role="group" aria-label="Tipo de operación">
           <button type="button" className={tipo === "" ? "is-on" : ""} onClick={() => setTipo("")}>Todo</button>
           {tipos.map((t) => <button key={t} type="button" className={tipo === t ? "is-on" : ""} onClick={() => setTipo(tipo === t ? "" : t)}>{t}</button>)}
@@ -216,6 +230,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
                   <th className="num mz__neto">Neto a pagar</th>
                   {Array.from({ length: ABONOS }, (_, i) => <th key={i} className="num">Abono {i + 1}</th>)}
                   <th className="num">Otros abonos</th><th className="num mz__saldo">Saldo</th>
+                  {onVerDetalle && <th className="mz__acc">Acciones</th>}
                 </tr>
               </thead>
               <tbody>
@@ -247,6 +262,13 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
                         })}
                         <td className="num" title="Abonos desde el 4.º y lo que bajó sin caja: anticipo aplicado, cruce o saldado a mano">{n(otrosAbonosDe(f))}</td>
                         <td className="num mz__saldo">{f.saldo > 0.005 ? money(f.saldo) : <span className="mz__ok">✓ Pagado</span>}</td>
+                        {onVerDetalle && (
+                          <td className="mz__acc">
+                            {f.saldo > 0.005
+                              ? <button type="button" className="primary" onClick={() => onVerDetalle(f.agricultor)} title={`Estado de cuenta de ${f.agricultor}: pagar, abonar e imprimir la hoja`}>📄 Ver detalle y pagar</button>
+                              : <button type="button" className="btnGhost" onClick={() => onVerDetalle(f.agricultor)} title={`Estado de cuenta de ${f.agricultor}`}>📒 Historial</button>}
+                          </td>
+                        )}
                       </tr>
                       {abierto && (
                         <tr className="mz__detalle">
@@ -294,6 +316,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar }: {
                   <th className="num mz__neto">{money(tot.neto)}</th>
                   {tot.abonos.map((v, i) => <th key={i} className="num">{n(v)}</th>)}
                   <th className="num">{n(tot.otrosAb)}</th><th className="num mz__saldo">{money(tot.saldo)}</th>
+                  {onVerDetalle && <th />}
                 </tr>
               </tfoot>
             </table>

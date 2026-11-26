@@ -28,7 +28,7 @@ import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/Bu
 import { PrestamoPersona } from "./components/PrestamoPersona";
 import { ImportarActivosExcel } from "./components/ImportarActivosExcel";
 import { MatrizPorPagar } from "./components/MatrizPorPagar";
-import { CuentasSaldadas, EstadoCuenta } from "./components/EstadoCuenta";
+import { CuentasSaldadas, EstadoCuenta, EstadoCuentaModal } from "./components/EstadoCuenta";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
@@ -1193,7 +1193,7 @@ type CashSummary = {
 type AccountPayable = {
   selectora_provider_id?: string | null;
   id: string;
-  farmer_id: string;
+  farmer_id: string | null;
   farmer_name: string;
   liquidation_number: string | null;
   liquidation_id?: string | null;
@@ -4058,6 +4058,8 @@ export function App() {
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
   // Ídem para Por Pagar (acreedor).
   const [apDetalleKey, setApDetalleKey] = useState<string | null>(null);
+  // 📒 Historial de un agricultor que ya no debe nada (se abre desde «mes a mes»).
+  const [apHistorialAgr, setApHistorialAgr] = useState<string | null>(null);
   // 💬 Comentario de qué se está pagando (Por Pagar).
   const [pagoComentario, setPagoComentario] = useState("");
   // «Hoy» → cuota de préstamo: lleva la vista al panel de préstamos del banco (Por Pagar).
@@ -24806,16 +24808,37 @@ Motivo (obligatorio):`, ""));
             return "proveedores";
           };
           const buscado = normalizarTexto(cuentasBuscar.trim());
-          const todosGrupos = groupPayablesByAcreedor(cashPayables).map((g) => ({ ...g, clase: clasif(g.items[0]) }));
+          // 🌾 Lo de agricultores (liquidaciones, compras, su saldo inicial o préstamo) ya sale abajo en «Por pagar a
+          // agricultores · mes a mes» con su botón «Ver detalle y pagar» (pedido del dueño 2026-11-26: salía dos veces).
+          // Es lo mismo que lista el mes a mes: con agricultor y que no sea entre socios. Sin permiso del mes a mes, sigue aquí.
+          const conMesAMes = puedeVerSubTab("Por Pagar", "matriz");
+          const vaAlMesAMes = (p: Pick<AccountPayable, "farmer_id" | "entre_socios" | "reference_type">) => conMesAMes && !!p.farmer_id && !p.entre_socios
+            && !["retencion_matriz", "campo_servicio", "fomento_cruce"].includes(p.reference_type || "");
+          const deAgricultores = cashPayables.filter(vaAlMesAMes);
+          const totalAgricultores = deAgricultores.reduce((s, p) => s + Number(p.balance), 0);
+          const gruposAgricultores = groupPayablesByAcreedor(deAgricultores);
+          const todosGrupos = groupPayablesByAcreedor(cashPayables.filter((p) => !vaAlMesAMes(p))).map((g) => ({ ...g, clase: clasif(g.items[0]) }));
+          const filtroAp = conMesAMes && apFilter === "agricultores" ? "todos" : apFilter;
           const grupos = todosGrupos
-            .filter((g) => apFilter === "todos" || g.clase === apFilter)
+            .filter((g) => filtroAp === "todos" || g.clase === filtroAp)
             .filter((g) => !buscado || normalizarTexto(g.nombre).includes(buscado));
+          const irAlMesAMes = () => document.querySelector(".mz")?.scrollIntoView({ behavior: "smooth", block: "start" });
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
           const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
           const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
-          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["proveedores", "Proveedores y otros"], ["prestamos", "💵 Préstamos y deudas"],
+          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"],
+            ...(conMesAMes ? [] : [["agricultores", "Agricultores"] as [typeof apFilter, string]]),
+            ["proveedores", "Proveedores y otros"], ["prestamos", "💵 Préstamos y deudas"],
             ...(esMatrizActiva ? [] : [["matriz", `Matriz (${matrizName})`] as [typeof apFilter, string]])];
-          const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
+          // «AGR:» = abierto desde el mes a mes (sus cuentas de agricultor); si no, desde la tabla de arriba.
+          const detalleGrupo = !apDetalleKey ? null : apDetalleKey.startsWith("AGR:")
+            ? gruposAgricultores.find((g) => g.key === apDetalleKey.slice(4)) ?? null
+            : todosGrupos.find((g) => g.key === apDetalleKey) ?? null;
+          const verDetalleAgricultor = (nombre: string) => {
+            const k = nombre.trim().toUpperCase();
+            if (gruposAgricultores.some((g) => g.key === k)) setApDetalleKey("AGR:" + k);
+            else setApHistorialAgr(nombre);
+          };
           return (
           <section className="cuentasLayout">
             {/* Diseño estilo «Transporte y Cosechadora» (ver Por Cobrar). */}
@@ -24836,16 +24859,29 @@ Motivo (obligatorio):`, ""));
                     </div>
                   )}
                   <div className="totalBox" style={{ minWidth: 170, margin: 0, background: "#fee2e2", borderColor: "#fecaca" }}>
-                    <span>TOTAL POR PAGAR</span>
+                    <span>{conMesAMes ? "POR PAGAR (ESTA TABLA)" : "TOTAL POR PAGAR"}</span>
                     <strong style={{ color: "#b91c1c" }}>{money(totalPend)}</strong>
                   </div>
+                  {conMesAMes && totalAgricultores > 0.005 && (
+                    <button type="button" className="totalBox apAgricultoresBox" onClick={irAlMesAMes} title="Ver abajo, en «Por pagar a agricultores · mes a mes»">
+                      <span>🌾 AGRICULTORES (ABAJO)</span>
+                      <strong>{money(totalAgricultores)}</strong>
+                    </button>
+                  )}
                 </div>
               </div>
+              {conMesAMes && deAgricultores.length > 0 && (
+                <div className="apAgricultoresNota">
+                  🌾 Las cuentas de agricultores ({gruposAgricultores.length}) — liquidaciones, compras y su saldo inicial — están abajo en
+                  <button type="button" className="vdTarifaLink" onClick={irAlMesAMes}>«Por pagar a agricultores · mes a mes»</button>,
+                  cada fila con su botón «📄 Ver detalle y pagar». Aquí quedan las demás deudas.
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", margin: "12px 0 4px" }}>
                 {tabs.map(([k, lbl]) => {
                   const suma = todosGrupos.filter((g) => k === "todos" || g.clase === k).reduce((a, g) => a + g.items.reduce((s2, p) => s2 + Number(p.balance), 0), 0);
                   return (
-                    <button key={k} type="button" onClick={() => setApFilter(k)} className={apFilter === k ? "primary cuentasChip" : "cuentasChip"}>
+                    <button key={k} type="button" onClick={() => setApFilter(k)} className={filtroAp === k ? "primary cuentasChip" : "cuentasChip"}>
                       {lbl}{suma > 0.005 && <small> · {money(suma)}</small>}
                     </button>
                   );
@@ -24901,12 +24937,23 @@ Motivo (obligatorio):`, ""));
                 puedeCargar={canEdit("Por Pagar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
                 avisar={addToast} imprimir={printReport}
                 onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)}
-                filtro={(m) => apFilter === "todos" || clasif(m as unknown as AccountPayable) === apFilter}
+                filtro={(m) => !vaAlMesAMes(m as unknown as AccountPayable) && (filtroAp === "todos" || clasif(m as unknown as AccountPayable) === filtroAp)}
                 buscado={(n) => !buscado || normalizarTexto(n).includes(buscado)} />
             </div>
             )}
 
-            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} esMatriz={esMatrizActiva} avisar={addToast} />}
+            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} esMatriz={esMatrizActiva} avisar={addToast}
+              onVerDetalle={verDetalleAgricultor}
+              recarga={`${cashPayables.length}-${round2(cashPayables.reduce((s, p) => s + Number(p.balance), 0))}`} />}
+
+            {apHistorialAgr && (
+              <EstadoCuentaModal lado="CXP" nombre={apHistorialAgr} onClose={() => setApHistorialAgr(null)}
+                cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
+                puedeCargar={canEdit("Por Pagar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
+                avisar={addToast} imprimir={printReport}
+                imprimirLiquidacion={puedeLeerLiquidaciones ? (id) => { void imprimirHojaDeCuenta(id); } : undefined}
+                onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
+            )}
 
             {puedeVerSubTab("Por Pagar", "prestamos") && <PrestamosBancarios
               cajaAbiertaId={dashboard.current_cash_register?.id ?? null}
