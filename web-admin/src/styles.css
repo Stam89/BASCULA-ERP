@@ -541,6 +541,45 @@ button:disabled { cursor: not-allowed; opacity: 0.52; }
 .mz__tabla .mz__saldo { font-weight: 700; border-left: 2px solid var(--c-border); }
 .mz__tabla tbody tr:not(.is-pagada) .mz__saldo { color: #b45309; }
 .mz__tabla tfoot th { background: var(--c-surface-2); border-top: 2px solid var(--c-border); }
+/* Pestañas por mes (como las hojas del Excel), filtros y rubros resaltados (2026-11-26) */
+.mz__hojas { display: flex; gap: 4px; flex-wrap: wrap; margin: 12px 0 0; border-bottom: 2px solid var(--c-border); }
+.mz__hojas button { position: relative; border: 1px solid var(--c-border); border-bottom: 0; border-radius: 10px 10px 0 0; background: var(--c-surface-2);
+  padding: 7px 16px; font-weight: 700; font-size: 13px; letter-spacing: .04em; color: var(--c-muted); cursor: pointer; margin-bottom: -2px; }
+.mz__hojas button.is-on { background: var(--c-surface); color: var(--c-brand); border-color: var(--c-brand); border-bottom: 2px solid var(--c-surface); }
+.mz__hojas button small { color: #15803d; font-weight: 700; }
+.mz__punto { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #d97706; margin-left: 6px; vertical-align: middle; }
+.mz__filtros { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 12px 0 8px; }
+.mz__filtros label { display: grid; gap: 3px; margin: 0; font-size: 12px; color: var(--c-muted); }
+.mz__filtros select { min-width: 240px; }
+.mz__seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden; background: var(--c-surface); }
+.mz__seg button { border: 0; border-right: 1px solid var(--c-border); background: transparent; padding: 7px 12px; font-size: 12.5px; font-weight: 600; cursor: pointer; color: var(--c-muted); }
+.mz__seg button:last-child { border-right: 0; }
+.mz__seg button.is-on { background: var(--c-brand); color: #fff; }
+.mz__kpis .is-rubro strong { color: #9a3412; }
+.mz__tabla thead th.mz__th-rubro { background: #fff7ed; color: #9a3412; }
+.mz__tabla td.mz__rubro { color: #b91c1c; }
+.mz__tabla td.mz__rubro small { font-weight: 600; }
+.mz__tabla td.mz__rubro.is-falta { background: #fff7ed; }
+.mz__tabla td.mz__rubro.is-falta small { color: #c2410c; }
+.mz__tabla td.mz__rubro.is-listo { background: #f0fdf4; }
+.mz__tabla td.mz__rubro.is-listo small { color: #15803d; }
+.mz__tabla td.mz__rubro.is-casa small { color: var(--c-muted); font-weight: 400; }
+.mz__tabla td.mz__abono { color: #15803d; }
+.mz__nombre { border: 0; background: none; padding: 0; font: inherit; font-weight: 700; color: #1e3a8a; cursor: pointer; text-align: left; }
+.mz__nombre:hover { text-decoration: underline; }
+.mz__nombre span { color: var(--c-muted); font-size: 11px; }
+.mz__tipo { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 11.5px; font-weight: 700; background: var(--c-surface-3); color: var(--c-text, #1f2937); }
+.mz__tipo.is-compra { background: #dbeafe; color: #1e40af; }
+.mz__tipo.is-lote, .mz__tipo.is-liq { background: #ede9fe; color: #5b21b6; }
+.mz__tipo.is-deuda-anterior { background: #f1f5f9; color: #475569; }
+.mz__tipo.is-prestamo { background: #fef3c7; color: #92400e; }
+.mz__ok { color: #15803d; font-weight: 700; }
+.mz__tabla tr.is-abierta td { background: var(--c-tint-1, #f0fdf4); }
+.mz__tabla tr.mz__detalle td { white-space: normal; background: var(--c-surface-2); }
+.mz__ficha { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; padding: 4px 2px; }
+.mz__ficha h4 { margin: 0 0 4px; font-size: 13px; }
+.mz__ficha p { margin: 0 0 3px; font-size: 12.5px; }
+.mz__ficha ul { margin: 0; padding-left: 16px; font-size: 12.5px; }
 .vpa__corregir { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; flex-basis: 100%; padding: 6px 0 2px; }
 /* PC (pedido del dueño 2026-11-11: formularios muy estirados): un campo nunca pasa de un ancho cómodo, y los
    formularios largos se reparten en dos columnas (lo que no es un campo ocupa todo el ancho). */

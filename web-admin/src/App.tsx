@@ -24820,7 +24820,7 @@ Motivo (obligatorio):`, ""));
             </div>
             )}
 
-            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} avisar={addToast} />}
+            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} esMatriz={esMatrizActiva} avisar={addToast} />}
 
             {puedeVerSubTab("Por Pagar", "prestamos") && <PrestamosBancarios
               cajaAbiertaId={dashboard.current_cash_register?.id ?? null}

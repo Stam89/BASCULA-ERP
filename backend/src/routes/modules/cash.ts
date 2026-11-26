@@ -1903,6 +1903,26 @@ cashRouter.get("/registers/:id/export-excel", asyncRoute(async (req, res) => {
 }));
 
 // ── 📊 Matriz mensual de Cuentas por Pagar a Agricultores (pedido del dueño 2026-11-12: «como mi Excel, mes a mes») ──
+// Las pestañas de la matriz (como las hojas del Excel): cada mes con cuentas de agricultores, más el mes en curso.
+cashRouter.get("/payables/matriz-meses", asyncRoute(async (req, res) => {
+  const accionistaId = (req as AuthenticatedRequest).accionistaId;
+  const r = await pool.query(
+    `SELECT to_char(ap.created_at AT TIME ZONE 'America/Guayaquil', 'YYYY-MM') AS mes, count(*)::int AS filas,
+            COALESCE(SUM(ap.balance), 0)::float AS saldo
+       FROM accounts_payable ap
+       LEFT JOIN liquidations l ON l.id = ap.liquidation_id
+      WHERE ap.accionista_id = $1 AND ap.farmer_id IS NOT NULL AND ap.status::text <> 'CANCELLED'
+        AND COALESCE(ap.reference_type, '') NOT IN ('retencion_matriz', 'campo_servicio', 'fomento_cruce')
+        AND (l.id IS NULL OR l.cancelled_at IS NULL)
+      GROUP BY 1 ORDER BY 1`,
+    [accionistaId]
+  );
+  const actual = new Date().toLocaleDateString("en-CA", { timeZone: "America/Guayaquil" }).slice(0, 7);
+  const meses = r.rows as Array<{ mes: string; filas: number; saldo: number }>;
+  if (!meses.some((m) => m.mes === actual)) meses.push({ mes: actual, filas: 0, saldo: 0 });
+  res.json(meses.sort((a, b) => a.mes.localeCompare(b.mes)));
+}));
+
 // Una fila por liquidación (o deuda cargada como saldo inicial / compra) del mes del accionista activo, con sus descuentos
 // y cada abono que salió de caja o banco. Lo que bajó sin caja (anticipos aplicados, cruces) sale en «otros_abonos».
 cashRouter.get("/payables/matriz-mensual", asyncRoute(async (req, res) => {
@@ -1913,6 +1933,9 @@ cashRouter.get("/payables/matriz-mensual", asyncRoute(async (req, res) => {
             ap.farmer_id, f.full_name AS agricultor, ap.reference_type, ap.description,
             ap.amount::float AS monto, ap.balance::float AS saldo, ap.status::text AS estado,
             l.liquidation_number, COALESCE(w.rice_type, lo.rice_type) AS tipo_cascara, lo.lot_code,
+            lo.operation_type, l.id AS liquidation_id,
+            tr.flete_tr, tr.flete_tr_saldo, tr.cosecha_tr, tr.cosecha_tr_saldo,
+            tc.flete_3, tc.flete_3_saldo, tc.cosecha_3, tc.cosecha_3_saldo, tc.bascula_mz, tc.bascula_mz_saldo,
             l.quintals::float AS qq, l.price_per_quintal::float AS precio_qq, l.gross_amount::float AS bruto,
             COALESCE((l.discount_breakdown->>'flete')::float, 0) AS flete,
             COALESCE((l.discount_breakdown->>'cosechadora')::float, 0) AS cosecha,
@@ -1942,12 +1965,37 @@ cashRouter.get("/payables/matriz-mensual", asyncRoute(async (req, res) => {
        LEFT JOIN liquidations l ON l.id = ap.liquidation_id
        LEFT JOIN lots lo ON lo.id = l.lot_id
        LEFT JOIN weighing_tickets w ON w.id = l.weighing_ticket_id
+       -- Flete y cosechadora de Transporte (campo_servicios nacidos de la liquidación): cuánto y cuánto le falta cobrar.
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(v.valor) FILTER (WHERE s.origen_tipo = 'liquidacion_flete'), 0)::float AS flete_tr,
+                COALESCE(SUM(v.saldo_pendiente) FILTER (WHERE s.origen_tipo = 'liquidacion_flete'), 0)::float AS flete_tr_saldo,
+                COALESCE(SUM(v.valor) FILTER (WHERE s.origen_tipo = 'liquidacion_cosechadora'), 0)::float AS cosecha_tr,
+                COALESCE(SUM(v.saldo_pendiente) FILTER (WHERE s.origen_tipo = 'liquidacion_cosechadora'), 0)::float AS cosecha_tr_saldo
+           FROM campo_servicios s JOIN campo_servicios_saldo v ON v.id = s.id
+          WHERE l.id IS NOT NULL
+            AND ((s.origen_tipo = 'liquidacion_flete' AND s.origen_id = l.id)
+              OR (s.origen_tipo = 'liquidacion_cosechadora'
+                  AND (s.origen_id = l.id OR s.origen_id IN (SELECT d.id FROM liquidation_harvest_details d WHERE d.liquidation_id = l.id))))
+       ) tr ON true
+       -- Flete y cosechadora de terceros y la báscula que el socio le debe a la Matriz (cuentas por pagar de la liquidación).
+       LEFT JOIN LATERAL (
+         SELECT COALESCE(SUM(x.amount) FILTER (WHERE x.reference_type = 'flete_tercero'), 0)::float AS flete_3,
+                COALESCE(SUM(x.balance) FILTER (WHERE x.reference_type = 'flete_tercero'), 0)::float AS flete_3_saldo,
+                COALESCE(SUM(x.amount) FILTER (WHERE x.reference_type = 'cosechadora_tercero'), 0)::float AS cosecha_3,
+                COALESCE(SUM(x.balance) FILTER (WHERE x.reference_type = 'cosechadora_tercero'), 0)::float AS cosecha_3_saldo,
+                COALESCE(SUM(x.amount) FILTER (WHERE x.reference_type = 'retencion_matriz'), 0)::float AS bascula_mz,
+                COALESCE(SUM(x.balance) FILTER (WHERE x.reference_type = 'retencion_matriz'), 0)::float AS bascula_mz_saldo
+           FROM accounts_payable x
+          WHERE l.id IS NOT NULL AND x.liquidation_id = l.id AND x.status::text <> 'CANCELLED'
+            AND x.reference_type IN ('flete_tercero', 'cosechadora_tercero', 'retencion_matriz')
+       ) tc ON true
       WHERE ap.accionista_id = $1 AND ap.status::text <> 'CANCELLED'
         AND COALESCE(ap.reference_type, '') NOT IN ('retencion_matriz', 'campo_servicio', 'fomento_cruce')
         AND (l.id IS NULL OR l.cancelled_at IS NULL)
         AND ap.created_at >= ($2 || '-01')::date::timestamp AT TIME ZONE 'America/Guayaquil'
         AND ap.created_at < (($2 || '-01')::date + interval '1 month')::timestamp AT TIME ZONE 'America/Guayaquil'
-      ORDER BY ap.created_at, f.full_name`,
+      ORDER BY (lo.lot_code IS NULL), NULLIF(regexp_replace(split_part(COALESCE(lo.lot_code, ''), '-', 1), '\\D', '', 'g'), '')::int NULLS LAST,
+               lo.lot_code, ap.created_at, f.full_name`,
     [accionistaId, q.mes]
   )).rows as Array<Record<string, unknown> & { monto: number; saldo: number; abonos: Array<{ monto: number }> }>;
   res.json(filas.map((f) => {

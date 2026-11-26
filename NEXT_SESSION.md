@@ -9,6 +9,10 @@ Actualizado: 2026-11-25
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
 
+## 2026-11-26 · Por Pagar › Agricultores mes a mes
+- `MatrizPorPagar.tsx`: pestañas por mes (`GET /cash/payables/matriz-meses`, siempre incluye el mes en curso), filtros agricultor / tipo (Compra, Lote, Liq, Deuda anterior, Préstamo) / estado que se quedan al cambiar de mes, «Liq N» por orden del mes, 3 abonos + «Otros abonos» (4.º en adelante y lo sin caja), detalle al tocar el agricultor.
+- `matriz-mensual`: ordena por número de lote ascendente y luego fecha (lo sin lote al final) y trae a quién fue cada descuento: flete/cosecha de Transporte (`campo_servicios` origen liquidación + `campo_servicios_saldo`), de terceros (`flete_tercero`, `cosechadora_tercero`) y báscula a la Matriz (`retencion_matriz`), con lo que falta. Solo consulta. Simulacro `matriz_por_pagar`.
+
 ## 2026-11-26 · Por Cobrar / Por Pagar: «+ Registrar deuda manual»
 - Préstamo o deuda antigua fuera de Ventas, Fomentos y socios. `routes/modules/deudas-manuales.ts` (`/deudas-manuales`, permiso Caja / Por Cobrar / Por Pagar; anular con «Anular» y solo sin cobros/pagos posteriores), tabla `deudas_manuales` (migración 20261152). La cuenta vive en accounts_receivable / accounts_payable con `reference_type 'deuda_manual'`: DEBE = monto, HABER = ya abonado (sin caja), fecha = la de la deuda. Persona escrita: se busca (cliente/agricultor o proveedor/agricultor) o se crea (cliente en CxC, proveedor en CxP); con un socio se rechaza (va por Cuentas entre socios). Pagarla = `PAGO_SALDO_INICIAL` (no es gasto del mes).
 - `DeudaManual.tsx` (botón junto a «Cuentas entre socios» y «Cruzar»), filtro «💵 Préstamos y deudas» en las dos vistas. Regla de consistencia nueva. Simulacro `deuda_manual`.
