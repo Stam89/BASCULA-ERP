@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-24
+Actualizado: 2026-11-25
 
 ## 2026-11-24 · Hoja de Caja con lo último arriba
 - `CajaHoja.tsx`: lo más nuevo arriba, saldo inicial al fondo, captura fija bajo los títulos (thead sticky). El saldo de cada fila se calcula hacia adelante y luego se invierte.
@@ -8,6 +8,12 @@ Actualizado: 2026-11-24
 - «Tipo de operación» (0 automático, 1 venta, 2 pago arroz, 3 compra, 4 gasto): fija el destino; arroz y compra calculan cantidad × precio. El tipo se queda para la siguiente fila.
 - Migración 20261146: `cash_movements.registro` (orden de llegada; lo viejo tomó el de su fecha). Solo para ordenar.
 - Hoja del día (`CajaDia.tsx`): vista «Lo último arriba» por defecto (una captura con tipo ⬇/⬆/🚜; ← → lo cambian con la celda vacía, porque Alt+número ya cambia de negocio) y «Por bloques (como el Excel)», intacta; se recuerda en `bascula-erp:caja-dia-vista`. Migración 20261147: `caja_renglones.registro`, misma numeración; `armarFilas` ordena por registro.
+
+## 2026-11-25 · App de la báscula v11.64 (255): menú nuevo
+- Menú ⋮ = `PanelLateral.java` (panel por la derecha con páginas y flecha atrás; solo dibuja). Páginas en MainActivity (`paginaMenu`, `paginaReportes`, `paginaCierre`, `paginaImpresora`, `paginaWifi`, `paginaCola`, `paginaConexion`, `paginaNube`, `paginaExcel`, `paginaRespaldo`…). Arriba «lo que hay que revisar» (`cosasPorRevisar`, también pone un punto amarillo en el icono). De 27 opciones a 12 cuadros + Ayuda.
+- Fallas arregladas: «Cerrar sesión» vaciaba la tablet con un toque (ahora: todo enviado + clave + escribir BORRAR + copia antes); «Restauración de fábrica» borraba Firebase, Drive y las copias y no vaciaba Room (se quitó: ahora «Volver a bajar los tickets del ERP», solo modo principal, con copia); restaurar una copia ya es todo o nada y después pide al ERP lo que falte; el cierre del día daba «NO CERRADO» si el ERP tenía más tickets que la tablet (`DailyClosingPolicy` ahora `<`); con Android 10+ la Epson de siempre se tomaba por «otra» (MAC ilegible); «RESTAURAR» de la impresora sin preguntar; la «Copias» de ajustes no se usaba (nueva `copias_por_ticket`, en Menú › Impresora).
+- Pantalla: fecha y hora arriba, pestañas + botón del ERP en una fila, el resumen dice cuánto de 0.11 y de corriente, «Último» abre el ticket (reimprimir/WhatsApp/corregir), «Sus placas» al escribir un cliente conocido, filtros Todos/Hoy/Ayer/Por enviar con total de QQ en el historial; abajo solo se ve la impresora y lo que tenga problema. Reportes con fechas y por cliente/placa/día (`ReporteBascula.java` + prueba). 288 textos con tildes (nunca el ticket impreso ni claves).
+- Publicada en `backend/app-tablet` (no se versiona) y en Documentos\BASCULA\INSTALAR-ESTE-Bascula-v11.64.apk. Fuente: `AndroidStudioProjects\BASCULA`; copia con git en el scratchpad (`bascula-app`, etiqueta v11.64).
 
 ## 2026-11-25 · Inicio y Configuración › Estado
 - `/dashboard/panel`: las ventas se multiplicaban por los productos de cada venta (JOIN con sale_items) y lo «seco» se sumaba encima de la cáscara; el arroz de clientes de pilada salía como inventario de CEYRO. Corregido; ya no hay «utilidad» ni «alertas» (restaba solo lo liquidado). Simulacro `panel_inicio`.
