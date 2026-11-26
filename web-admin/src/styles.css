@@ -6229,6 +6229,27 @@ strong.prest__pagoTotal { color: #047857; font-size: 17px; }
 .parteLinea__head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
 .parteLinea__head button { padding: 2px 8px; font-size: 12px; }
 
+/* + Registrar deuda manual (Por Cobrar / Por Pagar) */
+.deudaManual { max-width: 600px; }
+.deudaManual label { display: block; margin-top: 10px; }
+.deudaManual label > small { display: block; margin-top: 3px; font-size: 12px; }
+.deudaManual__lado { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 4px; }
+.deudaManual__lado button { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--c-border); background: var(--c-surface); font-weight: 700; cursor: pointer; }
+.deudaManual__lado button small { font-weight: 400; color: var(--c-muted); font-size: 12px; }
+.deudaManual__lado button.is-on.is-cobro { border-color: #d97706; background: #fef3c7; color: #92400e; box-shadow: 0 0 0 1px #d97706 inset; }
+.deudaManual__lado button.is-on.is-pago { border-color: #dc2626; background: #fee2e2; color: #991b1b; box-shadow: 0 0 0 1px #dc2626 inset; }
+.deudaManual__fila { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.deudaManual__aviso { color: var(--c-danger) !important; font-weight: 600; font-size: 12.5px; margin: 6px 0 0; }
+.deudaManual__resumen { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px; margin: 12px 0 6px; }
+.deudaManual__resumen > div { border: 1px solid var(--c-border); border-radius: 10px; padding: 7px 10px; display: grid; min-width: 0; }
+.deudaManual__resumen small { color: var(--c-muted); font-size: 12px; }
+.deudaManual__resumen strong { font-size: 17px; overflow-wrap: anywhere; }
+.deudaManual__resumen .is-cobro { border-color: #fde68a; background: #fef3c7; }
+.deudaManual__resumen .is-cobro strong { color: #b45309; }
+.deudaManual__resumen .is-pago { border-color: #fecaca; background: #fee2e2; }
+.deudaManual__resumen .is-pago strong { color: #b91c1c; }
+@media (max-width: 520px) { .deudaManual__lado { grid-template-columns: 1fr; } }
+
 /* Cruzar cuentas con un socio */
 .cruceSoc { max-width: 560px; }
 .cruceSoc__tot { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin: 10px 0; }

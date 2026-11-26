@@ -212,6 +212,13 @@ export const REGLAS_CONSISTENCIA: ReglaConsistencia[] = [
   { modulo: "Saldos", nombre: "Saldos iniciales vigentes: su cuenta/anticipo existe", sql: `
     SELECT si.id, si.tipo FROM saldos_iniciales si WHERE si.anulado_at IS NULL AND si.tipo IN ('CXC','CXP') AND si.ref_id IS NOT NULL
        AND NOT EXISTS (SELECT 1 FROM accounts_receivable a WHERE a.id = si.ref_id UNION ALL SELECT 1 FROM accounts_payable p WHERE p.id = si.ref_id)` },
+  { modulo: "Cuentas", nombre: "Deudas manuales vigentes: su cuenta existe y no tiene más de lo registrado", sql: `
+    SELECT d.id FROM deudas_manuales d
+      LEFT JOIN accounts_receivable a ON d.ref_tabla = 'accounts_receivable' AND a.id = d.ref_id
+      LEFT JOIN accounts_payable p ON d.ref_tabla = 'accounts_payable' AND p.id = d.ref_id
+     WHERE d.anulado_at IS NULL
+       AND (COALESCE(a.id, p.id) IS NULL OR COALESCE(a.status::text, p.status::text) = 'CANCELLED'
+            OR COALESCE(a.amount, p.amount) <> d.monto OR COALESCE(a.balance, p.balance) > d.monto - d.abonado + 0.005)` },
   { modulo: "Selección", nombre: "Lotes de selección en proceso: su cuenta por pagar existe", sql: `
     SELECT b.id FROM selection_batches b WHERE b.status = 'IN_PROCESS' AND b.payable_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM accounts_payable p WHERE p.id = b.payable_id)` },
   { modulo: "Ventas", nombre: "Fletes de venta: cada pedido con flete tiene su servicio de Transporte (y viceversa)", sql: `

@@ -36,6 +36,7 @@ import { BasculaCambios } from "./components/BasculaCambios";
 import { HistorialVentas } from "./components/HistorialVentas";
 import { TrabajoEquipo } from "./components/TrabajoEquipo";
 import { CruceSocios } from "./components/CruceSocios";
+import { DeudaManual } from "./components/DeudaManual";
 import { CuentasEntreSocios, type OpEntreSocios } from "./components/CuentasEntreSocios";
 import { VentasPorAsignar } from "./components/VentasPorAsignar";
 import { BannerConexion, PanelPedidosPendientes, useSincronizarPedidos } from "./components/PedidosSinConexion";
@@ -4049,7 +4050,7 @@ export function App() {
     return !q ? sales : sales.filter((s) => (s.customer_name ?? "Sin cliente").toLowerCase().includes(q));
   }, [sales, histVentaCliente]);
   const [accountsReceivable, setAccountsReceivable] = useState<AccountsReceivable[]>([]);
-  const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "ventas">("ventas");
+  const [arFilter, setArFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "ventas" | "prestamos">("ventas");
   // Modal "Estado de cuenta" por deudor: guarda la clave del grupo; los ítems se
   // recalculan en vivo desde accountsReceivable para reflejar los pagos al instante.
   const [arDetalleKey, setArDetalleKey] = useState<string | null>(null);
@@ -4066,7 +4067,7 @@ export function App() {
     { buyer_accionista_id: "", items: [{ product_id: "", quintals: "", price_per_qq: "" }] }
   );
   const [comprarProdBusy, setComprarProdBusy] = useState(false);
-  const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "proveedores">("todos");
+  const [apFilter, setApFilter] = useState<"todos" | "socios" | "agricultores" | "matriz" | "proveedores" | "prestamos">("todos");
   // Buscador por nombre en Por Cobrar / Por Pagar (útil en el celular con muchos deudores).
   const [cuentasBuscar, setCuentasBuscar] = useState("");
   const [newCustomerForm, setNewCustomerForm] = useState({ full_name: "", phone: "", identification: "", address: "", customer_type: "NATURAL" as "NATURAL"|"EMPRESA" });
@@ -24513,8 +24514,10 @@ Motivo (obligatorio):`, ""));
           // Antes todo lo que no se reconocía caía en «Matriz» (los clientes del socio salían como deuda de la Matriz)
           // y un cliente cuyo nombre contenía el de un socio (p. ej. «STALYN MARIN») salía en «Socios».
           const matrizNm = (matrizName || "").trim().toUpperCase();
-          const clasif = (ar: AccountsReceivable): "socios" | "matriz" | "agricultores" | "clientes" => {
+          const clasif = (ar: AccountsReceivable): "socios" | "matriz" | "agricultores" | "clientes" | "prestamos" => {
             const nm = (ar.customer_name || "").trim().toUpperCase();
+            // ✍️ Préstamo o deuda antigua registrada a mano: su propio grupo (suma igual al total por cobrar).
+            if (ar.reference_type === "deuda_manual") return "prestamos";
             if (ar.entre_socios) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
             if (ar.farmer_id) return "agricultores";
             if (ar.customer_id) return "clientes";
@@ -24543,6 +24546,7 @@ Motivo (obligatorio):`, ""));
             ["ventas", "🛒 CxC por Ventas"],
             ["socios", "Socios"],
             ["agricultores", "Agricultores"],
+            ["prestamos", "💵 Préstamos y deudas"],
             ...(esMatrizActiva ? [] : [["matriz", `Matriz (${matrizName})`] as [typeof arFilter, string]]),
             ["todos", "Todos"]
           ];
@@ -24558,6 +24562,8 @@ Motivo (obligatorio):`, ""));
                 <h2 style={{ margin: 0 }}>📥 Cuentas por Cobrar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· quién te debe, agrupado por persona o entidad</span></h2>
                 <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
                 <CruceSocios puedeAnular={canAnular} accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                  onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
+                <DeudaManual ladoInicial="CXC" cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} puedeAnular={canAnular} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidas.length > 0 && (
@@ -24602,7 +24608,7 @@ Motivo (obligatorio):`, ""));
                       const haber = Math.max(0, total - saldo);
                       const hayVencida = g.items.some(esVencida);
                       const clase = clasif(g.items[0]);
-                      const etiqueta = g.items.some(esVenta) ? "Cliente de ventas" : clase === "socios" ? "Socio / Matriz · se espeja en su Por Pagar" : clase === "agricultores" ? "Agricultor / cliente de servicio" : `Cuenta de ${matrizName}`;
+                      const etiqueta = g.items.some(esVenta) ? "Cliente de ventas" : clase === "prestamos" ? "Préstamo / deuda antigua (registrada a mano)" : clase === "socios" ? "Socio / Matriz · se espeja en su Por Pagar" : clase === "agricultores" ? "Agricultor / cliente de servicio" : `Cuenta de ${matrizName}`;
                       const rinde = rindeDesgloseGrupo(g.items);
                       return (
                         <tr key={g.key}>
@@ -24710,8 +24716,10 @@ Motivo (obligatorio):`, ""));
           // A quién se le debe: la MATRIZ (solo si la deuda es con ella), otro SOCIO, un AGRICULTOR o un PROVEEDOR / otro.
           // Antes lo que no se reconocía caía en «Matriz» (proveedores y terceros salían como deuda con la Matriz).
           const matrizNm = (matrizName || "").trim().toUpperCase();
-          const clasif = (p: AccountPayable): "socios" | "matriz" | "agricultores" | "proveedores" => {
+          const clasif = (p: AccountPayable): "socios" | "matriz" | "agricultores" | "proveedores" | "prestamos" => {
             const nm = (p.farmer_name || "").trim().toUpperCase();
+            // ✍️ Préstamo o deuda antigua registrada a mano.
+            if (p.reference_type === "deuda_manual") return "prestamos";
             if (p.entre_socios) return !esMatrizActiva && matrizNm && nm === matrizNm ? "matriz" : "socios";
             if (p.liquidation_number || p.farmer_id) return "agricultores";
             const rt = p.reference_type || "";
@@ -24727,7 +24735,7 @@ Motivo (obligatorio):`, ""));
           const totalPend = grupos.reduce((a, g) => a + g.items.reduce((s, p) => s + Number(p.balance), 0), 0);
           const totalTx = grupos.reduce((a, g) => a + g.items.length, 0);
           const vencidos = grupos.filter((g) => g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001));
-          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["proveedores", "Proveedores y otros"],
+          const tabs: Array<[typeof apFilter, string]> = [["todos", "Todos"], ["socios", "Socios"], ["agricultores", "Agricultores"], ["proveedores", "Proveedores y otros"], ["prestamos", "💵 Préstamos y deudas"],
             ...(esMatrizActiva ? [] : [["matriz", `Matriz (${matrizName})`] as [typeof apFilter, string]])];
           const detalleGrupo = apDetalleKey ? grupos.find((g) => g.key === apDetalleKey) ?? null : null;
           return (
@@ -24739,6 +24747,8 @@ Motivo (obligatorio):`, ""));
                 <h2 style={{ margin: 0 }}>📤 Cuentas por Pagar <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>· a quién le debes, agrupado por acreedor</span></h2>
                 <button type="button" className="btnSecondary" style={{ marginBottom: 8 }} onClick={() => setEntreSocios({})}>🤝 Cuentas entre socios: quién le debe a quién</button>
                 <CruceSocios puedeAnular={canAnular} accionistas={accionistas} activoId={activeAccionistaId} avisar={addToast}
+                  onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
+                <DeudaManual ladoInicial="CXP" cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} puedeAnular={canAnular} avisar={addToast}
                   onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} />
                 <div style={{ display: "flex", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
                   {vencidos.length > 0 && (
@@ -24781,7 +24791,7 @@ Motivo (obligatorio):`, ""));
                       const total = g.items.reduce((a, p) => a + Number(p.amount), 0);
                       const pagado = Math.max(0, total - saldo);
                       const hayVencida = g.items.some((p) => !!p.due_date && p.due_date.slice(0, 10) < hoy && Number(p.balance) > 0.001);
-                      const etiqueta = g.clase === "socios" ? "Socio / Matriz / Transporte · se espeja en su Por Cobrar" : g.clase === "agricultores" ? "Agricultor / liquidación" : "Proveedor / otros";
+                      const etiqueta = g.clase === "prestamos" ? "Préstamo / deuda antigua (registrada a mano)" : g.clase === "socios" ? "Socio / Matriz / Transporte · se espeja en su Por Cobrar" : g.clase === "agricultores" ? "Agricultor / liquidación" : "Proveedor / otros";
                       return (
                         <tr key={g.key}>
                           <td className="cuentasNombre" style={{ fontWeight: 600 }}>

@@ -118,7 +118,7 @@ export function categoryLabel(cat: string): string {
     COMPRA_SACOS: "Compra de sacos",
     MANTENIMIENTO_EQUIPO: "Mantenimiento Planta",
     CUENTAS_PAGAR: "Cuentas por pagar",
-    PAGO_SALDO_INICIAL: "Pago de deuda anterior (saldo inicial)",
+    PAGO_SALDO_INICIAL: "Pago de deuda anterior (saldo inicial o deuda manual)",
     PAGO_PROVEEDOR: "Pago a proveedor",
     FOMENTOS: "Fomentos",
     // Categorías comerciales de SOCIOS (F: caja por tipo de entidad)

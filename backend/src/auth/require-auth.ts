@@ -73,6 +73,8 @@ export const WRITE_MODULES_BY_PREFIX: Record<string, AppModule[]> = {
   "receivable": ["Ventas", "Caja", "Por Cobrar"],
   // Cuentas entre socios (dinero que se dan la Matriz y los socios): mueve cajas y deudas entre ellos.
   "entre-socios": ["Caja", "Por Cobrar", "Por Pagar"],
+  // Deuda manual (préstamo o deuda antigua) desde Por Cobrar o Por Pagar; no mueve caja.
+  "deudas-manuales": ["Caja", "Por Cobrar", "Por Pagar"],
   "cash": ["Caja", "Por Pagar"],
   "expenses": ["Caja"],
   "equipment": ["Caja"],
@@ -153,6 +155,7 @@ export const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
   "equipment": { modules: ["Caja", "Inventario", "Produccion", "Costos Operativos", "Estados Financieros"], abiertas: [/^\/categories\/?$/] },
   "receivable": { modules: ["Por Cobrar", "Ventas", "Caja", "Servicio Pilado"] },
   "entre-socios": { modules: ["Caja", "Por Cobrar", "Por Pagar"] },
+  "deudas-manuales": { modules: ["Caja", "Por Cobrar", "Por Pagar"] },
   "sales": { modules: ["Ventas", "Caja", "Por Cobrar"] },
   "orders": { modules: ["Ventas", "Caja", "Por Cobrar", "Inventario"] },
   "guias-remision": { modules: ["Ventas"] },
