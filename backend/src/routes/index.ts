@@ -40,6 +40,7 @@ import { busquedaRouter } from "./modules/busqueda.js";
 import { resumenDiarioRouter } from "./modules/resumen-diario.js";
 import { integridadRouter } from "./modules/integridad.js";
 import { deudasManualesRouter } from "./modules/deudas-manuales.js";
+import { estadoCuentaRouter } from "./modules/estado-cuenta.js";
 import { adminPayrollRouter } from "./modules/admin-payroll.js";
 import { cuadrillaRouter } from "./modules/cuadrilla.js";
 import { piladoRouter } from "./modules/pilado.js";
@@ -112,6 +113,7 @@ routes.use("/receivable", receivableRouter);
 routes.use("/entre-socios", entreSociosRouter);
 // ✍️ Deuda manual: préstamo o deuda antigua fuera de Ventas, Fomentos y socios (Por Cobrar / Por Pagar).
 routes.use("/deudas-manuales", deudasManualesRouter);
+routes.use("/estado-cuenta", estadoCuentaRouter);
 routes.use("/equipment", equipmentRouter);
 routes.use("/settings", settingsRouter);
 // 🖨️ Impresión directa a las impresoras de la PC del servidor (cualquier usuario con sesión).

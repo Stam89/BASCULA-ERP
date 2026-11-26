@@ -13,6 +13,7 @@ import { asyncRoute } from "../../http/async-route.js";
 import { ApiError } from "../../http/error-handler.js";
 import { requirePermiso, type AuthenticatedRequest } from "../../auth/require-auth.js";
 import { resolverProveedor } from "../../services/proveedores.js";
+import { validarCategoriaManual } from "./cash.js";
 import { round2 } from "../../utils/rice-formulas.js";
 
 export const deudasManualesRouter = Router();
@@ -91,7 +92,7 @@ deudasManualesRouter.get("/", asyncRoute(async (req, res) => {
   const { accionistaId } = contexto(req);
   const r = await pool.query(
     `SELECT d.id, d.lado, d.contraparte_nombre, d.monto::float AS monto, d.abonado::float AS abonado, d.fecha::text AS fecha,
-            d.detalle, d.created_at, d.anulado_at, d.anulado_motivo,
+            d.detalle, d.created_at, d.anulado_at, d.anulado_motivo, d.comprobante, d.categoria,
             COALESCE(ar.balance, ap.balance)::float AS saldo
        FROM deudas_manuales d
        LEFT JOIN accounts_receivable ar ON d.ref_tabla = 'accounts_receivable' AND ar.id = d.ref_id
@@ -112,8 +113,17 @@ const deudaSchema = z.object({
   monto: z.number().positive().max(10_000_000),
   abonado: z.number().min(0).max(10_000_000).optional().default(0),
   fecha: fechaSchema,
-  detalle: z.string().trim().max(300).optional()
+  detalle: z.string().trim().max(300).optional(),
+  // 📒 Cargo desde el estado de cuenta: comprobante (factura, rol, recibo…) y, en Por Pagar a un proveedor, la categoría
+  // de Caja si es un gasto a crédito (sueldo del mes, servicio): al pagarlo cuenta como gasto de ese rubro.
+  comprobante: z.string().trim().max(80).optional(),
+  categoria: z.string().trim().max(60).optional()
 });
+
+const textoDeuda = (lado: "CXC" | "CXP", detalle: string | null) =>
+  `Deuda manual · ${detalle ?? (lado === "CXC" ? "Préstamo / deuda antigua" : "Préstamo / deuda antigua por pagar")}`;
+const textoGasto = (proveedor: string, categoria: string, detalle: string | null) =>
+  `${proveedor} — ${[categoria, detalle].filter(Boolean).join(" · ")}`;
 
 export async function registrarDeudaManual(
   client: PoolClient, body: z.infer<typeof deudaSchema>, accionistaId: string, userId: string | null
@@ -125,17 +135,34 @@ export async function registrarDeudaManual(
   if (body.fecha > hoy) throw new ApiError(400, "La fecha de la deuda no puede ser futura.");
   const cp = await resolverPersona(client, body.lado, body.contraparte_tipo, body.contraparte_id, body.nombre);
   const detalle = body.detalle?.trim() || null;
+  const comprobante = body.comprobante?.trim() || null;
+  // Gasto a crédito: solo en Por Pagar y a un proveedor (como el «egreso a crédito» de Caja).
+  let gasto: { codigo: string; nombre: string } | null = null;
+  if (body.categoria) {
+    if (body.lado !== "CXP") throw new ApiError(400, "La categoría de gasto solo va en Por Pagar.");
+    if (cp.tipo !== "PROVEEDOR") throw new ApiError(400, `${cp.nombre} está como agricultor: un gasto a crédito se le carga a un proveedor. Regístrelo como préstamo / deuda.`);
+    await validarCategoriaManual(client, body.categoria, "EXPENSE", accionistaId);
+    const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.categoria]);
+    gasto = { codigo: body.categoria, nombre: cat.rows[0]?.nombre ?? body.categoria };
+  }
   const reg = await client.query(
-    `INSERT INTO deudas_manuales (accionista_id, lado, contraparte_tipo, contraparte_id, contraparte_nombre, monto, abonado, fecha, detalle, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
-    [accionistaId, body.lado, cp.tipo, cp.id, cp.nombre, monto, abonado, body.fecha, detalle, userId]
+    `INSERT INTO deudas_manuales (accionista_id, lado, contraparte_tipo, contraparte_id, contraparte_nombre, monto, abonado, fecha, detalle, created_by, comprobante, categoria)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id`,
+    [accionistaId, body.lado, cp.tipo, cp.id, cp.nombre, monto, abonado, body.fecha, detalle, userId, comprobante, gasto?.codigo ?? null]
   );
   const id: string = reg.rows[0].id;
   const saldo = round2(monto - abonado);
   const estado = abonado > 0 ? "PARTIAL" : "CONFIRMED";
-  const desc = `Deuda manual · ${detalle ?? (body.lado === "CXC" ? "Préstamo / deuda antigua" : "Préstamo / deuda antigua por pagar")}`;
+  const desc = gasto ? textoGasto(cp.nombre, gasto.nombre, detalle) : textoDeuda(body.lado, detalle);
   let refId: string;
-  if (body.lado === "CXC") {
+  if (gasto) {
+    refId = (await client.query(
+      `INSERT INTO accounts_payable
+         (farmer_id, supplier_id, reference_type, reference_id, description, amount, balance, status, created_at, accionista_id, created_by, categoria)
+       VALUES (NULL, $1, 'gasto_credito', $2, $3, $4, $5, $6, ${SELLO("$7")}, $8, $9, $10) RETURNING id`,
+      [cp.id, id, desc, monto, saldo, estado, body.fecha, accionistaId, userId, gasto.codigo]
+    )).rows[0].id;
+  } else if (body.lado === "CXC") {
     refId = (await client.query(
       `INSERT INTO accounts_receivable
          (customer_id, farmer_id, reference_type, reference_id, description, amount, balance, status, created_at, accionista_id)
@@ -152,8 +179,59 @@ export async function registrarDeudaManual(
   }
   await client.query("UPDATE deudas_manuales SET ref_tabla = $2, ref_id = $3 WHERE id = $1",
     [id, body.lado === "CXC" ? "accounts_receivable" : "accounts_payable", refId]);
-  return { id, cuenta_id: refId, lado: body.lado, contraparte: cp.nombre, contraparte_tipo: cp.tipo, monto, abonado, saldo };
+  return { id, cuenta_id: refId, lado: body.lado, contraparte: cp.nombre, contraparte_tipo: cp.tipo, monto, abonado, saldo, gasto: gasto?.codigo ?? null };
 }
+
+// ✏️ Corregir un cargo registrado a mano (monto, fecha, concepto o comprobante). El saldo se rehace: lo ya abonado se
+// respeta, así que el monto no puede quedar por debajo de lo pagado. Queda la nota de lo que había antes.
+const edicionSchema = z.object({
+  monto: z.number().positive().max(10_000_000).optional(),
+  fecha: fechaSchema.optional(),
+  detalle: z.string().trim().max(300).optional(),
+  comprobante: z.string().trim().max(80).optional(),
+  motivo: z.string().trim().min(3).max(200)
+});
+deudasManualesRouter.patch("/:id", requirePermiso("ANULAR"), asyncRoute(async (req, res) => {
+  const { accionistaId } = contexto(req);
+  const body = edicionSchema.parse(req.body);
+  const out = await inTransaction(async (client) => {
+    const d = (await client.query("SELECT * FROM deudas_manuales WHERE id = $1 AND accionista_id = $2 FOR UPDATE", [req.params.id, accionistaId])).rows[0];
+    if (!d) throw new ApiError(404, "Ese cargo no está en la cuenta activa.");
+    if (d.anulado_at) throw new ApiError(409, "Ese cargo está anulado.");
+    const tabla = d.ref_tabla === "accounts_payable" ? "accounts_payable" : "accounts_receivable";
+    const c = (await client.query(`SELECT amount, balance, status, reference_type FROM ${tabla} WHERE id = $1 FOR UPDATE`, [d.ref_id])).rows[0];
+    if (!c || c.status === "CANCELLED") throw new ApiError(409, "La cuenta de ese cargo ya no está vigente.");
+    const pagado = round2(Number(c.amount) - Number(c.balance));
+    const monto = round2(body.monto ?? Number(d.monto));
+    if (monto < pagado - 0.005) throw new ApiError(409, `Ya se abonaron $${pagado.toFixed(2)} a este cargo: el monto no puede ser menor.`);
+    if (monto <= Number(d.abonado)) throw new ApiError(400, "El monto tiene que ser mayor que lo abonado antes de registrarlo.");
+    const hoy = new Date().toLocaleDateString("en-CA", { timeZone: ZONA });
+    const fecha = body.fecha ?? String(d.fecha instanceof Date ? d.fecha.toISOString().slice(0, 10) : d.fecha).slice(0, 10);
+    if (fecha > hoy) throw new ApiError(400, "La fecha no puede ser futura.");
+    const detalle = body.detalle !== undefined ? (body.detalle.trim() || null) : d.detalle;
+    const comprobante = body.comprobante !== undefined ? (body.comprobante.trim() || null) : d.comprobante;
+    const saldo = round2(monto - pagado);
+    const estado = saldo < 0.01 ? "PAID" : pagado > 0.005 ? "PARTIAL" : "CONFIRMED";
+    let desc = textoDeuda(d.lado, detalle);
+    if (c.reference_type === "gasto_credito") {
+      const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [d.categoria]);
+      desc = textoGasto(d.contraparte_nombre, cat.rows[0]?.nombre ?? d.categoria ?? "Gasto", detalle);
+    }
+    await client.query(
+      `UPDATE ${tabla} SET amount = $2, balance = $3, status = $4, description = $5, created_at = ${SELLO("$6")} WHERE id = $1`,
+      [d.ref_id, monto, saldo, estado, desc, fecha]
+    );
+    const fechaAntes = String(d.fecha instanceof Date ? d.fecha.toISOString().slice(0, 10) : d.fecha).slice(0, 10);
+    const nota = `${hoy}: antes $${Number(d.monto).toFixed(2)} del ${fechaAntes} (${body.motivo})`;
+    await client.query(
+      `UPDATE deudas_manuales SET monto = $2, fecha = $3, detalle = $4, comprobante = $5, editado_at = now(),
+              editado_nota = concat_ws(' · ', editado_nota, $6::text) WHERE id = $1`,
+      [d.id, monto, fecha, detalle, comprobante, nota]
+    );
+    return { id: d.id, monto, saldo, estado };
+  });
+  res.json(out);
+}));
 
 deudasManualesRouter.post("/", asyncRoute(async (req, res) => {
   const { accionistaId, userId } = contexto(req);

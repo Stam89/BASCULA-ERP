@@ -1,6 +1,13 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-25
+Actualizado: 2026-11-26
+
+## 2026-11-26 · Por Cobrar / Por Pagar: estado de cuenta con historial (kardex)
+- «Ver detalle y pagar / cobrar» abre ahora en «📒 Estado de cuenta (historial)» (`EstadoCuenta.tsx`, prop `kardex` de `CuentaDetalleModal`); la pestaña «💳 Con saldo» es la tabla de antes con casillas. Debajo de cada tabla, «✓ Cuentas saldadas» (`CuentasSaldadas`).
+- Sin tabla nueva de cuentas: una «cuenta» es la persona como se agrupa en pantalla (mismo nombre). `services/estado-cuenta.ts` arma el historial en cada consulta: cargos = cada AR/AP (también PAID; CANCELLED como renglón «Anulado» oculto por defecto); abonos = `cash_movement_cuentas` + movimiento directo (un pago repartido entre varios cargos sale en UN renglón); lo que bajó sin caja sale de la bitácora nueva `cuenta_saldo_eventos` (disparadores AFTER UPDATE en accounts_payable / accounts_receivable, migración 20261153), que se cruza con el pago de la misma transacción (`now()` igual). Lo anterior a la bitácora: renglón «Abono sin detalle en caja» con fecha aproximada (≈). Si el historial no da el saldo de las cuentas sale «Por cuadrar».
+- `GET /estado-cuenta?lado=&nombre=` y `/estado-cuenta/saldadas?lado=` (solo leen; permiso Caja / Por Cobrar / Por Pagar). `listarPorPagar` / `listarPorCobrar` aceptan `{ todas: true }`.
+- «+ Aumentar deuda» = deuda manual de la MISMA persona (contraparte de las filas; entre socios no: va por Cuentas entre socios) con comprobante; en Por Pagar a un proveedor puede ser «Gasto a crédito» (`gasto_credito` con `categoria`: cuenta en el mes cuando se paga). `PATCH /deudas-manuales/:id` corrige monto/fecha/concepto/comprobante (permiso «Anular», no por debajo de lo pagado, deja `editado_nota`). Anular un abono = anular el movimiento de caja de siempre.
+- No hay rubro activo de sueldos (PAGO_MANO_OBRA está desactivado): preguntado al dueño cómo quiere que cuente el sueldo de CECILIA. Simulacro `estado_cuenta` (revisa además que TODAS las cuentas existentes cuadren).
 
 ## 2026-11-24 · Hoja de Caja con lo último arriba
 - `CajaHoja.tsx`: lo más nuevo arriba, saldo inicial al fondo, captura fija bajo los títulos (thead sticky). El saldo de cada fila se calcula hacia adelante y luego se invierte.

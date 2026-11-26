@@ -93,7 +93,7 @@ const CATEGORIAS_CON_FLUJO_PROPIO: Record<string, string> = {
 };
 
 /** Un movimiento MANUAL de caja solo usa categorías del catálogo, activas, del tipo y accionista correctos. */
-async function validarCategoriaManual(
+export async function validarCategoriaManual(
   client: PoolClient,
   category: string,
   movement: "INCOME" | "EXPENSE",
@@ -1671,7 +1671,7 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
 
 // ── Cuentas por pagar pendientes ─────────────────────────────────────────────
 /** Por Pagar vigentes de un accionista, con el nombre del acreedor (también las usa la Caja del día). */
-export async function listarPorPagar(db: { query: typeof pool.query }, accionistaId: string | null | undefined) {
+export async function listarPorPagar(db: { query: typeof pool.query }, accionistaId: string | null | undefined, opts: { todas?: boolean } = {}) {
   // LEFT JOIN a farmers: una cuenta por pagar NO siempre es a un agricultor.
   // El servicio de pilado a CEYRO no tiene agricultor, y con el JOIN interno
   // quedaba oculta (se veía en Por Cobrar pero no aquí). Cuando no hay
@@ -1764,7 +1764,7 @@ export async function listarPorPagar(db: { query: typeof pool.query }, accionist
           AND h.accionista_id IS DISTINCT FROM ap.accionista_id
         LIMIT 1
      ) par ON true
-     WHERE ap.status IN ('CONFIRMED', 'PARTIAL') AND ap.accionista_id = $1
+     WHERE ${opts.todas ? "TRUE" : "ap.status IN ('CONFIRMED', 'PARTIAL')"} AND ap.accionista_id = $1
      ORDER BY ap.created_at DESC`,
     [accionistaId]
   );

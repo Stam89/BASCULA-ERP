@@ -28,6 +28,7 @@ import { BuscadorCombo, ElegirBuscando, type OpcionCombo } from "./components/Bu
 import { PrestamoPersona } from "./components/PrestamoPersona";
 import { ImportarActivosExcel } from "./components/ImportarActivosExcel";
 import { MatrizPorPagar } from "./components/MatrizPorPagar";
+import { CuentasSaldadas, EstadoCuenta } from "./components/EstadoCuenta";
 import { ConfigImpresoras } from "./components/ConfigImpresoras";
 import { imprimirDocumento, ventanaDeImpresion } from "./impresion";
 import { TEMAS, guardarTema, temaGuardado, type Tema } from "./tema";
@@ -24642,7 +24643,15 @@ Motivo (obligatorio):`, ""));
               <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
                 Debe = total de las cuentas pendientes · Haber = lo ya abonado · Saldo = lo que falta cobrar.
                 Las deudas entre socios, {matrizName} y Transporte y Cosechadora se espejan: al cobrar aquí baja la Por Pagar del otro y le llega un aviso 🔔.
+                En «📄 Ver detalle y cobrar» está el estado de cuenta con todo su historial.
               </p>
+              <CuentasSaldadas lado="CXC" recarga={`${accountsReceivable.length}-${totalPend}`}
+                cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
+                puedeCargar={canEdit("Por Cobrar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
+                avisar={addToast} imprimir={printReport}
+                onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)}
+                filtro={(m) => enFiltro(m as unknown as AccountsReceivable, arFilter)}
+                buscado={(n) => !buscado || normalizarTexto(n).includes(buscado)} />
             </div>
 
             {comprarProd && (
@@ -24669,6 +24678,14 @@ Motivo (obligatorio):`, ""));
                 onPagarTotal={() => pagarTotalReceivableGrupo(detalleGrupo.items).catch((e) => addToast(e.message, "error"))}
                 onAbonar={(m) => abonarReceivableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, receivableRows(detalleGrupo.items), "Estado de cuenta por cobrar")}
+                kardex={(abrir) => (
+                  <EstadoCuenta lado="CXC" nombre={detalleGrupo.nombre}
+                    recarga={`${detalleGrupo.items.length}-${detalleGrupo.items.reduce((s, r) => s + Number(r.balance), 0)}`}
+                    cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
+                    puedeCargar={canEdit("Por Cobrar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
+                    avisar={addToast} imprimir={printReport}
+                    onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} onAbonar={abrir} />
+                )}
                 medio={{ value: medioOperacion, onChange: (m) => { setMedioOperacion(m); setMedioCobroElegido(true); } }}
                 medioSinElegir={!medioCobroElegido}
                 medioNota={!cobroRecibidoPor && medioCobroElegido && medioOperacion === "BANCO" && dashboard.current_cash_register?.tipo === "EFECTIVO"
@@ -24816,7 +24833,15 @@ Motivo (obligatorio):`, ""));
               <p className="muted" style={{ marginTop: 8, fontSize: 12 }}>
                 {totalTx} transacci{totalTx === 1 ? "ón" : "ones"} pendiente{totalTx === 1 ? "" : "s"}. Las deudas con socios, {matrizName} y Transporte y Cosechadora se espejan:
                 al pagar aquí baja la Por Cobrar del otro, entra a su caja y le llega un aviso 🔔.
+                En «📄 Ver detalle y pagar» está el estado de cuenta con todo su historial.
               </p>
+              <CuentasSaldadas lado="CXP" recarga={`${cashPayables.length}-${totalPend}`}
+                cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
+                puedeCargar={canEdit("Por Pagar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
+                avisar={addToast} imprimir={printReport}
+                onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)}
+                filtro={(m) => apFilter === "todos" || clasif(m as unknown as AccountPayable) === apFilter}
+                buscado={(n) => !buscado || normalizarTexto(n).includes(buscado)} />
             </div>
             )}
 
@@ -24855,6 +24880,14 @@ Motivo (obligatorio):`, ""));
                 onAbonar={(m) => abonarPayableGrupo(detalleGrupo.items, m).catch((e) => addToast(e.message, "error"))}
                 onPagarSeleccion={(ids) => pagarSeleccionPayable(detalleGrupo.items, ids).catch((e) => addToast(e.message, "error"))}
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
+                kardex={(abrir) => (
+                  <EstadoCuenta lado="CXP" nombre={detalleGrupo.nombre}
+                    recarga={`${detalleGrupo.items.length}-${detalleGrupo.items.reduce((s, p) => s + Number(p.balance), 0)}`}
+                    cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
+                    puedeCargar={canEdit("Por Pagar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}
+                    avisar={addToast} imprimir={printReport}
+                    onCambio={() => Promise.all([refreshReceivables(), refreshPayables()]).catch(() => undefined)} onAbonar={abrir} />
+                )}
                 medio={cajaEsMixta || pagoHechoPor ? { value: medioOperacion, onChange: elegirMedio } : undefined}
                 medioSinElegir={(cajaEsMixta || !!pagoHechoPor) && !medioElegido}
                 recibidoPor={detalleGrupo.items.some((it) => it.entre_socios && it.reference_type !== "campo_servicio") ? undefined : {
@@ -30848,6 +30881,8 @@ function CuentaDetalleModal(props: {
   onVerInforme?: (informeId: string) => void;
   /** Bloque propio de esta cuenta, debajo del estado de cuenta. */
   extra?: React.ReactNode;
+  /** 📒 Estado de cuenta con historial (kardex): recibe cómo abrir el abono de este detalle. */
+  kardex?: (abrirAbono: () => void) => React.ReactNode;
   /** Caja MIXTA: el cobro/pago pregunta si fue en efectivo o por el banco. */
   medio?: { value: "EFECTIVO" | "BANCO"; onChange: (m: "EFECTIVO" | "BANCO") => void };
   /** El medio todavía no se elige: se muestra sin marcar y los botones de cobro esperan a que se elija. */
@@ -30869,23 +30904,43 @@ function CuentaDetalleModal(props: {
   const [modoAbono, setModoAbono] = React.useState(false);
   const [monto, setMonto] = React.useState(String(saldoTotal.enReal()));
   const [marcadas, setMarcadas] = React.useState<string[]>([]);
+  // 📒 Vista: historial completo (kardex) o solo las cuentas con saldo (para marcar cuáles pagar).
+  const [vista, setVista] = React.useState<"historial" | "pendientes">(props.kardex ? "historial" : "pendientes");
+  const abonoRef = React.useRef<HTMLDivElement | null>(null);
+  const abrirAbono = () => {
+    setMonto(String(saldoTotal.enReal()));
+    setModoAbono(true);
+    window.setTimeout(() => abonoRef.current?.scrollIntoView({ behavior: "smooth", block: "center" }), 50);
+  };
   const conCasillas = !!props.onPagarSeleccion && props.rows.filter((r) => r.saldo > 0.001).length > 1;
   const totalMarcado = round2(props.rows.filter((r) => marcadas.includes(r.id)).reduce((s, r) => s + Number(r.saldo), 0));
   const marcar = (id: string, on: boolean) => setMarcadas((m) => on ? [...m, id] : m.filter((x) => x !== id));
   const valor = Number(monto);
   return (
     <div className="modalOverlay" onClick={props.onClose}>
-      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: "100%" }}>
+      <div className="modalCard" onClick={(e) => e.stopPropagation()} style={{ maxWidth: props.kardex ? 1040 : 760, width: "100%" }}>
         <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
           <div>
             <h3 style={{ margin: 0, fontSize: 20 }}>{props.nombre}</h3>
             <p className="muted" style={{ margin: "2px 0 0" }}>
-              Estado de cuenta · {props.rows.length} transacci{props.rows.length === 1 ? "ón" : "ones"} · saldo {money(saldoTotal)}
+              {props.kardex
+                ? <>{props.rows.length} cuenta{props.rows.length === 1 ? "" : "s"} con saldo · saldo {money(saldoTotal)}</>
+                : <>Estado de cuenta · {props.rows.length} transacci{props.rows.length === 1 ? "ón" : "ones"} · saldo {money(saldoTotal)}</>}
             </p>
           </div>
           <button type="button" onClick={props.onClose} style={{ fontSize: 18, lineHeight: 1, padding: "2px 8px" }}>✕</button>
         </div>
 
+        {props.kardex && (
+          <div className="ec__vistas" role="tablist">
+            <button type="button" role="tab" aria-selected={vista === "historial"} className={vista === "historial" ? "is-on" : ""} onClick={() => setVista("historial")}>📒 Estado de cuenta (historial)</button>
+            <button type="button" role="tab" aria-selected={vista === "pendientes"} className={vista === "pendientes" ? "is-on" : ""} onClick={() => setVista("pendientes")}>
+              💳 Con saldo ({props.rows.filter((r) => r.saldo > 0.001).length}){conCasillas ? " · elegir cuáles pagar" : ""}
+            </button>
+          </div>
+        )}
+        {props.kardex && vista === "historial" && props.kardex(abrirAbono)}
+        {vista === "pendientes" && (
         <div style={{ overflowX: "auto", marginTop: 12 }}>
           <table className="cajaTable" style={{ width: "100%" }}>
             <thead><tr>{conCasillas && <th title="Marca para pagar solo esas">☑️</th>}<th>Fecha</th><th>Concepto</th><th className="num">Monto</th><th className="num">Abonos</th><th className="num">Saldo</th></tr></thead>
@@ -30908,6 +30963,7 @@ function CuentaDetalleModal(props: {
             <tfoot><tr style={{ fontWeight: 800 }}><td colSpan={conCasillas ? 5 : 4}>SALDO TOTAL</td><td className="num" style={{ color: barColor }}>{money(saldoTotal)}</td></tr></tfoot>
           </table>
         </div>
+        )}
         {props.extra}
 
         {props.recibidoPor && props.recibidoPor.opciones.length > 0 && (() => {
@@ -30975,7 +31031,7 @@ function CuentaDetalleModal(props: {
               onChange={(e) => props.comentario!.onChange(e.target.value)} style={{ width: "100%" }} />
           </label>
         )}
-        {conCasillas && marcadas.length === 0 && <small className="muted" style={{ display: "block", marginTop: 6 }}>☑️ Marca en la tabla las que quieras pagar (p. ej. solo las liquidaciones de unos lotes).</small>}
+        {conCasillas && marcadas.length === 0 && vista === "pendientes" && <small className="muted" style={{ display: "block", marginTop: 6 }}>☑️ Marca en la tabla las que quieras pagar (p. ej. solo las liquidaciones de unos lotes).</small>}
         {props.disabled && <div className="alertBox" style={{ marginTop: 10 }}>{props.disabledMsg ?? "Abre una caja para continuar."}</div>}
 
         {props.medio && !props.disabled && (
@@ -31000,7 +31056,7 @@ function CuentaDetalleModal(props: {
         </div>
 
         {modoAbono && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
+          <div ref={abonoRef} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 10, background: "#f8fafc", border: "1px solid #e5e7eb", borderRadius: 8, padding: "10px 12px" }}>
             <span className="muted" style={{ fontSize: 12 }}>Monto a abonar</span>
             <input type="number" min="0.01" step="0.01" max={saldoTotal} value={monto} onChange={(e) => setMonto(e.target.value)} className="payableInput" style={{ maxWidth: 140 }} />
             <button type="button" className="primary" disabled={props.disabled || props.medioSinElegir || !(valor > 0) || valor > saldoTotal + 0.001} onClick={() => props.onAbonar(valor)}>Registrar abono</button>

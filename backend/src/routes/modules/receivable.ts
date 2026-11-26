@@ -19,7 +19,7 @@ export const receivableRouter = Router();
 
 // GET cuentas por cobrar pendientes
 /** Por Cobrar vigentes de un accionista, con el nombre de quien debe (también las usa la Caja del día). */
-export async function listarPorCobrar(db: { query: typeof pool.query }, accionistaId: string | null | undefined) {
+export async function listarPorCobrar(db: { query: typeof pool.query }, accionistaId: string | null | undefined, opts: { todas?: boolean } = {}) {
   const result = await db.query(
     `SELECT ar.*,
             -- Nombre de QUIEN DEBE, resuelto según el origen de la cuenta:
@@ -73,8 +73,7 @@ export async function listarPorCobrar(db: { query: typeof pool.query }, accionis
        ORDER BY py0.created_at DESC
        LIMIT 1
      ) py ON true
-     WHERE ar.status IN ('CONFIRMED','PARTIAL')
-       AND ar.balance > 0
+     WHERE ${opts.todas ? "TRUE" : "ar.status IN ('CONFIRMED','PARTIAL') AND ar.balance > 0"}
        AND ar.accionista_id = $1
      ORDER BY ar.created_at DESC`,
     [accionistaId]
