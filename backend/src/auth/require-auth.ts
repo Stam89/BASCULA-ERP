@@ -147,7 +147,8 @@ function limiteDe(module: AppModule, prefix: string) {
 // productos, catálogos, secadoras, sacos, repuestos, tablero, ajustes, campanita).
 type ReglaLectura = { modules: string[]; abiertas?: RegExp[] };
 export const READ_MODULES_BY_PREFIX: Record<string, ReglaLectura> = {
-  "liquidations": { modules: ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora"] },
+  // Por Pagar: imprimir la hoja de liquidación con el saldo tras un abono (pedido del dueño 2026-11-26). Solo lectura.
+  "liquidations": { modules: ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora", "Por Pagar"] },
   "fomentos": { modules: ["Fomentos", "Liquidaciones", "Caja", "Agricultores", "Transporte / Cosechadora"] },
   "advances": { modules: ["Caja", "Liquidaciones", "Fomentos", "Agricultores"] },
   "cash": { modules: ["Caja", "Por Pagar", "Costos Operativos", "Estados Financieros"],

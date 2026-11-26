@@ -1196,6 +1196,7 @@ type AccountPayable = {
   farmer_id: string;
   farmer_name: string;
   liquidation_number: string | null;
+  liquidation_id?: string | null;
   batch_id: string | null;
   amount: string | number;
   balance: string | number;
@@ -5007,9 +5008,11 @@ export function App() {
     /** true si TODAS las liquidaciones del grupo están anuladas (CANCELLED). */
     anulada: boolean;
   };
-  const liqBatches = useMemo((): LiqBatch[] => {
+  // Armado de las liquidaciones agrupadas (una hoja por liquidación). Función aparte: también la usa Por Pagar para
+  // imprimir la hoja con el saldo recién actualizado tras un abono.
+  function armarLiqBatches(lista: LiqRecord[]): LiqBatch[] {
     // Ordenar de más reciente a más antiguo para mostrar así
-    const sorted = [...liquidacionesList].sort(
+    const sorted = [...lista].sort(
       (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
 
@@ -5093,7 +5096,8 @@ export function App() {
     }
 
     return batches;
-  }, [liquidacionesList]);
+  }
+  const liqBatches = useMemo(() => armarLiqBatches(liquidacionesList), [liquidacionesList]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [liqEdit, setLiqEdit] = useState<LiqBatch | null>(null);
   const [liqEditRows, setLiqEditRows] = useState<Array<{ id: string; lot_code: string | null; price: string; other: string }>>([]);
@@ -5501,6 +5505,9 @@ export function App() {
   // Anular, eliminar, reabrir, revertir o cancelar: el administrador o quien tenga el permiso especial «Anular» en el
   // accionista activo (pedido del dueño 2026-11-13: «cada usuario con las mismas opciones que el administrador»).
   const canAnular = isAdmin || activeAllowedPerms.has("PERM:ANULAR");
+  // Leer liquidaciones (mismos módulos que READ_MODULES_BY_PREFIX.liquidations): para la hoja de liquidación en Por Pagar.
+  const puedeLeerLiquidaciones = isAdmin || ["Liquidaciones", "Caja", "Fomentos", "Agricultores", "Transporte / Cosechadora", "Por Pagar"]
+    .some((m) => activeAllowedPerms.has(m) || activeAllowedPerms.has(`EDIT:${m}`));
   const canEditarPrecios = isAdmin || activeAllowedPerms.has("PERM:EDITAR_PRECIOS");
   // Fomentos tiene sus propios permisos (pedido del dueño 2026-11-04): el resto de anular sigue siendo solo del administrador.
   const canGastoAdmFomento = canEditarPrecios || activeAllowedPerms.has("PERM:FOMENTO_GASTO_ADM");
@@ -9004,12 +9011,63 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     items.map((p) => ({ id: p.id, fecha: p.created_at, concepto: conceptoPayable(p), monto: Number(p.amount), saldo: Number(p.balance) }));
 
   // Pagar TODO lo adeudado a un acreedor (reparte un solo monto entre sus cuentas).
+  // 🖨️ Hoja de liquidación desde Por Pagar (pedido del dueño 2026-11-26): la misma hoja de Liquidaciones, con el saldo
+  // que le queda al agricultor, sin tener que regresar a Liquidaciones. Se piden las liquidaciones al momento para que
+  // salga el abono recién hecho.
+  async function hojasDeLiquidacion(liquidationIds: string[]): Promise<LiqBatch[]> {
+    const ids = new Set(liquidationIds.filter(Boolean));
+    if (ids.size === 0) return [];
+    const lista = await apiGet<LiqRecord[]>("/liquidations");
+    setLiquidacionesList(lista);
+    return armarLiqBatches(lista)
+      .filter((b) => !b.anulada && b.liquidation_ids.some((id) => ids.has(id)))
+      .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  }
+  async function imprimirHojaDeCuenta(liquidationId: string) {
+    try {
+      const [b] = await hojasDeLiquidacion([liquidationId]);
+      if (!b) { addToast("No se encontró esa liquidación (¿está anulada?)", "error"); return; }
+      await printLiqBatch(b);
+    } catch (e) { addToast(e instanceof Error ? e.message : "No se pudo imprimir la liquidación", "error"); }
+  }
+  async function ofrecerHojaTrasAbono(pagadas: AccountPayable[]) {
+    if (!puedeLeerLiquidaciones) return;
+    const liqIds = pagadas.map((p) => p.liquidation_id).filter((x): x is string => !!x);
+    if (liqIds.length === 0) return;
+    let hojas: LiqBatch[] = [];
+    try { hojas = await hojasDeLiquidacion(liqIds); } catch { return; }
+    for (const b of hojas) {
+      const fecha = new Date(b.created_at).toLocaleDateString("es-EC", { day: "2-digit", month: "short", year: "numeric" });
+      const ok = await confirmar({
+        titulo: "🖨️ ¿Imprimir la hoja de liquidación?",
+        mensaje: `${b.farmer_name} · liquidación del ${fecha}\nSaldo que le queda: ${money(Math.max(0, b.pending_total))}`
+          + (hojas.length > 1 ? `\n\n(Este abono tocó ${hojas.length} liquidaciones: se pregunta por cada una.)` : ""),
+        confirmar: "🖨️ Imprimir", cancelar: "Ahora no", tono: "normal"
+      });
+      if (ok) await printLiqBatch(b).catch((e) => addToast(e instanceof Error ? e.message : "No se pudo imprimir", "error"));
+    }
+  }
+  /** Las cuentas que toca un abono: de la más vieja a la más nueva (igual que el servidor) hasta agotar el monto. */
+  function tocadasPorAbono(items: AccountPayable[], monto: number): AccountPayable[] {
+    let resta = monto;
+    const out: AccountPayable[] = [];
+    for (const p of [...items].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())) {
+      if (resta <= 0.004) break;
+      const bal = Number(p.balance);
+      if (bal <= 0.004) continue;
+      out.push(p);
+      resta = round2(resta - bal);
+    }
+    return out;
+  }
+
   async function pagarTotalPayableGrupo(items: AccountPayable[]) {
     const ids = items.filter((p) => Number(p.balance) > 0.001).map((p) => p.id);
     const total = round2(items.reduce((s, p) => s + Number(p.balance), 0));
     if (!ids.length || total <= 0) return;
     await pagarGrupoCuentas(ids, total);
     await refreshPayables();
+    await ofrecerHojaTrasAbono(items.filter((p) => ids.includes(p.id)));
   }
   // Abono parcial a un acreedor: el backend lo reparte de la deuda más antigua a la más nueva.
   // ☑️ Pagar SOLO las cuentas marcadas (p. ej. las liquidaciones de unos lotes), cada una por su saldo completo.
@@ -9019,12 +9077,15 @@ Hoy: ${Number(s.quintals)} QQ = ${money(Number(s.total))}. Si salieron menos QQ 
     if (!sel.length || total <= 0) return;
     await pagarGrupoCuentas(sel.map((p) => p.id), total);
     await refreshPayables();
+    await ofrecerHojaTrasAbono(sel);
   }
   async function abonarPayableGrupo(items: AccountPayable[], monto: number) {
     const ids = items.map((p) => p.id);
     if (!(monto > 0)) { addToast("Monto inválido", "error"); return; }
+    const tocadas = tocadasPorAbono(items, round2(monto));
     await pagarGrupoCuentas(ids, round2(monto));
     await refreshPayables();
+    await ofrecerHojaTrasAbono(tocadas);
   }
 
   async function submitSackMovement(e: FormEvent<HTMLFormElement>) {
@@ -24882,6 +24943,7 @@ Motivo (obligatorio):`, ""));
                 onImprimir={() => printCuentaStatement(detalleGrupo.nombre, payableRows(detalleGrupo.items), "Estado de cuenta por pagar")}
                 kardex={(abrir) => (
                   <EstadoCuenta lado="CXP" nombre={detalleGrupo.nombre}
+                    imprimirLiquidacion={puedeLeerLiquidaciones ? (id) => { void imprimirHojaDeCuenta(id); } : undefined}
                     recarga={`${detalleGrupo.items.length}-${detalleGrupo.items.reduce((s, p) => s + Number(p.balance), 0)}`}
                     cuentaActiva={activeAccionista?.name ?? "la cuenta activa"} tipoCuenta={activeAccionista?.tipo}
                     puedeCargar={canEdit("Por Pagar") || canEdit("Caja")} puedeAnular={canAnular} categorias={cashCategories}

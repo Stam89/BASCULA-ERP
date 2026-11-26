@@ -13,6 +13,8 @@ export type MovimientoCuenta = {
   id: string; fecha: string; tipo: "CARGO" | "ABONO" | "INFO"; clase: string; concepto: string; comprobante: string | null;
   cargo: number; abono: number; saldo: number; cuenta_id: string; deuda_manual_id?: string | null; editable?: boolean;
   mov_id?: string | null; anulable?: boolean; mov_cuentas?: number; mov_total?: number; aproximada?: boolean;
+  liquidation_id?: string | null;
+  liquidation_batch?: string | null;
 };
 type Estado = {
   lado: Lado; nombre: string; estado: "PENDIENTE" | "SALDADA"; cuadra: boolean;
@@ -46,6 +48,8 @@ export type EstadoCuentaProps = {
   onCambio: () => unknown;
   /** Abre el abono del detalle (pago/cobro de siempre). Sin esto, el botón no sale (cuenta saldada). */
   onAbonar?: () => void;
+  /** 🖨️ Hoja de liquidación (Por Pagar a agricultores) con el saldo que le queda: recibe el id de la liquidación. */
+  imprimirLiquidacion?: (liquidationId: string) => void;
 };
 
 export function EstadoCuenta(p: EstadoCuentaProps) {
@@ -68,6 +72,16 @@ export function EstadoCuenta(p: EstadoCuentaProps) {
   const listo = async () => { await cargar(); await p.onCambio(); };
   const filas = useMemo(() => (data?.movimientos ?? []).filter((m) => verAnulados || m.tipo !== "INFO"), [data, verAnulados]);
   const anulados = (data?.movimientos ?? []).filter((m) => m.tipo === "INFO").length;
+  // 🖨️ Una hoja por liquidación: el botón va solo en el primer ticket de cada una.
+  const conHoja = useMemo(() => {
+    const vistos = new Set<string>();
+    const ids = new Set<string>();
+    for (const m of filas) {
+      const k = m.liquidation_batch ?? m.liquidation_id;
+      if (m.tipo === "CARGO" && m.liquidation_id && k && !vistos.has(k)) { vistos.add(k); ids.add(m.id); }
+    }
+    return ids;
+  }, [filas]);
   const [cats, setCats] = useState<CategoriaCaja[]>(p.categorias);
   useEffect(() => { if (p.categorias.length) setCats(p.categorias); }, [p.categorias]);
   // Si la Caja todavía no cargó el catálogo, se pide al elegir «Gasto a crédito».
@@ -267,6 +281,10 @@ export function EstadoCuenta(p: EstadoCuentaProps) {
                   <td data-label="Abono (−)" className="num ec__abono">{m.abono ? `−${money(m.abono)}` : ""}</td>
                   <td data-label="Saldo" className="num ec__saldo">{m.tipo === "INFO" ? "" : money(m.saldo)}</td>
                   <td className="ec__acc">
+                    {m.liquidation_id && conHoja.has(m.id) && p.imprimirLiquidacion && (
+                      <button type="button" className="btnGhost" title="Imprimir la hoja de esta liquidación con el saldo que le queda"
+                        onClick={() => p.imprimirLiquidacion!(m.liquidation_id!)}>🖨️</button>
+                    )}
                     {m.editable && p.puedeAnular && (
                       <button type="button" className="btnGhost" disabled={busy} title="Corregir este cargo"
                         onClick={() => { setCargo(null); setEdicion({ mov: m, fecha: fechaIso(m.fecha), monto: String(m.cargo), detalle: m.concepto.replace(/^Deuda manual · /, "").replace(/ · ✏️ corregido.*$/, ""), comprobante: m.comprobante ?? "" }); }}>✏️</button>

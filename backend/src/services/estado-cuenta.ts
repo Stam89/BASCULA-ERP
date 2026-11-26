@@ -36,6 +36,8 @@ export type Movimiento = {
   mov_cuentas?: number;     // cuántas cuentas pagó ese mismo movimiento
   mov_total?: number;
   aproximada?: boolean;     // fecha estimada (abonos de antes de la bitácora)
+  liquidation_id?: string | null; // cargo de una liquidación: se puede imprimir su hoja
+  liquidation_batch?: string | null; // la misma liquidación con varios tickets: una sola hoja
 };
 
 export const nombreDeFila = (lado: Lado, r: Fila) =>
@@ -138,7 +140,9 @@ export async function estadoDeCuenta(db: Db, lado: Lado, accionistaId: string, n
     poner({
       id: `c-${id}`, fecha: fechaCargo, tipo: "CARGO", clase: claseDeCargo(lado, r),
       concepto: conceptoDeCargo(r) + (dm?.editado_nota ? ` · ✏️ corregido (${dm.editado_nota})` : ""),
-      comprobante: comp, cargo: montoOriginal, abono: 0, cuenta_id: id, deuda_manual_id: dm?.id ?? null, editable: manual
+      comprobante: comp, cargo: montoOriginal, abono: 0, cuenta_id: id, deuda_manual_id: dm?.id ?? null, editable: manual,
+      liquidation_id: r.liquidation_id ? String(r.liquidation_id) : null,
+      liquidation_batch: r.liquidation_id ? String(r.batch_id ?? r.liquidation_id) : null
     }, 0);
 
     // 1) Bitácora: cada cambio de saldo con su fecha exacta; se le pone el nombre del pago de caja de esa misma transacción.
