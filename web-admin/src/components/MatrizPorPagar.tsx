@@ -162,7 +162,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
     return <td className={`num mz__rubro ${clase}`} title={ayuda}>{neg(r.monto)}<small>{linea}</small></td>;
   };
 
-  const columnas = 12 + ABONOS + 2 + (onVerDetalle ? 1 : 0);
+  const columnas = 12 + ABONOS + 2;
   return (
     <div className="tablePanel mz" style={{ gridColumn: "1 / -1" }}>
       <div className="mz__cab">
@@ -207,6 +207,30 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
         </div>
       </div>
 
+      {onVerDetalle && !agricultor && agricultores.some((a) => a.saldo > 0.005) && (
+        <div className="mz__deben">
+          <h3>💵 Pagar o abonar a un agricultor</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table className="cajaTable cuentasTabla">
+              <thead><tr><th>Agricultor</th><th className="num">Liquidaciones</th><th className="num">Saldo del mes</th><th>Acciones</th></tr></thead>
+              <tbody>
+                {agricultores.filter((a) => a.saldo > 0.005).map((a) => (
+                  <tr key={a.id}>
+                    <td className="cuentasNombre" style={{ fontWeight: 600 }}>{a.nombre}</td>
+                    <td className="num" data-label="Liquidaciones">{a.n}</td>
+                    <td className="num cuentasSaldo" data-label="Saldo del mes" style={{ fontWeight: 700, color: "#b91c1c" }}>{money(a.saldo)}</td>
+                    <td className="cuentasAcciones" style={{ whiteSpace: "nowrap" }}>
+                      <button type="button" className="primary" onClick={() => onVerDetalle(a.nombre)}>📄 Ver detalle y pagar</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>En «📄 Ver detalle y pagar» están <b>Pagar total</b>, <b>Abono parcial</b>, elegir qué liquidaciones pagar e imprimir la hoja con lo que le queda.</p>
+        </div>
+      )}
+
       {filas === null ? <p className="muted">Cargando…</p> : filas.length === 0 ? (
         <p className="muted">No hay liquidaciones ni deudas con agricultores en {titulo}.</p>
       ) : (
@@ -230,7 +254,6 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
                   <th className="num mz__neto">Neto a pagar</th>
                   {Array.from({ length: ABONOS }, (_, i) => <th key={i} className="num">Abono {i + 1}</th>)}
                   <th className="num">Otros abonos</th><th className="num mz__saldo">Saldo</th>
-                  {onVerDetalle && <th className="mz__acc">Acciones</th>}
                 </tr>
               </thead>
               <tbody>
@@ -245,6 +268,9 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
                         <td>
                           <button type="button" className="mz__nombre" aria-expanded={abierto} title={`${detalleDe(f)} · ${tipoDe(f)} — toque para ver el detalle`}
                             onClick={() => setAbierta(abierto ? null : f.id)}>{f.agricultor} <span aria-hidden="true">{abierto ? "▾" : "▸"}</span></button>
+                          {onVerDetalle && (f.saldo > 0.005
+                            ? <button type="button" className="primary mz__pagarFila" onClick={() => onVerDetalle(f.agricultor)} title={`Pagar total, abonar o imprimir la hoja de ${f.agricultor}`}>💵 Pagar / abonar</button>
+                            : <button type="button" className="btnGhost mz__pagarFila" onClick={() => onVerDetalle(f.agricultor)} title={`Estado de cuenta de ${f.agricultor}`}>📒 Historial</button>)}
                         </td>
                         <td className="num">{f.qq ? f.qq.toFixed(2) : "—"}</td>
                         <td className="num">{f.precio_qq ? money(f.precio_qq) : "—"}</td>
@@ -260,13 +286,6 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
                         })}
                         <td className="num" title="Abonos desde el 4.º y lo que bajó sin caja: anticipo aplicado, cruce o saldado a mano">{n(otrosAbonosDe(f))}</td>
                         <td className="num mz__saldo">{f.saldo > 0.005 ? money(f.saldo) : <span className="mz__ok">✓ Pagado</span>}</td>
-                        {onVerDetalle && (
-                          <td className="mz__acc">
-                            {f.saldo > 0.005
-                              ? <button type="button" className="primary" onClick={() => onVerDetalle(f.agricultor)} title={`Estado de cuenta de ${f.agricultor}: pagar, abonar e imprimir la hoja`}>📄 Ver detalle y pagar</button>
-                              : <button type="button" className="btnGhost" onClick={() => onVerDetalle(f.agricultor)} title={`Estado de cuenta de ${f.agricultor}`}>📒 Historial</button>}
-                          </td>
-                        )}
                       </tr>
                       {abierto && (
                         <tr className="mz__detalle">
@@ -314,7 +333,6 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
                   <th className="num mz__neto">{money(tot.neto)}</th>
                   {tot.abonos.map((v, i) => <th key={i} className="num">{n(v)}</th>)}
                   <th className="num">{n(tot.otrosAb)}</th><th className="num mz__saldo">{money(tot.saldo)}</th>
-                  {onVerDetalle && <th />}
                 </tr>
               </tfoot>
             </table>

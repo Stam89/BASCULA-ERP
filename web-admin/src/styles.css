@@ -7404,3 +7404,7 @@ table.tablaTarjeta.histVentas__tabla > tbody > tr > td:first-child .histVentas__
 .mz__tabla .mz__acc { text-align: right; border-left: 2px solid var(--c-border); }
 .mz__tabla td.mz__acc button { padding: 5px 10px; font-size: 12.5px; white-space: nowrap; }
 .mz__pagarAgr { align-self: flex-end; }
+.mz__deben { margin: 4px 0 12px; padding: 10px 12px; border: 1px solid var(--c-border); border-radius: 12px; background: var(--c-surface, #fff); }
+.mz__deben h3 { margin: 0 0 6px; font-size: 15px; }
+.mz__deben .cuentasTabla { margin-top: 0; }
+.mz__tabla td .mz__pagarFila { display: block; margin-top: 4px; padding: 4px 8px; font-size: 12px; white-space: nowrap; }
