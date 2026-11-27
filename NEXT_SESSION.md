@@ -2,6 +2,24 @@
 
 Actualizado: 2026-11-26
 
+## ▶ EMPEZAR AQUÍ (resumen al cerrar el 2026-11-26)
+Hecho y publicado el 26/11 (todo en main, integridad sin hallazgos):
+- Estado de cuenta (kardex) en Por Cobrar / Por Pagar, deuda manual, gasto a crédito, cuentas saldadas (detalle abajo).
+- Por Pagar: tras pagar/abonar a un agricultor ofrece imprimir la hoja de liquidación.
+- Por Pagar sin repetir: lo de agricultores va SIEMPRE abajo al «mes a mes» (sin excepción por permiso). El mes a mes sin columnas
+  Detalle/Tipo (tooltip del nombre + fila desplegable; siguen en Excel), recuadro «💵 Pagar o abonar a un agricultor» (tarjetas en
+  el celular) y botón «💵 Pagar / abonar» bajo el nombre en cada fila; abre `CuentaDetalleModal` (Pagar total / Abono / Con saldo / 🖨️).
+- Ticket #561 «se reenviaba» cada ~20 min: la marca de Firebase (`firebase_sync_state.tickets`) quedó en el #561 (24/11) porque la
+  tablet ya manda directo y Firebase no tiene nada más nuevo; cada vuelta incremental (`actualizadoEn > marca − 5 min`) lo traía y el
+  upsert de `importBasculaTickets` lo regrababa (synced_at = now()). Arreglo: con `firebase-auto` y la MISMA versión
+  (mobile_updated_at y en_espera iguales) no se toca. Simulacro `tablet_bascula` F8b/F8c.
+Pendiente del dueño (no hacer sin su respuesta):
+1. ¿El sueldo mensual de CECILIA cuenta como gasto del mes al pagarse? ¿con qué rubro? (PAGO_MANO_OBRA está desactivado).
+2. ¿Cambiar nombre y pie del recibo de ROVINSON a «CEYRO» / «GRACIAS POR SU PREFERENCIA»?
+3. Instalar la app de báscula v11.64 encima en la tablet (Menú › Preparar actualización).
+Viejos aún abiertos: foto y WhatsApp de ticket en la tablet real; ventas pendientes de ROVINSON vs stock; #552 papel, #558 destino,
+#512 MILTON; impresora térmica; adaptar indicador de peso.
+
 ## 2026-11-26 · Por Cobrar / Por Pagar: estado de cuenta con historial (kardex)
 - «Ver detalle y pagar / cobrar» abre ahora en «📒 Estado de cuenta (historial)» (`EstadoCuenta.tsx`, prop `kardex` de `CuentaDetalleModal`); la pestaña «💳 Con saldo» es la tabla de antes con casillas. Debajo de cada tabla, «✓ Cuentas saldadas» (`CuentasSaldadas`).
 - Sin tabla nueva de cuentas: una «cuenta» es la persona como se agrupa en pantalla (mismo nombre). `services/estado-cuenta.ts` arma el historial en cada consulta: cargos = cada AR/AP (también PAID; CANCELLED como renglón «Anulado» oculto por defecto); abonos = `cash_movement_cuentas` + movimiento directo (un pago repartido entre varios cargos sale en UN renglón); lo que bajó sin caja sale de la bitácora nueva `cuenta_saldo_eventos` (disparadores AFTER UPDATE en accounts_payable / accounts_receivable, migración 20261153), que se cruza con el pago de la misma transacción (`now()` igual). Lo anterior a la bitácora: renglón «Abono sin detalle en caja» con fecha aproximada (≈). Si el historial no da el saldo de las cuentas sale «Por cuadrar».

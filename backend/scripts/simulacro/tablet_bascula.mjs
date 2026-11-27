@@ -140,6 +140,18 @@ try {
   await importBasculaTickets([tk(N + 5, { pesoTara: 0, totalQQ: 0, calificacion: 0, actualizadoEn: t0 })], "firebase-auto:sim", { enEspera: true });
   const f5b = await fila(N + 5);
   check(f5b.quitado_at && f5b.borrado, "F8. la copia vieja de Firebase no lo revive");
+  // 2026-11-26 (#561): la misma versión desde Firebase en cada vuelta no se vuelve a guardar ni mueve la hora
+  {
+    const N7 = N + 47, t7 = Date.now() - 60000;
+    await importBasculaTickets([tk(N7, { actualizadoEn: t7 })], "firebase-auto:sim", { enEspera: false });
+    const h1 = (await q("SELECT synced_at FROM mobile_synced_tickets WHERE id = $1", [(await fila(N7)).id]))[0].synced_at;
+    await new Promise((r) => setTimeout(r, 50));
+    const r2 = await importBasculaTickets([tk(N7, { actualizadoEn: t7 })], "firebase-auto:sim", { enEspera: false });
+    const h2 = (await q("SELECT synced_at FROM mobile_synced_tickets WHERE id = $1", [(await fila(N7)).id]))[0].synced_at;
+    check(String(h1) === String(h2) && (r2.imported?.length ?? r2.count ?? 0) === 0, "F8b. Firebase misma versión: no se reenvía (no mueve la hora)");
+    await importBasculaTickets([tk(N7, { actualizadoEn: t7 + 1000, pesoBruto: 9100 })], "firebase-auto:sim", { enEspera: false });
+    check((await fila(N7)).g === 9100, "F8c. Firebase versión nueva: sí actualiza");
+  }
   // la misma tablet lo vuelve a mandar (restauró un respaldo)
   await esp(N + 5);
   const f5c = await fila(N + 5);

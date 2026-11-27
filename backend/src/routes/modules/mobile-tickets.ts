@@ -1165,6 +1165,10 @@ export async function importBasculaTickets(
         quitado_motivo = CASE WHEN EXCLUDED.mobile_updated_at > mobile_synced_tickets.mobile_updated_at
                             OR (NOT $14::boolean AND mobile_synced_tickets.raw_payload ? 'borradoEnTablet') THEN NULL ELSE mobile_synced_tickets.quitado_motivo END
       WHERE mobile_synced_tickets.mobile_updated_at <= EXCLUDED.mobile_updated_at
+        -- 2026-11-26: la copia de Firebase de la MISMA versión no trae nada nuevo. Antes se volvía a guardar en cada
+        -- vuelta (el último ticket de Firebase, p. ej. #561, «llegaba» cada 20 min y movía la hora de sincronización).
+        AND NOT ($14::boolean AND EXCLUDED.mobile_updated_at = mobile_synced_tickets.mobile_updated_at
+                 AND EXCLUDED.en_espera IS NOT DISTINCT FROM mobile_synced_tickets.en_espera)
         AND mobile_synced_tickets.weighing_ticket_id IS NULL
         AND mobile_synced_tickets.liquidated_at IS NULL
       RETURNING id`,
