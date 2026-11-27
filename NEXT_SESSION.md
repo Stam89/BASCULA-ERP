@@ -1,6 +1,6 @@
 # BASCULA-ERP - memoria compacta
 
-Actualizado: 2026-11-26
+Actualizado: 2026-11-27
 
 ## ▶ EMPEZAR AQUÍ (resumen al cerrar el 2026-11-26)
 Hecho y publicado el 26/11 (todo en main, integridad sin hallazgos):
@@ -13,10 +13,19 @@ Hecho y publicado el 26/11 (todo en main, integridad sin hallazgos):
   tablet ya manda directo y Firebase no tiene nada más nuevo; cada vuelta incremental (`actualizadoEn > marca − 5 min`) lo traía y el
   upsert de `importBasculaTickets` lo regrababa (synced_at = now()). Arreglo: con `firebase-auto` y la MISMA versión
   (mobile_updated_at y en_espera iguales) no se toca. Simulacro `tablet_bascula` F8b/F8c.
-Pendiente del dueño (no hacer sin su respuesta):
-1. ¿El sueldo mensual de CECILIA cuenta como gasto del mes al pagarse? ¿con qué rubro? (PAGO_MANO_OBRA está desactivado).
-2. ¿Cambiar nombre y pie del recibo de ROVINSON a «CEYRO» / «GRACIAS POR SU PREFERENCIA»?
-3. Instalar la app de báscula v11.64 encima en la tablet (Menú › Preparar actualización).
+27/11 (respuestas del dueño, HECHO y publicado; respaldo C:/BASCULA-Respaldos/respaldo-bascula_erp-20261127-0918.dump):
+- ROVINSON: nombre comercial «CEYRO» y pie «GRACIAS POR SU PREFERENCIA» (app_settings, igual que STALYN).
+- CECILIA: su sueldo es «Sueldo administrativo»; NO lo cobra mensual, lo deja acumular y lo cobra a poco. Cuenta por pagar con
+  `categoria = PAGO_MANO_OBRA` (rubro de sueldo; esa categoría está inactiva en Caja a propósito, solo la usa la nómina):
+  `categoriaDePagoCxP` → deuda_manual con categoria usa esa categoria; `tipoNomina` → PAGO_MANO_OBRA + reference_type
+  accounts_payable = SUELDO_ADMIN, y va directo al rubro «Sueldos» (sin buscar por texto: «administrativo» caía en «Gastos No
+  Deducible»). En «+ Aumentar deuda» → Gasto a crédito → «Sueldo administrativo» (lo propone solo si la cuenta ya es de sueldo,
+  `estadoDeCuenta().rubro`). Gasto = cuando se ABONA (caja), no al cargar. Datos reales: AP 45c839a6 y deuda 12c60761 con
+  categoria; el abono de $200 del 26/11 (d63a3dd7, «PAGO DE FARMASI HUGO») pasó de PAGO_SALDO_INICIAL a PAGO_MANO_OBRA.
+  Simulacro `sueldo_acumulado`.
+Pendiente del dueño:
+1. Instalar la app de báscula v11.64 encima en la tablet (Menú › Preparar actualización).
+2. Cada mes, cargar el sueldo de CECILIA con «+ Aumentar deuda» (no hay cargo automático: no se sabe el monto mensual).
 Viejos aún abiertos: foto y WhatsApp de ticket en la tablet real; ventas pendientes de ROVINSON vs stock; #552 papel, #558 destino,
 #512 MILTON; impresora térmica; adaptar indicador de peso.
 
