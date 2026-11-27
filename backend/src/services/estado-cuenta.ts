@@ -263,6 +263,8 @@ export async function estadoDeCuenta(db: Db, lado: Lado, accionistaId: string, n
     contraparte: contraparteDe(lado, vigentes.length ? vigentes : filas),
     estado: saldoCuentas > 0.005 ? "PENDIENTE" : "SALDADA",
     totales: { debe, haber, saldo: saldoCuentas, cuentas: vigentes.length, pendientes: vigentes.filter((r) => Number(r.balance) > 0.005).length },
+    // Cuenta de sueldo (se acumula y se cobra a poco): el «+ Aumentar deuda» propone «Sueldo administrativo».
+    rubro: filas.find((r) => r.categoria === "PAGO_MANO_OBRA") ? "PAGO_MANO_OBRA" : null,
     cuadra,
     movimientos: juntos.map(({ orden, seq: _s, ...m }) => { void orden; void _s; return m; })
   };

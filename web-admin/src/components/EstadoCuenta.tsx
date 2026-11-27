@@ -20,6 +20,7 @@ type Estado = {
   lado: Lado; nombre: string; estado: "PENDIENTE" | "SALDADA"; cuadra: boolean;
   contraparte: { tipo: "CLIENTE" | "AGRICULTOR" | "PROVEEDOR"; id: string } | { tipo: null; motivo: string };
   totales: { debe: number; haber: number; saldo: number; cuentas: number; pendientes: number };
+  rubro?: string | null;
   movimientos: MovimientoCuenta[];
 };
 export type CategoriaCaja = { codigo: string; nombre: string; tipo: "INGRESO" | "EGRESO"; activo: boolean; aplicable_a: "MATRIZ" | "SOCIO" | "AMBOS" };
@@ -31,6 +32,7 @@ const hoyEc = () => new Date().toLocaleDateString("en-CA", { timeZone: ZONA });
 const fechaCorta = (iso: string) => new Date(iso).toLocaleDateString("es-EC", { timeZone: ZONA, day: "2-digit", month: "2-digit", year: "numeric" });
 const fechaIso = (iso: string) => new Date(iso).toLocaleDateString("en-CA", { timeZone: ZONA });
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const SUELDO = "PAGO_MANO_OBRA"; // «Sueldo administrativo» (la nómina usa esta categoría)
 
 export type EstadoCuentaProps = {
   lado: Lado;
@@ -99,7 +101,7 @@ export function EstadoCuenta(p: EstadoCuentaProps) {
     if (!(monto > 0)) { p.avisar("Escriba el monto del cargo.", "warn"); return; }
     if (cargo.fecha > hoyEc()) { p.avisar("La fecha no puede ser futura.", "warn"); return; }
     if (cargo.esGasto && !cargo.categoria) { p.avisar("Elija el rubro del gasto (p. ej. sueldos).", "warn"); return; }
-    const cat = gastos.find((c) => c.codigo === cargo.categoria)?.nombre;
+    const cat = cargo.categoria === SUELDO ? "Sueldo administrativo" : gastos.find((c) => c.codigo === cargo.categoria)?.nombre;
     const ok = await confirmar({
       titulo: "+ Aumentar deuda",
       mensaje: `Se suma ${money(monto)} a la cuenta de ${data.nombre} (${p.cuentaActiva}).\nEl saldo pasa de ${money(data.totales.saldo)} a ${money(r2(data.totales.saldo + monto))}.\n\n`
@@ -211,7 +213,7 @@ export function EstadoCuenta(p: EstadoCuentaProps) {
       <div className="ec__acciones">
         <button type="button" className="ec__btnCargo" disabled={busy || !p.puedeCargar || !cp?.tipo}
           title={!cp?.tipo ? (cp as { motivo: string } | undefined)?.motivo : !p.puedeCargar ? "Necesita permiso para editar Por Cobrar / Por Pagar o Caja" : "Suma un cargo nuevo a esta misma cuenta"}
-          onClick={() => { setEdicion(null); setCargo((c) => c ? null : { fecha: hoyEc(), monto: "", detalle: "", comprobante: "", esGasto: false, categoria: "" }); }}>
+          onClick={() => { setEdicion(null); setCargo((c) => c ? null : { fecha: hoyEc(), monto: "", detalle: "", comprobante: "", esGasto: data?.rubro === SUELDO && puedeGasto, categoria: data?.rubro === SUELDO && puedeGasto ? SUELDO : "" }); }}>
           + Aumentar deuda / cargo
         </button>
         {p.onAbonar && !saldada && (
@@ -248,6 +250,7 @@ export function EstadoCuenta(p: EstadoCuentaProps) {
             <label><span>Rubro del gasto</span>
               <select value={cargo.categoria} onChange={(e) => setCargo({ ...cargo, categoria: e.target.value })}>
                 <option value="">Elija…</option>
+                <option value={SUELDO}>Sueldo administrativo (se acumula y se cobra a poco)</option>
                 {gastos.map((c) => <option key={c.codigo} value={c.codigo}>{c.nombre}</option>)}
               </select>
             </label>

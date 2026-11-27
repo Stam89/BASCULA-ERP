@@ -122,6 +122,7 @@ const deudaSchema = z.object({
 
 const textoDeuda = (lado: "CXC" | "CXP", detalle: string | null) =>
   `Deuda manual · ${detalle ?? (lado === "CXC" ? "Préstamo / deuda antigua" : "Préstamo / deuda antigua por pagar")}`;
+const SUELDO_ADMIN = "PAGO_MANO_OBRA";
 const textoGasto = (proveedor: string, categoria: string, detalle: string | null) =>
   `${proveedor} — ${[categoria, detalle].filter(Boolean).join(" · ")}`;
 
@@ -141,9 +142,14 @@ export async function registrarDeudaManual(
   if (body.categoria) {
     if (body.lado !== "CXP") throw new ApiError(400, "La categoría de gasto solo va en Por Pagar.");
     if (cp.tipo !== "PROVEEDOR") throw new ApiError(400, `${cp.nombre} está como agricultor: un gasto a crédito se le carga a un proveedor. Regístrelo como préstamo / deuda.`);
-    await validarCategoriaManual(client, body.categoria, "EXPENSE", accionistaId);
-    const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.categoria]);
-    gasto = { codigo: body.categoria, nombre: cat.rows[0]?.nombre ?? body.categoria };
+    // «Sueldo administrativo» (se deja acumular y se cobra a poco): la nómina usa PAGO_MANO_OBRA, que no se elige a mano en Caja.
+    if (body.categoria === SUELDO_ADMIN) {
+      gasto = { codigo: SUELDO_ADMIN, nombre: "Sueldo administrativo" };
+    } else {
+      await validarCategoriaManual(client, body.categoria, "EXPENSE", accionistaId);
+      const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [body.categoria]);
+      gasto = { codigo: body.categoria, nombre: cat.rows[0]?.nombre ?? body.categoria };
+    }
   }
   const reg = await client.query(
     `INSERT INTO deudas_manuales (accionista_id, lado, contraparte_tipo, contraparte_id, contraparte_nombre, monto, abonado, fecha, detalle, created_by, comprobante, categoria)
@@ -215,7 +221,7 @@ deudasManualesRouter.patch("/:id", requirePermiso("ANULAR"), asyncRoute(async (r
     let desc = textoDeuda(d.lado, detalle);
     if (c.reference_type === "gasto_credito") {
       const cat = await client.query("SELECT nombre FROM cash_categories WHERE codigo = $1", [d.categoria]);
-      desc = textoGasto(d.contraparte_nombre, cat.rows[0]?.nombre ?? d.categoria ?? "Gasto", detalle);
+      desc = textoGasto(d.contraparte_nombre, d.categoria === SUELDO_ADMIN ? "Sueldo administrativo" : cat.rows[0]?.nombre ?? d.categoria ?? "Gasto", detalle);
     }
     await client.query(
       `UPDATE ${tabla} SET amount = $2, balance = $3, status = $4, description = $5, created_at = ${SELLO("$6")} WHERE id = $1`,

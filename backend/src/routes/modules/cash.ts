@@ -1665,7 +1665,8 @@ export function categoriaDePagoCxP(ap: { reference_type: string | null; categori
   // Deuda del saldo inicial (anterior al arranque): no es costo del mes en que se paga.
   if (t === "saldo_inicial" && !ap.farmer_id) return "PAGO_SALDO_INICIAL";
   // Deuda manual (préstamo o deuda antigua): pagarla no es gasto del mes, igual que un saldo inicial.
-  if (t === "deuda_manual") return "PAGO_SALDO_INICIAL";
+  // Con rubro (p. ej. el sueldo acumulado de una administrativa = PAGO_MANO_OBRA): cada abono es gasto de ese rubro.
+  if (t === "deuda_manual") return ap.categoria || "PAGO_SALDO_INICIAL";
   return "PAGO_AGRICULTOR";
 }
 

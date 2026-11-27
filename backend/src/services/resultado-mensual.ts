@@ -65,6 +65,8 @@ export function tipoNomina(e: { category?: string | null; reference_type?: strin
   if (String(e.category ?? "").toUpperCase() !== "PAGO_MANO_OBRA") return null;
   const ref = String(e.reference_type ?? "");
   if (ref === "admin_salary_payments") return "SUELDO_ADMIN";
+  // Sueldo que se deja acumular y se cobra a poco (cuenta por pagar con rubro de sueldo, 2026-11-27): sueldo administrativo.
+  if (ref === "accounts_payable") return "SUELDO_ADMIN";
   // Nómina → 🚚 Bajada de carro paga con la misma referencia que la cuadrilla,
   // pero su descripción empieza «Pago bajada de carro».
   if (ref === "cuadrilla_entries") return normalizar(e.description).startsWith("pago bajada de carro") ? "BAJADA_CARRO" : "CUADRILLA";
@@ -91,7 +93,8 @@ export type EgresoClasificable = {
 export function clasificarMovimiento(e: EgresoClasificable, rubros: RubroRegla[]): string | null {
   const tipo = tipoNomina(e);
   if (String(e.category ?? "").toUpperCase() === "PAGO_MANO_OBRA") {
-    if (tipo === "SUELDO_ADMIN") {
+    // El sueldo acumulado que se abona en Por Pagar va directo a «Sueldos» (su texto dice «Sueldo administrativo»).
+    if (tipo === "SUELDO_ADMIN" && e.reference_type !== "accounts_payable") {
       const porCargo = clasificarEgreso([[e.description]], rubros.filter((r) => !(r.nomina ?? []).includes("SUELDO_ADMIN")));
       if (porCargo) return porCargo;
     }
