@@ -24811,7 +24811,8 @@ Motivo (obligatorio):`, ""));
           // 🌾 Lo de agricultores (liquidaciones, compras, su saldo inicial o préstamo) ya sale abajo en «Por pagar a
           // agricultores · mes a mes» con su botón «Ver detalle y pagar» (pedido del dueño 2026-11-26: salía dos veces).
           // Es lo mismo que lista el mes a mes: con agricultor y que no sea entre socios. Sin permiso del mes a mes, sigue aquí.
-          const conMesAMes = puedeVerSubTab("Por Pagar", "matriz");
+          // 2026-11-26 (dueño): lo de agricultores va SIEMPRE abajo, en el mes a mes; sin excepción por permiso.
+          const conMesAMes = true;
           const vaAlMesAMes = (p: Pick<AccountPayable, "farmer_id" | "entre_socios" | "reference_type">) => conMesAMes && !!p.farmer_id && !p.entre_socios
             && !["retencion_matriz", "campo_servicio", "fomento_cruce"].includes(p.reference_type || "");
           const deAgricultores = cashPayables.filter(vaAlMesAMes);
@@ -24942,7 +24943,7 @@ Motivo (obligatorio):`, ""));
             </div>
             )}
 
-            {puedeVerSubTab("Por Pagar", "matriz") && <MatrizPorPagar activoId={activeAccionistaId} esMatriz={esMatrizActiva} avisar={addToast}
+            {<MatrizPorPagar activoId={activeAccionistaId} esMatriz={esMatrizActiva} avisar={addToast}
               onVerDetalle={verDetalleAgricultor}
               recarga={`${cashPayables.length}-${round2(cashPayables.reduce((s, p) => s + Number(p.balance), 0))}`} />}
 

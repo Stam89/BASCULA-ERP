@@ -162,7 +162,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
     return <td className={`num mz__rubro ${clase}`} title={ayuda}>{neg(r.monto)}<small>{linea}</small></td>;
   };
 
-  const columnas = 14 + ABONOS + 2 + (onVerDetalle ? 1 : 0);
+  const columnas = 12 + ABONOS + 2 + (onVerDetalle ? 1 : 0);
   return (
     <div className="tablePanel mz" style={{ gridColumn: "1 / -1" }}>
       <div className="mz__cab">
@@ -224,7 +224,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
             <table className="mz__tabla">
               <thead>
                 <tr>
-                  <th>Fecha</th><th>Agricultor</th><th>Detalle</th><th>Tipo</th><th className="num">QQ</th><th className="num">Precio/QQ</th><th className="num">Bruto</th>
+                  <th>Fecha</th><th>Agricultor</th><th className="num">QQ</th><th className="num">Precio/QQ</th><th className="num">Bruto</th>
                   <th className="num mz__th-rubro">Flete</th><th className="num mz__th-rubro">Cosechadora</th><th className="num mz__th-rubro">Báscula</th>
                   <th className="num">Fomento</th><th className="num">Anticipos</th><th className="num">Otros</th>
                   <th className="num mz__neto">Neto a pagar</th>
@@ -243,11 +243,9 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
                       <tr className={`${f.saldo > 0.005 ? "" : "is-pagada"} ${abierto ? "is-abierta" : ""}`}>
                         <td>{dia(f.fecha)}</td>
                         <td>
-                          <button type="button" className="mz__nombre" aria-expanded={abierto} title="Ver el detalle de esta liquidación o deuda"
+                          <button type="button" className="mz__nombre" aria-expanded={abierto} title={`${detalleDe(f)} · ${tipoDe(f)} — toque para ver el detalle`}
                             onClick={() => setAbierta(abierto ? null : f.id)}>{f.agricultor} <span aria-hidden="true">{abierto ? "▾" : "▸"}</span></button>
                         </td>
-                        <td className="mz__det" title={f.description ?? ""}>{detalleDe(f)}</td>
-                        <td><span className={`mz__tipo is-${tipoDe(f).toLowerCase().replace(/\s+/g, "-").normalize("NFD").replace(/[̀-ͯ]/g, "")}`}>{tipoDe(f)}</span></td>
                         <td className="num">{f.qq ? f.qq.toFixed(2) : "—"}</td>
                         <td className="num">{f.precio_qq ? money(f.precio_qq) : "—"}</td>
                         <td className="num">{n(f.bruto)}</td>
@@ -309,7 +307,7 @@ export function MatrizPorPagar({ activoId, esMatriz = false, avisar, onVerDetall
               </tbody>
               <tfoot>
                 <tr>
-                  <th colSpan={4}>Total {nombreAgr || titulo} · {vista.length} fila(s)</th>
+                  <th colSpan={2}>Total {nombreAgr || titulo} · {vista.length} fila(s)</th>
                   <th className="num">{tot.qq ? tot.qq.toFixed(2) : "—"}</th><th /><th className="num">{n(tot.bruto)}</th>
                   <th className="num">{tot.flete ? neg(tot.flete) : "—"}</th><th className="num">{tot.cosecha ? neg(tot.cosecha) : "—"}</th><th className="num">{tot.bascula ? neg(tot.bascula) : "—"}</th>
                   <th className="num">{tot.fomento ? neg(tot.fomento) : "—"}</th><th className="num">{tot.anticipos ? neg(tot.anticipos) : "—"}</th><th className="num">{tot.otros ? neg(tot.otros) : "—"}</th>
